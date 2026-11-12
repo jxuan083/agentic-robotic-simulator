@@ -1,3 +1,7 @@
-# simulator
+# Agentic Robotic Simulator
 
-Simulator for research and competition use. Architecture TBD.
+Simulator for agentic robotics research and the TRC (Taiwan Robot Challenge) competition.
+
+## Status
+
+Architecture TBD.
