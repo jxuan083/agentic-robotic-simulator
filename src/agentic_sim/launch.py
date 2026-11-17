@@ -1,8 +1,9 @@
-"""Turn (backend, experiment, mode, options) into the command that runs it. Pure Python; used by tools/sim.py.
+"""Turn (backend, experiment, mode, options) into the command that runs it once (no server). Pure Python.
 
-Until the persistent servers exist, Isaac runs through the existing entry points:
-  teleop      docker/isaac/run.sh /isaac-sim/python.sh scripts/isaac_ee_teleop.py --scene ... [options]
-  acceptance  tools/run_acceptance.sh <scenario> [--no-video]   (experiment configs passed via ISAAC_ARGS)
+  isaac   teleop      docker/isaac/run.sh /isaac-sim/python.sh scripts/isaac_ee_teleop.py --scene ... [options]
+          acceptance  tools/run_acceptance.sh <scenario> [--no-video]          (app arguments via ISAAC_ARGS)
+  mujoco  teleop      uv run scripts/mujoco_ee_teleop.py --scene ... [options]
+          acceptance  tools/run_acceptance_mujoco.sh <scenario> [--no-video]   (app arguments via MUJOCO_ARGS)
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from agentic_sim.experiments import Experiment
 
 MODES = ("teleop", "acceptance")
-IMPLEMENTED_BACKENDS = ("isaac",)
+IMPLEMENTED_BACKENDS = ("isaac", "mujoco")
 
 
 class LaunchError(ValueError):
@@ -46,11 +47,11 @@ class Command:
         return (env + " " if env else "") + " ".join(shlex.quote(a) for a in self.argv)
 
 
-def _isaac_app_args(exp: Experiment, opts: RunOptions) -> list:
+def _app_args(exp: Experiment, opts: RunOptions, backend: str = "isaac") -> list:
     args = ["--scene", exp.scene, "--teleop", exp.teleop]
     if exp.color_dr:
         args += ["--color_dr_config", exp.color_dr]
-    if opts.focus:
+    if opts.focus and backend == "isaac":
         args.append("--focus")
     if int(opts.blocks) != 1:
         args += ["--blocks", str(int(opts.blocks))]
@@ -76,17 +77,23 @@ def build(backend: str, exp: Experiment, mode: str, opts: RunOptions | None = No
     if mode == "teleop":
         if scenario:
             raise LaunchError("a scenario is only used in acceptance mode")
+        if backend == "mujoco":
+            return Command(["uv", "run", "scripts/mujoco_ee_teleop.py"] + _app_args(exp, opts, backend))
         return Command(["docker/isaac/run.sh", "/isaac-sim/python.sh", "scripts/isaac_ee_teleop.py"]
-                       + _isaac_app_args(exp, opts))
+                       + _app_args(exp, opts))
 
     if not scenario:
-        raise LaunchError(f"acceptance mode needs a scenario (available: {[a.scenario for a in exp.acceptance]})")
-    entry = exp.scenario(scenario)
+        raise LaunchError(f"acceptance mode needs a scenario "
+                          f"(available: {[a.scenario for a in exp.acceptance_for(backend)]})")
+    entry = exp.scenario(scenario, backend)
     notes = []
     if entry.options:
         notes.append(f"scenario {scenario} forces options {entry.options}")
     run = opts.merged(entry.options)
+    app_args = " ".join(shlex.quote(a) for a in _app_args(exp, run, backend))
+    if backend == "mujoco":
+        argv = ["tools/run_acceptance_mujoco.sh", scenario] + ([] if run.video else ["--no-video"])
+        return Command(argv, {"MUJOCO_ARGS": app_args, "ACCEPT_OUT": f"outputs/acceptance/mujoco/{exp.name}"}, notes)
     argv = ["tools/run_acceptance.sh", scenario] + ([] if run.video else ["--no-video"])
-    env = {"ISAAC_ARGS": " ".join(shlex.quote(a) for a in _isaac_app_args(exp, run)),
-           "ACCEPT_OUT": f"outputs/acceptance/{exp.name}"}
+    env = {"ISAAC_ARGS": app_args, "ACCEPT_OUT": f"outputs/acceptance/{exp.name}"}
     return Command(argv, env, notes)

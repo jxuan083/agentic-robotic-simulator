@@ -10,14 +10,11 @@ from isaaclab.assets import Articulation, RigidObject, RigidObjectCfg
 
 from agentic_sim.config import v
 from agentic_sim.isaac.so101 import so101_cfg
+from agentic_sim.scene_layout import TRAYS, block_count_range, block_in_tray, block_layout, table_box, tray_parts  # noqa: F401
+from agentic_sim.scene_layout import yaw_quat as _yaw_quat
 
 # Mount frame (+X forward) = robot base link rotated +90 deg about Z (see agentic_sim.kinematics.MOUNT_FROM_BASE).
 ROBOT_ROT_WXYZ = (math.cos(math.pi / 4), 0.0, 0.0, math.sin(math.pi / 4))
-
-
-def _yaw_quat(deg: float):
-    h = math.radians(deg) / 2
-    return (math.cos(h), 0.0, 0.0, math.sin(h))
 
 
 def _box(path, size, pos, color, friction=None, collide=True, rot=(1.0, 0.0, 0.0, 0.0)):
@@ -32,30 +29,12 @@ def _box(path, size, pos, color, friction=None, collide=True, rot=(1.0, 0.0, 0.0
 
 
 def _tray(root, spec, friction):
-    """Static open-top tray from five boxes so the interior stays hollow (no convex hull over the opening)."""
-    L, W = v(spec["outer_size"])
-    d, t, f = v(spec["depth"]), v(spec["wall_thickness"]), v(spec["floor_thickness"])
-    cx, cy = v(spec["center_xy"])
-    yaw = math.radians(v(spec["yaw_deg"]))
-    h = d + f
-    color = spec["color"]
-    c, s = math.cos(yaw), math.sin(yaw)
-
-    def place(lx, ly):
-        return (cx + c * lx - s * ly, cy + s * lx + c * ly)
-
-    rot = _yaw_quat(v(spec["yaw_deg"]))
-    parts = {
-        "floor": ((L, W, f), (0.0, 0.0), f / 2),
-        "wall_front": ((t, W, h), (L / 2 - t / 2, 0.0), h / 2),
-        "wall_back": ((t, W, h), (-L / 2 + t / 2, 0.0), h / 2),
-        "wall_left": ((L - 2 * t, t, h), (0.0, W / 2 - t / 2), h / 2),
-        "wall_right": ((L - 2 * t, t, h), (0.0, -W / 2 + t / 2), h / 2),
-    }
-    for name, (size, (lx, ly), z) in parts.items():
-        x, y = place(lx, ly)
-        _box(f"{root}/{name}", size, (x, y, z), color, friction, rot=rot)
-    return {"center": (cx, cy), "inner_half": ((L - 2 * t) / 2, (W - 2 * t) / 2), "yaw": yaw, "floor_top": f}
+    """Static open-top tray from five boxes (geometry: agentic_sim.scene_layout.tray_parts)."""
+    parts, info = tray_parts(spec)
+    rot = _yaw_quat(info["yaw_deg"])
+    for name, (size, pos) in parts.items():
+        _box(f"{root}/{name}", size, pos, info["color"], friction, rot=rot)
+    return {k: info[k] for k in ("center", "inner_half", "yaw", "floor_top")}
 
 
 @dataclass
@@ -77,47 +56,21 @@ def block_prim(i: int) -> str:
     return "/World/Block" if i == 0 else f"/World/Block_{i}"
 
 
-def block_count_range(scene: dict) -> tuple:
-    bl = scene["block"]
-    return 1, int(bl.get("max_count", 1))
-
-
 def build_scene(scene: dict, n_blocks: int | None = None) -> SceneHandles:
-    tb = scene["table"]
-    tsx, tsy, tsz = v(tb["size"])
-    tcx, tcy = v(tb["center_xy"])
+    tb = table_box(scene)
+    tsz = tb["size"][2]
     sim_utils.GroundPlaneCfg().func("/World/ground", sim_utils.GroundPlaneCfg(), translation=(0.0, 0.0, -tsz))
-    _box("/World/Table", (tsx, tsy, tsz), (tcx, tcy, -tsz / 2), tb["color"], v(tb["friction"]))
+    _box("/World/Table", tb["size"], tb["pos"], tb["color"], tb["friction"])
 
     trays = {}
-    for name in ("storage_pink", "placement_beige"):
+    for name in TRAYS:
         trays[name] = _tray(f"/World/Trays/{name}", scene["trays"][name], v(scene["trays"]["friction"]))
 
-    bl = scene["block"]
-    lo, hi = block_count_range(scene)
-    n = int(bl.get("count", 1) if n_blocks is None else n_blocks)
-    if not lo <= n <= hi:
-        raise ValueError(f"block count {n} outside {lo}..{hi}")
-    e = v(bl["edge"])
-    floor_top = trays["storage_pink"]["floor_top"]
-    layout = [tuple(v(bl["init_xy"]))] + [tuple(xy) for xy in (v(bl["layout_xy"])[1:] if "layout_xy" in bl else [])]
-    if len(layout) < n:
-        raise ValueError(f"scene block.layout_xy has {len(layout)} positions, {n} blocks requested")
-    # material colours (linear, written to the shader) and display colours (panel) per block; block 0 keeps the
-    # scene colour as before, the others take palette colours (sRGB design values -> linear, like colour DR)
-    colors, display = [tuple(bl["color"])], [tuple(bl["color"])]
-    if n > 1:
-        from agentic_sim.color_dr import Palette, srgb_to_linear
-        pal = Palette.load(bl["extra_palette"])
-        for i in range(1, n):
-            rgb = pal.colors[i % len(pal.colors)].rgb
-            colors.append(tuple(srgb_to_linear(rgb)))
-            display.append(tuple(rgb))
-    init_rot = _yaw_quat(v(bl["init_yaw_deg"]))
+    lay = block_layout(scene, n_blocks)
+    e, n, colors, display, init_rot = lay.edge, len(lay.init_pos), lay.linear_rgb, lay.display_rgb, lay.init_rot
     blocks, prims, inits = [], [], []
     for i in range(n):
-        bx, by = layout[i]
-        init_pos = (bx, by, floor_top + e / 2 + 0.0005)
+        init_pos = lay.init_pos[i]
         blocks.append(RigidObject(
             RigidObjectCfg(
                 prim_path=block_prim(i),
@@ -127,10 +80,10 @@ def build_scene(scene: dict, n_blocks: int | None = None) -> SceneHandles:
                         solver_position_iteration_count=16, solver_velocity_iteration_count=1,
                         max_depenetration_velocity=1.0,
                     ),
-                    mass_props=sim_utils.MassPropertiesCfg(mass=v(bl["mass"])),
+                    mass_props=sim_utils.MassPropertiesCfg(mass=lay.mass),
                     collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.0),
                     physics_material=sim_utils.RigidBodyMaterialCfg(
-                        static_friction=v(bl["friction"])[0], dynamic_friction=v(bl["friction"])[1],
+                        static_friction=lay.friction[0], dynamic_friction=lay.friction[1],
                         friction_combine_mode="max",
                     ),
                     visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=tuple(colors[i]), roughness=0.5),
@@ -155,13 +108,3 @@ def build_scene(scene: dict, n_blocks: int | None = None) -> SceneHandles:
     _box("/World/Axes/z", (t, t, L), (o[0], o[1], L / 2), (0.1, 0.2, 0.9), collide=False)
 
     return SceneHandles(robot, blocks, prims, inits, init_rot, display, trays)
-
-
-def block_in_tray(pos, tray: dict, edge: float) -> bool:
-    """Block centre inside the tray interior (with half an edge margin) and resting near the floor."""
-    cx, cy = tray["center"]
-    c, s = math.cos(-tray["yaw"]), math.sin(-tray["yaw"])
-    lx = c * (pos[0] - cx) - s * (pos[1] - cy)
-    ly = s * (pos[0] - cx) + c * (pos[1] - cy)
-    hx, hy = tray["inner_half"]
-    return abs(lx) <= hx - edge / 2 and abs(ly) <= hy - edge / 2 and pos[2] < tray["floor_top"] + edge

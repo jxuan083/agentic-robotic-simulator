@@ -110,9 +110,11 @@ class ColorRandomizer:
         blocks = ([rec["block"]] + rec.get("extra_blocks", [])) if "block" in rec else []
         for attr, b in zip(self._block_attrs, blocks):
             b["linear"] = [round(x, 6) for x in srgb_to_linear(b["rgb"])]
+            b["written"] = b["linear"]  # value written to the renderer (backend-neutral key for acceptance checks)
             attr.Set(Gf.Vec3f(*b["linear"]))
         if "arm_shell" in rec and self._shell_attr:
             rec["arm_shell"]["linear"] = [round(x, 6) for x in srgb_to_linear(rec["arm_shell"]["rgb"])]
+            rec["arm_shell"]["written"] = rec["arm_shell"]["linear"]
             self._shell_attr.Set(Gf.Vec3f(*rec["arm_shell"]["linear"]))
         # actual material values read back from the stage (what the renderer uses)
         rec["applied"] = {"block_rgb": [round(float(x), 6) for x in self._block_attrs[0].Get()]}

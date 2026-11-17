@@ -331,6 +331,8 @@ class EETargetController:
         return s.q_cmd.copy()
 
 
-def load_controller(chain: So101Chain, teleop_cfg: dict) -> EETargetController:
+def load_controller(chain: So101Chain, teleop_cfg: dict, base_pos=(0.0, 0.0, 0.0)) -> EETargetController:
+    """base_pos: the robot base link origin in the mount frame (scene robot.base_pos)."""
     chain.ee_offset = np.array(v(teleop_cfg["ee_offset_in_gripper_link"]), float)
+    chain.base_pos = np.array(base_pos, float)
     return EETargetController(chain, TeleopParams.from_cfg(teleop_cfg))

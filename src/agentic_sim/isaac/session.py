@@ -120,7 +120,7 @@ class TeleopSession:
                                         seed=cfg.color_dr_seed, log_path=cfg.color_dr_log, log=log,
                                         block_prims=h.block_prims)
         self.chain = chain_from_usd(sim.stage, "/World/Robot", ee_offset=(0, 0, 0))
-        self.ctrl = load_controller(self.chain, teleop_cfg)
+        self.ctrl = load_controller(self.chain, teleop_cfg, base_pos=v(scene_cfg["robot"]["base_pos"]))
         self.arm_ids = [self.robot.joint_names.index(n) for n in ARM_JOINTS]
         self.jaw_id = self.robot.joint_names.index(GRIPPER_JOINT)
         self.edge = v(scene_cfg["block"]["edge"])

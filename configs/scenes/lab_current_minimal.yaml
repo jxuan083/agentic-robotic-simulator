@@ -6,7 +6,10 @@ version: 0.1.0-provisional
 
 robot:
   asset: Sim-to-Real-SO-101-Workshop@ce807d9 SO-ARM101-USD-NO-CAMERA.usd
-  base_pos: {value: [0.0, 0.0, 0.0], source: provisional, note: base on the table top; real mount position not measured}
+  # The asset's base link origin is 30.1 mm below the bottom face of the base (Workshop USD and Menagerie MJCF meshes
+  # agree, measured 2026-11-17). Lab photos show the base plate clamped directly on the table, so the origin sits
+  # 30.1 mm below the table top. x / y of the mount on the real table are still not measured.
+  base_pos: {value: [0.0, 0.0, -0.0301], source: measured, note: "z from the asset meshes (base bottom on the table top, as in the lab photos); x / y provisional"}
 
 table:
   size: {value: [0.80, 1.00, 0.75], source: provisional, note: light-white static box; real table not measured}

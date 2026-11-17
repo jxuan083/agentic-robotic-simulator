@@ -23,7 +23,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from agentic_sim.config import load  # noqa: E402
+from agentic_sim.config import load, v  # noqa: E402
 from agentic_sim.kinematics import So101Chain  # noqa: E402
 from agentic_sim.teleop.ee_target import load_controller  # noqa: E402
 
@@ -49,17 +49,22 @@ def main():
     ap.add_argument("--out", default="outputs/reach_map.json")
     ap.add_argument("--tilts", default="4,60")
     ap.add_argument("--step", type=float, default=0.01)
+    ap.add_argument("--scene", default="configs/scenes/lab_current_minimal.yaml")
+    ap.add_argument("--base_z", type=float, default=None, help="override the scene's robot base z (comparison)")
     a = ap.parse_args()
     chain = So101Chain.from_dict(load("configs/so101_chain.yaml"))
     cfg = load("configs/teleop.yaml")
-    ctrl = load_controller(chain, cfg)
+    base = list(v(load(a.scene)["robot"]["base_pos"]))
+    if a.base_z is not None:
+        base[2] = a.base_z
+    ctrl = load_controller(chain, cfg, base_pos=base)
     ws = cfg["workspace"]
     z0 = float(ws["z"][0])
     rs = np.round(np.arange(0.0, 0.46 + 1e-9, a.step), 4)
     zs = np.round(np.arange(0.0, 0.40 + 1e-9, a.step), 4)
     xs = np.round(np.arange(-0.10, 0.46 + 1e-9, a.step), 4)
     ys = np.round(np.arange(-0.46, 0.46 + 1e-9, a.step), 4)
-    out = {"pan_origin": ctrl.pan.tolist(), "workspace": ws, "grasp_z": z0, "r": rs.tolist(), "z": zs.tolist(),
+    out = {"pan_origin": ctrl.pan.tolist(), "base_pos": base, "workspace": ws, "grasp_z": z0, "r": rs.tolist(), "z": zs.tolist(),
            "x": xs.tolist(), "y": ys.tolist(), "maps": {},
            "note": "IK reachability only (joint limits, tilt limit); no self-collision / table contact model"}
     for t in [float(x) for x in a.tilts.split(",")]:

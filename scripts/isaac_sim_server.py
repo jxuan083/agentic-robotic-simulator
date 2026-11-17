@@ -167,7 +167,7 @@ class IsaacServer:
 
     def cmd_list_experiments(self):
         return {"experiments": [{"name": e.name, "description": e.description,
-                                 "acceptance": [a.scenario for a in e.acceptance]}
+                                 "acceptance": [a.scenario for a in e.acceptance_for(BACKEND)]}
                                 for e in list_experiments(backend=BACKEND)]}
 
     def cmd_load_experiment(self, name, options=None):
@@ -211,7 +211,7 @@ class IsaacServer:
         if self.experiment is None:
             raise RuntimeError("no experiment loaded (send load_experiment first)")
         exp = self.experiment
-        entry = exp.scenario(scenario)
+        entry = exp.scenario(scenario, BACKEND)
         opts = self.current_options().merged(entry.options)
         opts.video = False
         out_dir = os.path.join("outputs", "acceptance", exp.name)

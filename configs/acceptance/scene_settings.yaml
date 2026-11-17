@@ -10,7 +10,7 @@
 - {click: reset}
 - {wait: 1.5}
 - {check: "dr is not None and dr['seed'] == 5 and dr['session'] == 0 and len(pending) == 0", label: "Reset applies DR: first draw of seed 5"}
-- {check: "max(abs(a - b) for a, b in zip(block_mat_rgb, dr['block']['linear'])) < 1e-5 and max(abs(a - b) for a, b in zip(shell_mat_rgb, dr['arm_shell']['linear'])) < 1e-5", label: "DR on: block and arm materials = drawn colours"}
+- {check: "max(abs(a - b) for a, b in zip(block_mat_rgb, dr['block']['written'])) < 1e-5 and max(abs(a - b) for a, b in zip(shell_mat_rgb, dr['arm_shell']['written'])) < 1e-5", label: "DR on: block and arm materials = drawn colours"}
 - {click: reset}
 - {wait: 1.5}
 - {check: "dr['session'] == 1 and dr['seed'] == 5", label: "every Reset draws new colours"}
@@ -22,7 +22,7 @@
 - {wait: 4.0}
 - {check: "n_blocks == 4 and settings == {'blocks': 4, 'color_dr': True, 'color_dr_seed': 5} and len(pending) == 0", label: "rebuilt with 4 blocks, DR settings kept"}
 - {check: "all(abs(b[0] - i[0]) < 0.003 and abs(b[1] - i[1]) < 0.003 and abs(b[2] - i[2]) < 0.003 for b, i in zip(blocks, blocks_init))", label: "4 blocks: resting at their layout positions in the pink tray"}
-- {check: "all(max(abs(a - c) for a, c in zip(mat, d['linear'])) < 1e-5 for mat, d in zip(blocks_mat_rgb, [dr['block']] + dr['extra_blocks']))", label: "4 blocks: each block material = its drawn colour"}
+- {check: "all(max(abs(a - c) for a, c in zip(mat, d['written'])) < 1e-5 for mat, d in zip(blocks_mat_rgb, [dr['block']] + dr['extra_blocks']))", label: "4 blocks: each block material = its drawn colour"}
 - {mark: four}
 - {wait: 2.0}
 - {check: "all(max(abs(b[k] - a[k]) for k in range(3)) < 0.001 for a, b in zip(m['four']['blocks'], blocks))", label: "4 blocks: stable at rest (no drift or jitter)"}

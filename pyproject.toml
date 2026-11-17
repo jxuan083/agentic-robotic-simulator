@@ -3,10 +3,11 @@
 [project]
 name = "agentic-robotic-simulator"
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"   # mujoco 4.x needs 3.11+ (same as the Isaac container)
 dependencies = [
     "numpy>=1.26",
     "pyyaml>=6.0",
+    "mujoco==4.0.1",   # MuJoCo backend; 4.0.0 has a sparse Cholesky bug (slow or divergent solves)
 ]
 
 [dependency-groups]

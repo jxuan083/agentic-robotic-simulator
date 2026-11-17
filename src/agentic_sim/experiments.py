@@ -36,6 +36,10 @@ class Robot:
 class AcceptanceEntry:
     scenario: str
     options: dict = field(default_factory=dict)  # run options forced for this scenario (e.g. color_dr)
+    backends: tuple = ()                         # backends that can run it (empty: every backend of the experiment)
+
+    def runs_on(self, backend: str) -> bool:
+        return not self.backends or backend in self.backends
 
 
 @dataclass(frozen=True)
@@ -54,12 +58,17 @@ class Experiment:
     def supports(self, backend: str) -> bool:
         return backend in self.backends
 
-    def scenario(self, name: str) -> AcceptanceEntry:
-        for a in self.acceptance:
+    def acceptance_for(self, backend: str | None) -> tuple:
+        """Scenarios that run on `backend` (all of them for None)."""
+        return tuple(a for a in self.acceptance if backend is None or a.runs_on(backend))
+
+    def scenario(self, name: str, backend: str | None = None) -> AcceptanceEntry:
+        for a in self.acceptance_for(backend):
             if a.scenario == name:
                 return a
-        raise KeyError(f"experiment {self.name!r} has no acceptance scenario {name!r} "
-                       f"(available: {[a.scenario for a in self.acceptance]})")
+        where = f" on {backend}" if backend else ""
+        raise KeyError(f"experiment {self.name!r} has no acceptance scenario {name!r}{where} "
+                       f"(available: {[a.scenario for a in self.acceptance_for(backend)]})")
 
 
 def _abs(path: str) -> str:
@@ -119,16 +128,23 @@ def parse(raw: dict, path: str) -> Experiment:
     for a in raw.get("acceptance") or []:
         if isinstance(a, str):
             a = {"scenario": a}
-        if not isinstance(a, dict) or "scenario" not in a or set(a) - {"scenario", "options"}:
-            errs.append(f"acceptance entry must be a name or {{scenario, options}}: {a!r}")
+        if not isinstance(a, dict) or "scenario" not in a or set(a) - {"scenario", "options", "backends"}:
+            errs.append(f"acceptance entry must be a name or {{scenario, options, backends}}: {a!r}")
             continue
         name, opts = str(a["scenario"]), dict(a.get("options") or {})
+        ab = a.get("backends") or []
+        if not isinstance(ab, list):
+            errs.append(f"acceptance {name}: backends must be a list")
+            ab = []
+        for b in ab:
+            if b not in backends:
+                errs.append(f"acceptance {name}: backend {b!r} is not one of the experiment's backends {backends}")
         if not _exists(os.path.join(ACCEPTANCE_DIR, name + ".yaml")):
             errs.append(f"acceptance scenario not found: {ACCEPTANCE_DIR}/{name}.yaml")
         for o in opts:
             if o not in RUN_OPTIONS:
                 errs.append(f"acceptance {name}: unknown option {o!r} (known: {list(RUN_OPTIONS)})")
-        acceptance.append(AcceptanceEntry(name, opts))
+        acceptance.append(AcceptanceEntry(name, opts, tuple(ab)))
     names = [a.scenario for a in acceptance]
     if len(set(names)) != len(names):
         errs.append("acceptance scenarios must be unique")

@@ -27,6 +27,32 @@ def test_repo_experiments_are_valid():
     assert all(x.supports("isaac") for x in list_experiments(backend="isaac"))
 
 
+def test_acceptance_backends():
+    e = load_experiment("minimal_pick_place")
+    assert e.supports("mujoco")
+    mj = [a.scenario for a in e.acceptance_for("mujoco")]
+    assert {"keyboard_pick_place", "mouse_pick_place", "viewport_drag", "scene_settings", "top_view"} <= set(mj)
+    assert "focus_mode" not in mj                                       # Kit editor panels: Isaac only
+    assert "top_view" not in [a.scenario for a in e.acceptance_for("isaac")]
+    with pytest.raises(KeyError, match="on mujoco"):
+        e.scenario("focus_mode", "mujoco")
+    bad = dict(GOOD, acceptance=[{"scenario": "robustness", "backends": ["mujoco"]}])
+    with pytest.raises(ExperimentError, match="not one of the experiment's backends"):
+        parse(bad, "configs/experiments/x.yaml")
+
+
+def test_build_mujoco_commands():
+    e = load_experiment("minimal_pick_place")
+    t = build("mujoco", e, "teleop", RunOptions(blocks=3, focus=True))
+    assert t.argv[:3] == ["uv", "run", "scripts/mujoco_ee_teleop.py"] and "--blocks" in t.argv
+    assert "--focus" not in t.argv                                        # no editor panels in the MuJoCo window
+    a = build("mujoco", e, "acceptance", RunOptions(video=False), scenario="multi_block_pick_place")
+    assert a.argv == ["tools/run_acceptance_mujoco.sh", "multi_block_pick_place", "--no-video"]
+    assert "--blocks 8" in a.env["MUJOCO_ARGS"] and a.env["ACCEPT_OUT"].startswith("outputs/acceptance/mujoco/")
+    with pytest.raises(KeyError):
+        build("mujoco", e, "acceptance", scenario="focus_mode")
+
+
 def test_parse_collects_all_errors():
     bad = dict(GOOD, name="y", backends=["isaac", "gazebo"], scene="configs/nope.yaml", typo=1,
                robots=[{"id": "a", "model": "so101"}, {"id": "b", "model": "so101"}], cameras=[{"id": "top"}],
@@ -74,9 +100,6 @@ def test_build_rejects_invalid_requests():
     e = parse(GOOD, "configs/experiments/x.yaml")
     with pytest.raises(LaunchError, match="does not support"):
         build("mujoco", e, "teleop")
-    m = parse(dict(GOOD, backends=["mujoco"]), "configs/experiments/x.yaml")
-    with pytest.raises(LaunchError, match="not implemented"):
-        build("mujoco", m, "teleop")
     with pytest.raises(LaunchError, match="needs a scenario"):
         build("isaac", e, "acceptance")
     with pytest.raises(KeyError):

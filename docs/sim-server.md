@@ -8,12 +8,13 @@
 |---|---|---|
 | P1 | 實驗設定檔、控制協定、選單 | 已完成 |
 | P2 | Isaac 常駐伺服器 | 已完成 |
-| P3 | MuJoCo backend | 未開始 |
+| P3 | MuJoCo backend | 已完成，見 [mujoco-backend.md](mujoco-backend.md) |
 | P4 | 跨引擎比較 | 未開始 |
 
 選單的兩種執行方式：
 - **伺服器在跑**：把請求送給伺服器，不必重開 Isaac，場景約 1 秒內重建完成。
-- **伺服器沒在跑**（或加 `--direct`）：像以前一樣啟動一次性的程式。手動操作用 `scripts/isaac_ee_teleop.py`，自動驗收用 `tools/run_acceptance.sh`。
+- **伺服器沒在跑**（或加 `--direct`）：像以前一樣啟動一次性的程式。Isaac：手動操作用 `scripts/isaac_ee_teleop.py`，自動驗收用 `tools/run_acceptance.sh`；MuJoCo：`scripts/mujoco_ee_teleop.py` 與 `tools/run_acceptance_mujoco.sh`。
+- MuJoCo 的常駐伺服器是主機上的背景程序（`tools/mujoco_server.sh up|down|status|logs`），協定與指令和 Isaac 相同，見 [mujoco-backend.md](mujoco-backend.md)。
 
 ## 常駐 Isaac 伺服器
 
@@ -67,7 +68,7 @@ uv run tools/sim.py      # 選單
 ```yaml
 name: minimal_pick_place            # 必須等於檔名
 description: "..."                  # 含 # 時要加引號，否則 YAML 會當成註解
-backends: [isaac]                   # 支援的引擎：isaac、mujoco
+backends: [isaac, mujoco]           # 支援的引擎：isaac、mujoco
 scene: configs/scenes/lab_current_minimal.yaml
 robots:
   - {id: arm0, model: so101}        # 安裝位置來自 scene，目前只支援一支手臂
@@ -75,8 +76,9 @@ teleop: configs/teleop.yaml
 color_dr: configs/color_randomization.yaml
 cameras: []                         # 目前必須是空的
 acceptance:                         # configs/acceptance/ 中的情境
-  - robustness
-  - {scenario: color_dr, options: {color_dr: true, color_dr_seed: 7}}   # 這個情境固定使用的選項
+  - keyboard_pick_place               # 只用鍵盤：兩個引擎都能跑
+  - {scenario: viewport_drag, backends: [isaac]}                       # 只在列出的引擎跑（滑鼠、面板步驟只有 Isaac）
+  - {scenario: color_dr, options: {color_dr: true, color_dr_seed: 7}, backends: [isaac]}   # options：這個情境固定使用的選項
 ```
 
 載入時會檢查以下項目，有問題時一次列出所有錯誤：
@@ -86,6 +88,7 @@ acceptance:                         # configs/acceptance/ 中的情境
 - 引用的檔案都存在，驗收情境也都存在。
 - 只有一支手臂，`cameras` 是空的。
 - 情境選項只能是 `focus`、`color_dr`、`color_dr_seed`、`blocks`（積木數量 1–8）。
+- 情境的 `backends` 必須是實驗 `backends` 的子集；沒寫就是實驗支援的所有引擎。選單、伺服器只列出該引擎能跑的情境。
 
 新增實驗場景時（例如實驗室佈置），新增一個場景檔和一個實驗檔即可。相機與雙臂目前會被拒絕，等確認實驗室資訊後再開放。
 
@@ -98,17 +101,19 @@ uv run tools/sim.py --list # 列出實驗、驗收情境與伺服器狀態
 ```
 
 - 模式有兩種：
-  - **手動操作**：可選專注模式、顏色 DR 與 seed。
-  - **自動驗收**：選情境、選是否錄影。驗收執行中 Isaac 視窗要保持焦點。
+  - **手動操作**：可選專注模式（只有 Isaac）、顏色 DR 與 seed、積木數量。
+  - **自動驗收**：選情境、選是否錄影（只錄模擬器視窗）。驗收執行中模擬器視窗要保持焦點。
 - 選單會先印出實際執行的指令。
 - 非互動用法給腳本與 agent 使用，加 `--dry-run` 只印指令、不執行：
 
 ```bash
 uv run tools/sim.py --backend isaac --experiment minimal_pick_place --mode teleop --focus
 uv run tools/sim.py --backend isaac --experiment minimal_pick_place --mode acceptance --scenario robustness --no-video
+uv run tools/sim.py --backend mujoco --experiment minimal_pick_place --mode acceptance --scenario robustness_keyboard
+uv run tools/sim.py --server up --backend mujoco
 ```
 
-- 自動驗收的輸出放在 `outputs/acceptance/<實驗名稱>/`。
+- 自動驗收的輸出放在 `outputs/acceptance/<實驗名稱>/`（Isaac）或 `outputs/acceptance/mujoco/<實驗名稱>/`（MuJoCo）。
 - 情境若有固定選項（例如 `color_dr` 固定開啟 DR、seed 7），會覆蓋選單裡的選擇，並印出提示。
 
 ## 控制協定
@@ -214,4 +219,5 @@ uv run tools/sim.py --backend isaac --experiment minimal_pick_place --mode accep
 | `src/agentic_sim/server/runner.py` | 選單端的伺服器流程：手動操作、驗收進度、錄影 |
 | `tools/server_check.py` | 檢查執行中的伺服器：指令、重新連線、連續重建的時間與記憶體 |
 | `tools/probe_scene_rebuild.py` | 在同一個 Kit 程序內反覆重建場景的量測工具 |
+| `scripts/mujoco_sim_server.py`、`tools/mujoco_server.sh` | MuJoCo 伺服器主程式與管理腳本（其餘見 [mujoco-backend.md](mujoco-backend.md)） |
 | `pyproject.toml`、`uv.lock`、`.python-version` | 主機端 Python 環境 |

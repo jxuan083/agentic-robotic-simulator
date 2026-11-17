@@ -5,7 +5,8 @@ ee_offset_in_gripper_link:
   note: >-
     Grasp centre between the fingers in the `gripper` link frame. x = fixed-finger inner face (-0.0079) plus half
     the block edge; z = middle of the finger pads (finger tips at about -0.104). Measured from the workshop USD mesh.
-home_ee: [0.15, 0.0, 0.12]
+home_ee: [0.15, 0.0, 0.09]   # same arm pose as before the base fix (0.12 with the base 30 mm too high); the
+                             # vertical gripper reaches at most about 0.10 m here
 workspace:
   # A coarse safety box only; the reach itself comes from the IK (joint limits + max_tilt_deg). x min keeps the
   # target off the robot base, z min keeps the finger tips (at most about 0.02 below the EE) above the tray floor.

@@ -6,8 +6,10 @@ or from a dumped YAML, so this module runs without Isaac Sim (tests, offline che
 Frames
 ------
 - ``base``: the robot base link frame of the USD asset.
-- ``mount``: operator frame used for teleop = base link rotated about Z so that +X points forward
-  (toward the workspace), +Y left, +Z up. ``MOUNT_FROM_BASE`` holds the fixed rotation.
+- ``mount``: operator / scene frame used for teleop: +X forward (toward the workspace), +Y left, +Z up, origin on the
+  table top below the robot. The base link sits at ``base_pos`` in it, rotated by ``MOUNT_FROM_BASE`` (+90 deg about
+  Z). base_pos comes from the scene (robot.base_pos): the base link origin of the SO-101 asset lies 30.1 mm below the
+  bottom face of its base, so a base standing on the table has base_pos z = -0.0301.
 - ``ee``: grasp center between the two fingers, ``ee_offset`` expressed in the ``gripper`` link frame.
 """
 
@@ -112,6 +114,13 @@ class So101Chain:
     lower: np.ndarray
     upper: np.ndarray
     ee_offset: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    base_pos: np.ndarray = field(default_factory=lambda: np.zeros(3))  # base link origin in the mount frame
+
+    @property
+    def mount_from_base(self) -> np.ndarray:
+        t = MOUNT_FROM_BASE.copy()
+        t[:3, 3] = self.base_pos
+        return t
 
     @classmethod
     def from_dict(cls, d: dict) -> "So101Chain":
@@ -139,7 +148,7 @@ class So101Chain:
         return poses
 
     def gripper_pose_mount(self, q) -> np.ndarray:
-        return MOUNT_FROM_BASE @ self.link_poses_base(q)[self.joints[-1].child]
+        return self.mount_from_base @ self.link_poses_base(q)[self.joints[-1].child]
 
     def ee_pose_mount(self, q) -> np.ndarray:
         g = self.gripper_pose_mount(q)
@@ -148,7 +157,7 @@ class So101Chain:
     # ---- IK -----------------------------------------------------------------
     def _fk_with_axes(self, q):
         """EE pose (mount) plus each joint's world axis and origin (mount frame)."""
-        t = MOUNT_FROM_BASE.copy()
+        t = self.mount_from_base.copy()
         axes, origins = [], []
         for j, qi in zip(self.joints, q):
             jf = t @ j._j0  # joint frame (rotation about its axis does not move the axis)
@@ -274,8 +283,18 @@ class So101Chain:
                     c = np.linalg.solve(a.T @ a + null_damping * np.eye(a.shape[1]), a.T @ (e_vert - jr @ dq))
                     d2 = null @ c
                     n2 = np.linalg.norm(d2)
-                    dq = dq + (d2 * (null_step_max / n2) if n2 > null_step_max else d2)
-                stuck = free & (((q >= self.upper - 1e-6) & (dq > 0)) | ((q <= self.lower + 1e-6) & (dq < 0)))
+                    if n2 > null_step_max:
+                        d2 *= null_step_max / n2
+                    # the secondary step must not carry a joint past its limit: clipping it afterwards would undo
+                    # part of the step the other joints already compensate for, and the position error would
+                    # oscillate (seen at the wrist limit when the gripper starts to tilt). Shorten it instead.
+                    alpha = 1.0
+                    for i in np.nonzero(np.abs(d2) > 1e-12)[0]:
+                        room = (self.upper[i] if d2[i] > 0 else self.lower[i]) - (q[i] + dq[i])
+                        alpha = min(alpha, max(0.0, room / d2[i]))
+                    dq = dq + alpha * d2
+                # a joint whose primary step would cross its limit is locked for this step and the step is re-solved
+                stuck = free & (((q + dq > self.upper + 1e-9) & (dq > 0)) | ((q + dq < self.lower - 1e-9) & (dq < 0)))
                 if not stuck.any():
                     break
                 free &= ~stuck
@@ -293,4 +312,4 @@ class So101Chain:
 
     def pan_origin_mount(self) -> np.ndarray:
         """Pan (first joint) axis origin in the mount frame; used for radial yaw and reach limits."""
-        return (MOUNT_FROM_BASE @ self.joints[0]._j0)[:3, 3]
+        return (self.mount_from_base @ self.joints[0]._j0)[:3, 3]

@@ -3,7 +3,7 @@
 
   uv run tools/sim.py                      interactive menu
   uv run tools/sim.py --list               list experiments and server status
-  uv run tools/sim.py --server up|down|status          manage the persistent server (Isaac)
+  uv run tools/sim.py --server up|down|status [--backend mujoco]   manage a persistent server (default Isaac)
   uv run tools/sim.py --backend isaac --experiment minimal_pick_place --mode teleop --focus
   uv run tools/sim.py --backend isaac --experiment minimal_pick_place --mode acceptance --scenario robustness --no-video
 
@@ -28,7 +28,8 @@ from agentic_sim.server import runner  # noqa: E402
 from agentic_sim.server.client import RemoteError, SimClient, probe  # noqa: E402
 
 MODE_TEXT = {"teleop": "手動操作（keyboard／mouse）", "acceptance": "自動驗收（注入事件，視窗需保持焦點）"}
-SERVER_SCRIPTS = {"isaac": "docker/isaac/server.sh"}
+SERVER_SCRIPTS = {"isaac": "docker/isaac/server.sh", "mujoco": "tools/mujoco_server.sh"}
+SERVER_STOP_TEXT = {"isaac": "停止伺服器（docker compose down）", "mujoco": "停止伺服器"}
 
 
 def server_text(backend: str) -> str:
@@ -105,7 +106,7 @@ def interactive(dry_run: bool) -> tuple:
     use_server = False
     if backend in SERVER_SCRIPTS and not dry_run:
         if probe(backend) is not None:
-            k = ask("伺服器執行中：", ["use", "down"], ["使用伺服器", "停止伺服器（docker compose down）"], default=0)
+            k = ask("伺服器執行中：", ["use", "down"], ["使用伺服器", SERVER_STOP_TEXT[backend]], default=0)
             if k == 1:
                 raise SystemExit(server_cmd(backend, "down"))
             use_server = True
@@ -124,18 +125,20 @@ def interactive(dry_run: bool) -> tuple:
     opts = RunOptions()
     scenario = None
     if mode == "acceptance":
-        s = ask("選擇驗收情境：", list(exp.acceptance),
-                [a.scenario + (f"（固定選項 {a.options}）" if a.options else "") for a in exp.acceptance], default=0)
-        scenario = exp.acceptance[s].scenario
+        entries = exp.acceptance_for(backend)
+        s = ask("選擇驗收情境：", list(entries),
+                [a.scenario + (f"（固定選項 {a.options}）" if a.options else "") for a in entries], default=0)
+        scenario = entries[s].scenario
         opts.video = ask_yes("錄影（只錄應用程式視窗）？", True)
-    opts.focus = ask_yes("專注模式（隱藏編輯器面板）？", mode == "teleop")
-    if exp.color_dr and not (scenario and "color_dr" in exp.scenario(scenario).options):
+    if backend == "isaac":  # MuJoCo's window has no editor panels
+        opts.focus = ask_yes("專注模式（隱藏編輯器面板）？", mode == "teleop")
+    if exp.color_dr and not (scenario and "color_dr" in exp.scenario(scenario, backend).options):
         opts.color_dr = ask_yes("開啟顏色 DR？（之後也可在模擬器面板切換）", False)
         if opts.color_dr:
             opts.color_dr_seed = ask_int("DR seed", 0)
     if mode == "teleop":  # acceptance scripts are written for one block
         while True:
-            opts.blocks = ask_int("積木數量（1-8，之後也可在模擬器面板調整）", 1)
+            opts.blocks = ask_int("積木數量（1-8" + ("，之後也可在模擬器面板調整）" if backend == "isaac" else "）"), 1)
             if 1 <= opts.blocks <= 8:
                 break
             print("請輸入 1 到 8")
@@ -148,8 +151,8 @@ def print_list():
     print()
     for e in list_experiments():
         print(f"{e.name}  [{', '.join(e.backends)}]  {e.description}")
-        if e.acceptance:
-            print("    驗收：" + ", ".join(a.scenario for a in e.acceptance))
+        for b in e.backends:
+            print(f"    驗收（{b}）：" + ", ".join(a.scenario for a in e.acceptance_for(b)))
 
 
 def run_on_server(backend, exp, mode, opts, scenario) -> int:
@@ -158,8 +161,11 @@ def run_on_server(backend, exp, mode, opts, scenario) -> int:
             runner.teleop(c, exp, opts)
             return 0
         if not scenario:
-            raise LaunchError(f"acceptance mode needs a scenario (available: {[a.scenario for a in exp.acceptance]})")
-        job = runner.acceptance(c, exp, opts, scenario, recorder_factory=runner.WindowRecorder)
+            raise LaunchError(f"acceptance mode needs a scenario "
+                              f"(available: {[a.scenario for a in exp.acceptance_for(backend)]})")
+        title = runner.window_title(backend)
+        job = runner.acceptance(c, exp, opts, scenario, backend=backend,
+                                recorder_factory=lambda p: runner.WindowRecorder(p, window=title))
         ok = job.get("state") == "done" and job.get("passed") == job.get("checks") and not job.get("warning")
         return 0 if ok else 1
 
@@ -191,7 +197,7 @@ def main(argv=None) -> int:
             if not (a.backend and a.experiment and a.mode):
                 ap.error("non-interactive use needs --backend, --experiment and --mode")
             backend, exp, mode, scenario = a.backend, load_experiment(a.experiment), a.mode, a.scenario
-            opts = RunOptions(focus=a.focus, color_dr=a.color_dr, color_dr_seed=a.seed, blocks=a.blocks,
+            opts = RunOptions(focus=a.focus and backend == "isaac", color_dr=a.color_dr, color_dr_seed=a.seed, blocks=a.blocks,
                               video=not a.no_video)
             use_server = not (a.direct or a.dry_run) and backend in SERVER_SCRIPTS and probe(backend) is not None
         else:
@@ -215,7 +221,7 @@ def main(argv=None) -> int:
         return 0
     env = dict(os.environ, **cmd.env)
     if not env.get("DISPLAY"):
-        print("注意：沒有設定 DISPLAY，Isaac 視窗可能無法開啟（例如 export DISPLAY=:1）")
+        print("注意：沒有設定 DISPLAY，模擬器視窗可能無法開啟（例如 export DISPLAY=:1）")
     try:
         return subprocess.call(cmd.argv, cwd=ROOT, env=env)
     except KeyboardInterrupt:

@@ -1,21 +1,27 @@
 # Experiment: references existing configs only, no duplicated values.
 name: minimal_pick_place
 description: "單支 SO-101、儲存盤、放置盤與 1-8 顆積木的手動抓放（issue #1 場景，數值 provisional）"
-backends: [isaac]                   # mujoco is added when its backend exists
+backends: [isaac, mujoco]
 scene: configs/scenes/lab_current_minimal.yaml
 robots:                              # mount pose comes from the scene; one arm only for now
   - {id: arm0, model: so101}
 teleop: configs/teleop.yaml
 color_dr: configs/color_randomization.yaml
 cameras: []                          # lab cameras: added after the lab check
-acceptance:                          # scenarios in configs/acceptance/; options are forced for that scenario
+# Scenarios in configs/acceptance/. options: forced for that scenario; backends: where it runs (default: every
+# backend above). Both backends have the same keyboard, panel, 3D target handle and top view; focus mode (hiding the
+# Kit editor panels) exists only in Isaac, and the top-view scenario only in MuJoCo (Isaac's top view starts
+# collapsed).
+acceptance:
   - keyboard_pick_place
   - mouse_pick_place
   - viewport_drag
   - robustness
-  - focus_mode
+  - robustness_keyboard
+  - far_reach
+  - {scenario: multi_block_pick_place, options: {blocks: 8}}
   - {scenario: color_dr, options: {color_dr: true, color_dr_seed: 7}}
   - color_dr_off
-  - far_reach
   - scene_settings
-  - {scenario: multi_block_pick_place, options: {blocks: 8}}
+  - {scenario: focus_mode, backends: [isaac]}
+  - {scenario: top_view, backends: [mujoco]}

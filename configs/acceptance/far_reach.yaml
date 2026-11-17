@@ -1,5 +1,5 @@
 # Extended reach: pick the block and place it at the far end of the beige tray (x 0.35, y -0.17: 0.38 m from the
-# pan axis), beyond the earlier vertical-only reach (about 0.27 m from the pan axis at 0.10 m height, i.e. x <= 0.21 at
+# pan axis), beyond the vertical-only reach (about 0.23-0.26 m from the pan axis at 0.10 m height, i.e. x <= 0.21 at
 # this y). The gripper tilts outward only where it has to. Then lift high above home.
 # Same key-driven operator as keyboard_pick_place.
 - {wait: 3.0}
@@ -37,5 +37,5 @@
 - {note: "lift high above home"}
 - {hold: [E], until: "target[2] >= 0.25 or status != 'ok'", timeout: 5}
 - {wait: 1.5}
-- {check: "target[2] >= 0.25 and abs(ee[2] - target[2]) < 0.01", label: "height: 0.25 m above home reachable (vertical-only limit was about 0.14 m)"}
+- {check: "target[2] >= 0.25 and abs(ee[2] - target[2]) < 0.01", label: "height: 0.25 m above home reachable (vertical-only reaches about 0.11 m with the base on the table)"}
 - {wait: 1.0}

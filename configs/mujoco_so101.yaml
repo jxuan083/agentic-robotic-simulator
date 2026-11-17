@@ -1,0 +1,34 @@
+# MuJoCo backend: SO-101 model, its alignment with the shared kinematic chain (configs/so101_chain.yaml) and physics.
+# Model: MuJoCo Menagerie robotstudio_so101 (Apache-2.0), fetched by tools/fetch_mujoco_assets.sh at the pinned commit.
+model:
+  menagerie_commit: 3abca2e302625cec9429c49806121ea2855cef81   # 2026-09-28
+  path: robotstudio_so101/so101.xml                            # relative to $MENAGERIE_DIR (default ~/ref/mujoco_menagerie)
+  # The menagerie model carries a wrist camera mount (bracket + collision boxes); the Isaac asset is the no-camera
+  # USD. Removed so both engines have the same geometry. Lab cameras come later (issue #1 v2 README section 7).
+  remove_bodies: [camera_mount]
+
+# Alignment with configs/so101_chain.yaml (Workshop USD frames), measured by tools/mujoco_kinematics_check.py:
+# - every link frame matches after one translation of the MJCF base (no rotation);
+# - joint directions match; wrist_roll's zero differs by 2.79 deg (the MJCF range is the USD range shifted by the
+#   same amount, i.e. a calibration offset), so q_mujoco = q_shared + joint_offset.
+alignment:
+  # MJCF base origin relative to the shared base link frame (USD base link), no rotation. The scene's robot.base_pos
+  # is added on top (z -0.0301 puts both engines' base bottom on the table).
+  base_pos_in_mount: {value: [-0.0157608, 0.0207906, 0.0324817], source: measured,
+                      note: "MJCF base origin relative to the USD base link origin (both bases' bottom faces then coincide)"}
+  joints: {Rotation: shoulder_pan, Pitch: shoulder_lift, Elbow: elbow_flex, Wrist_Pitch: wrist_flex,
+           Wrist_Roll: wrist_roll, Jaw: gripper}
+  joint_offset: {Wrist_Roll: {value: 0.0486799, source: measured}}
+
+physics:
+  # Same control / physics rates as the Isaac scene (60 Hz control, 240 Hz physics). The menagerie default timestep
+  # is 0.005 s; its integrator, cone, solver iterations, actuator gains and joint damping are kept unchanged.
+  timestep: 0.0041666667
+  control_dt: 0.0166666667
+  # Single sliding friction per geom in MuJoCo (PhysX has static + dynamic): the scene's static value is used.
+  # Gripper collision geoms keep the menagerie's friction and contact settings (priority 1).
+  friction_from: static
+
+viewer:
+  title: SO-101 MuJoCo teleop
+  size: [1500, 940]   # 3D view + 400 px operation panel

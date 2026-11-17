@@ -45,13 +45,22 @@ def teleop(client: SimClient, exp: Experiment, opts: RunOptions, say=print) -> d
     return r
 
 
+def window_title(backend: str) -> str | None:
+    """Title of the backend's simulator window (for window-only recording); None = the recorder's default (Isaac)."""
+    if backend == "mujoco":
+        from agentic_sim.config import load
+        return load("configs/mujoco_so101.yaml")["viewer"]["title"]
+    return None
+
+
 class WindowRecorder:
     """tools/record_isaac_window.sh in its own process group; stop() sends SIGINT so ffmpeg finalizes the file."""
 
-    def __init__(self, out_path: str, max_s: int = 900):
+    def __init__(self, out_path: str, max_s: int = 900, window: str | None = None):
         self.out = out_path
+        env = dict(os.environ, **({"ISAAC_WINDOW_NAME": window} if window else {}))
         self.proc = subprocess.Popen(["tools/record_isaac_window.sh", "video", out_path, str(max_s)], cwd=REPO_ROOT,
-                                     start_new_session=True)
+                                     start_new_session=True, env=env)
 
     def stop(self, timeout: float = 15.0):
         try:
@@ -69,9 +78,9 @@ class WindowRecorder:
 
 
 def acceptance(client: SimClient, exp: Experiment, opts: RunOptions, scenario: str, say=print,
-               poll_s: float = 0.5, timeout_s: float = 900.0, recorder_factory=None) -> dict:
+               poll_s: float = 0.5, timeout_s: float = 900.0, recorder_factory=None, backend: str | None = None) -> dict:
     """Run one scenario on the server; returns the finished job (state, passed, checks, warning, ...)."""
-    exp.scenario(scenario)  # KeyError early if the experiment does not list it
+    exp.scenario(scenario, backend)  # KeyError early if the experiment does not list it for this backend
     st = client.call("status")
     loaded = st.get("options") or {}
     if st.get("experiment") != exp.name or not same_options(loaded, session_options(opts)):
@@ -79,7 +88,8 @@ def acceptance(client: SimClient, exp: Experiment, opts: RunOptions, scenario: s
         client.call("load_experiment", name=exp.name, options=session_options(opts))
     rec = None
     if opts.video and recorder_factory is not None:
-        rec = recorder_factory(os.path.join("outputs", "acceptance", exp.name, f"{scenario}.mp4"))
+        sub = [backend] if backend and backend != "isaac" else []
+        rec = recorder_factory(os.path.join("outputs", "acceptance", *sub, exp.name, f"{scenario}.mp4"))
     try:
         job = client.call("run_acceptance", scenario=scenario)
         if job.get("forced_options"):
