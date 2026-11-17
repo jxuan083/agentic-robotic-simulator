@@ -6,6 +6,7 @@
 
 - 本 repo：README 與 docs 架構文件。
 - 本 repo：Isaac Sim 最小桌面場景與 keyboard／mouse EE 操作（issue #1），以注入事件的驗收腳本完成抓放、不可達、失焦、暫停、reset 驗收。2026-11-17 加入主畫面滑鼠操作、專注模式與顏色 DR（預設關閉）；使用者實際操作確認手感可接受（2026-11-17）。見 [isaac-ee-teleop.md](isaac-ee-teleop.md)。
+- 本 repo：實驗設定檔、選單與模擬伺服器控制協定（issue #3 的 P1），見 [sim-server.md](sim-server.md)。常駐伺服器、MuJoCo backend 與跨引擎比較進行中。
 - 既有實機工作區（尚未移入本 repo）：雙臂 SO-101 實機遙操作、相機串流、馬達校正、影像／狀態記錄、DAgger 接管與資料保存程式可運作。
 
 ## 可沿用與待補介面

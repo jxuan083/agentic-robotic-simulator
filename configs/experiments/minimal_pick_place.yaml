@@ -1,0 +1,18 @@
+# Experiment: references existing configs only, no duplicated values.
+name: minimal_pick_place
+description: "單支 SO-101、儲存盤、放置盤與一顆積木的手動抓放（issue #1 場景，數值 provisional）"
+backends: [isaac]                   # mujoco is added when its backend exists
+scene: configs/scenes/lab_current_minimal.yaml
+robots:                              # mount pose comes from the scene; one arm only for now
+  - {id: arm0, model: so101}
+teleop: configs/teleop.yaml
+color_dr: configs/color_randomization.yaml
+cameras: []                          # lab cameras: added after the lab check
+acceptance:                          # scenarios in configs/acceptance/; options are forced for that scenario
+  - keyboard_pick_place
+  - mouse_pick_place
+  - viewport_drag
+  - robustness
+  - focus_mode
+  - {scenario: color_dr, options: {color_dr: true, color_dr_seed: 7}}
+  - color_dr_off
