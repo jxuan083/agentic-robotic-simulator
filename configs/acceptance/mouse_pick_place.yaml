@@ -1,0 +1,50 @@
+# Mouse-only pick and place: pink storage tray -> beige placement tray.
+# Only mouse events on the primary path: drag the target handle in the 3D viewport (horizontal), wheel on the handle
+# (height), and clicks on the panel buttons (Open / Close / Yaw / Reset). No keyboard events are injected.
+- {wait: 3.0}
+- {note: "open gripper (button)"}
+- {click: open}
+- {wait: 0.8}
+- {note: "approach: drag the handle over the block"}
+# Operator clearance: the EE is the grasp centre with the cube flush against the fixed finger, which sits on the
+# -Y side once the gripper is yawed for this cube. Like a human operator, stop ~5 mm short on that side so the fixed
+# finger clears the cube top; closing the jaw then pushes the cube against the fixed finger.
+- {vdrag_to: [0.170, 0.115], tol: 0.002, timeout: 10}
+- {note: "yaw so the fingers face the cube sides (two -15 deg clicks)"}
+- {click: yaw_minus}
+- {wait: 0.3}
+- {click: yaw_minus}
+- {wait: 1.0}
+- {note: "descend with the wheel"}
+- {vwheel: -1, until: "target[2] <= 0.025", timeout: 8}
+- {wait: 1.5}
+- {check: "abs(ee[0] - block[0]) < 0.012 and abs(ee[1] - block[1]) < 0.012 and ee[2] < 0.035", label: "approach: EE lowered around the block (not resting on top)"}
+- {note: "grasp (button)"}
+- {click: close}
+- {wait: 1.5}
+- {check: "jaw > 0.05", label: "grasp: jaw stopped by the block (physical contact, not closed)"}
+- {note: "lift with the wheel"}
+- {vwheel: 1, until: "target[2] >= 0.10", timeout: 8}
+- {wait: 1.0}
+- {check: "block[2] > 0.06", label: "lift: block raised with the gripper"}
+- {note: "carry: drag over the beige tray"}
+- {vdrag_to: [0.190, -0.120], tol: 0.002, timeout: 12}
+- {wait: 1.0}
+- {check: "block[2] > 0.06 and abs(block[1] - ee[1]) < 0.02", label: "carry: block still held over the beige tray"}
+- {note: "lower and release"}
+- {vwheel: -1, until: "target[2] <= 0.040", timeout: 8}
+- {wait: 0.8}
+- {click: open}
+- {wait: 1.0}
+- {vwheel: 1, until: "target[2] >= 0.10", timeout: 8}
+- {wait: 1.5}
+- {check: "block_in_placement", label: "place: block resting inside the beige tray"}
+- {check: "stats['rejected_targets'] == 0 and stats['max_dq_cmd_per_frame'] < 0.06", label: "no rejected targets, no joint-command jumps"}
+- {check: "len(held) == 0", label: "no keyboard keys involved"}
+- {check: "len(selection) == 0", label: "handle drags never select scene prims"}
+- {note: "reset after the block was moved"}
+- {click: reset}
+- {wait: 1.5}
+- {check: "block_in_storage and abs(block[0] - block_init[0]) < 0.002 and abs(block[1] - block_init[1]) < 0.002", label: "reset: block back in the pink tray at its initial pose"}
+- {check: "abs(target[0] - home[0]) < 0.003 and abs(target[2] - home[2]) < 0.003 and gripper > 0.5 and yaw_offset == 0", label: "reset: target, yaw and gripper restored"}
+- {wait: 1.5}

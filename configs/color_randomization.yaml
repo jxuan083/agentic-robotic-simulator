@@ -1,0 +1,12 @@
+# Colour domain randomization (first version: visual colours only). Off by default; enable with --color_dr.
+# Applied at start-up and at every reset, unchanged during a session. Mass, friction, collision, geometry, lighting,
+# UI and EE marker colours are never touched.
+enabled: false
+seed: 0
+palette: configs/palettes/block_colors.yaml
+block: true            # block colour from the palette
+arm_shell: true        # one colour for the whole recolourable arm shell (independent draw, same palette)
+arm_shell_material: /World/Robot/Looks/material_a_3d_printed
+# The gripper fingers are part of the shell and change with it (contact faces are not separate geometry and are
+# not kept apart). Motors use another material (material_sts3215) and are never changed.
+log: outputs/color_dr.jsonl   # one line per session, written only when enabled

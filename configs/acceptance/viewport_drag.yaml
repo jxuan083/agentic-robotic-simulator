@@ -1,0 +1,42 @@
+# Viewport handle (primary mouse path): no jump on press, accurate relative drag, wheel on the handle, Shift fine
+# mode, reach-boundary push and immediate recovery, and the same under another camera view and window size.
+# Only real carb mouse / keyboard events on the viewport; nothing touches the target directly.
+- {wait: 3.0}
+- {note: "drag from the default view"}
+- {vdrag_to: [0.20, 0.05], tol: 0.002, timeout: 8}
+- {check: "m['drag']['press_jump'] < 1e-6", label: "default view: pressing the handle does not move the target"}
+- {check: "abs(target[0] - 0.20) < 0.003 and abs(target[1] - 0.05) < 0.003", label: "default view: target reaches the dragged point"}
+- {check: "m['drag']['max_step'] < 0.015", label: "default view: no per-frame jump while dragging"}
+- {mark: before_wheel}
+- {vwheel: -1, until: "target[2] <= m['before_wheel']['target'][2] - 0.03", timeout: 6}
+- {check: "target[2] < m['before_wheel']['target'][2] - 0.025 and abs(target[0] - m['before_wheel']['target'][0]) < 1e-6", label: "wheel on the handle changes height only"}
+- {check: "max(abs(cam[0] - m['before_wheel']['cam'][0]), abs(cam[1] - m['before_wheel']['cam'][1]), abs(cam[2] - m['before_wheel']['cam'][2])) < 1e-6", label: "wheel on the handle does not zoom the camera"}
+- {note: "fine mode: Shift held during the drag"}
+- {mark: before_fine}
+- {press: LEFT_SHIFT}
+- {vdrag_to: [0.205, 0.05], tol: 0.0007, timeout: 8}
+- {check: "m['drag']['press_jump'] < 1e-6 and abs(target[0] - 0.205) < 0.001", label: "fine: Shift drag reaches a 5 mm move within 1 mm"}
+- {mark: before_fine_wheel}
+- {vwheel: -1, until: "target[2] <= m['before_fine_wheel']['target'][2] - 0.0029", timeout: 6}
+- {check: "abs((m['before_fine_wheel']['target'][2] - target[2]) - 0.003) < 0.0011", label: "fine: Shift + wheel moves 1 mm per notch"}
+- {release: LEFT_SHIFT}
+- {note: "reach boundary: push forward, then come straight back"}
+- {vdrag_push: [1, 0], seconds: 2.5, timeout: 6}
+- {check: "status in ('joint_limit', 'ik_no_solution', 'joint_jump')", label: "boundary: blocked with a classified reason"}
+- {check: "m['drag']['max_step'] < 0.015", label: "boundary: no per-frame jump while pushing"}
+- {mark: at_edge}
+- {vdrag_push: [-1, 0], seconds: 0.4, timeout: 3}
+- {check: "target[0] < m['at_edge']['target'][0] - 0.005 and status == 'ok'", label: "boundary: dragging back recovers immediately (no accumulated overshoot)"}
+- {note: "another camera view"}
+- {camera: {eye: [0.25, 0.65, 0.40], target: [0.18, 0.0, 0.03]}}
+- {check: "len(selection) == 0", label: "handle drags never select scene prims"}
+- {wait: 1.0}
+- {vdrag_to: [0.16, -0.04], tol: 0.002, timeout: 8}
+- {check: "m['drag']['press_jump'] < 1e-6 and abs(target[0] - 0.16) < 0.003 and abs(target[1] + 0.04) < 0.003 and m['drag']['max_step'] < 0.015", label: "side view: no press jump, accurate drag, no jump"}
+- {note: "smaller application window"}
+- {resize: [1200, 760]}
+- {wait: 1.5}
+- {vdrag_to: [0.19, 0.06], tol: 0.002, timeout: 8}
+- {check: "m['drag']['press_jump'] < 1e-6 and abs(target[0] - 0.19) < 0.003 and abs(target[1] - 0.06) < 0.003 and m['drag']['max_step'] < 0.015", label: "resized window: no press jump, accurate drag, no jump"}
+- {check: "len(selection) == 0", label: "handle drags never select scene prims"}
+- {wait: 1.0}

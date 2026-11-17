@@ -1,0 +1,31 @@
+# Keyboard / mouse EE teleop parameters (mount frame, metres, radians, seconds).
+ee_offset_in_gripper_link:
+  value: [0.0069, 0.0, -0.085]
+  source: provisional
+  note: >-
+    Grasp centre between the fingers in the `gripper` link frame. x = fixed-finger inner face (-0.0079) plus half
+    the block edge; z = middle of the finger pads (finger tips at about -0.104). Measured from the workshop USD mesh.
+home_ee: [0.15, 0.0, 0.12]
+workspace:
+  x: [0.06, 0.34]
+  y: [-0.30, 0.30]
+  z: [0.024, 0.22]    # z min keeps the finger tips (about 0.02 below the EE) above the tray floor
+gripper:
+  open: 0.52          # rad, about 53 mm between the fingers
+  closed: -0.1745     # rad, joint lower limit; squeezes a 29.5 mm block (contact at about 0.18 rad)
+  speed: 1.5          # rad/s while O / C is held
+keyboard:
+  linear_speed: 0.08  # m/s while a move key is held
+  yaw_speed: 1.0      # rad/s while Z / X is held
+mouse:
+  # Drag moves the target by the cursor's motion on the horizontal plane at the target height (relative, no jump
+  # on press). Steps the arm cannot reach are cut at the reach boundary and dropped, never accumulated.
+  wheel_step: 0.005       # m per wheel notch
+  fine_wheel_step: 0.001  # m per notch with Shift held
+  fine_drag_scale: 0.25   # drag gain with Shift held (applied per event, so pressing Shift never jumps the target)
+  max_drag_step: 0.03     # m; one input event can move the target at most this far
+ik:
+  max_joint_step: 0.25   # rad per accepted target update; larger changes are rejected as a jump
+  joint_rate_limit: 3.0  # rad/s applied to the commanded joint targets
+  yaw_offset_limit: 1.57
+dt_max: 0.1             # s; elapsed-time clamp so a stalled frame cannot produce a large increment

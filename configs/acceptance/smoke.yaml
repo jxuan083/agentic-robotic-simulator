@@ -1,0 +1,6 @@
+- {wait: 3.0}
+- {hold: [W], until: "target[0] >= 0.20", timeout: 5}
+- {check: "abs(target[0] - 0.20) < 0.01", label: keyboard W moves target +X}
+- {wait: 1.0}
+- {check: "abs(ee[0] - target[0]) < 0.01 and abs(ee[2] - target[2]) < 0.01", label: EE tracks target within 1 cm}
+- {wait: 25.0}

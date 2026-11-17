@@ -1,0 +1,9 @@
+# Colour DR off (default): no draw, baseline colours, reset does not change colours.
+- {wait: 2.0}
+- {check: "dr is None and dr_records == 0", label: "off: nothing drawn"}
+- {check: "max(abs(a - b) for a, b in zip(block_mat_rgb, [0.85, 0.15, 0.15])) < 1e-5", label: "off: block baseline colour"}
+- {check: "max(abs(a - b) for a, b in zip(shell_mat_rgb, [1.0, 0.82, 0.12])) < 1e-5", label: "off: arm shell baseline colour"}
+- {tap: R}
+- {wait: 1.0}
+- {check: "dr is None and max(abs(a - b) for a, b in zip(block_mat_rgb, [0.85, 0.15, 0.15])) < 1e-5 and max(abs(a - b) for a, b in zip(shell_mat_rgb, [1.0, 0.82, 0.12])) < 1e-5", label: "off: reset keeps baseline colours"}
+- {wait: 0.5}

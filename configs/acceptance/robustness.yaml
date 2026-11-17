@@ -1,0 +1,59 @@
+# Unreachable target, focus loss, pause and reset with stale input. Real carb keyboard / mouse events only.
+- {wait: 3.0}
+
+- {note: "UNREACHABLE (keyboard): keep holding W past the reach limit"}
+- {hold: [W], until: "status in ('joint_limit', 'ik_no_solution', 'joint_jump')", timeout: 5}
+- {mark: at_limit}
+- {hold: [W], until: "False", timeout: 1.5}
+- {wait: 0.8}
+- {check: "status in ('joint_limit', 'ik_no_solution', 'joint_jump')", label: "unreachable: classified warning shown while holding past the limit"}
+- {check: "target[0] - m['at_limit']['target'][0] < 0.005", label: "unreachable: target stops at the reach boundary (only valid targets accepted)"}
+- {check: "abs(ee[0] - target[0]) < 0.01 and abs(ee[2] - target[2]) < 0.01", label: "unreachable: EE stays at the last valid target"}
+- {check: "stats['max_dq_cmd_per_frame'] < 0.06 and stats['max_joint_vel'] < 4.0", label: "unreachable: no joint jump"}
+- {hold: [S], until: "target[0] <= 0.18", timeout: 4}
+- {check: "status == 'ok'", label: "unreachable: recovers once back in reach"}
+
+- {note: "UNREACHABLE (mouse): push the viewport handle toward an out-of-reach corner and keep pushing"}
+- {vdrag_push: [0.6, 0.8], seconds: 3.0, timeout: 6}
+- {wait: 0.5}
+- {check: "target[0] < 0.30 and target[1] < 0.25 and m['drag']['max_step'] < 0.015", label: "mouse unreachable: target stops at the boundary, no per-frame jump"}
+- {check: "stats['max_dq_cmd_per_frame'] < 0.06", label: "mouse unreachable: no joint-command jump"}
+- {mark: mouse_edge}
+- {vdrag_push: [-0.6, -0.8], seconds: 0.5, timeout: 3}
+- {check: "target[1] < m['mouse_edge']['target'][1] - 0.005 and status == 'ok'", label: "mouse unreachable: dragging back recovers immediately"}
+- {vdrag_to: [0.15, 0.0], tol: 0.003, timeout: 10}
+- {wait: 1.0}
+
+- {note: "FOCUS LOSS: hold A, window loses focus, key still physically down after focus returns"}
+- {focus_loss: 1.5, hold: [A]}
+- {check: "abs(target[1] - m['focus_lost']['target'][1]) < 1e-6", label: "focus loss: target increments stop and do not resume"}
+- {check: "len(held) == 0", label: "focus loss: held keys dropped"}
+- {wait: 0.5}
+
+- {note: "PAUSE: keys pressed while paused do nothing, before or after resume"}
+- {mark: before_pause}
+- {tap: P}
+- {wait: 0.3}
+- {check: "paused", label: "pause: paused"}
+- {press: W}
+- {wait: 1.0}
+- {check: "abs(target[0] - m['before_pause']['target'][0]) < 1e-6", label: "pause: no motion while paused"}
+- {tap: P}
+- {wait: 1.0}
+- {check: "not paused and abs(target[0] - m['before_pause']['target'][0]) < 1e-6", label: "pause: key pressed during pause not replayed after resume"}
+- {release: W}
+- {wait: 0.3}
+
+- {note: "RESET with stale input: hold D, press R while D is still down"}
+- {press: D}
+- {wait: 0.6}
+- {mark: before_reset}
+- {tap: R}
+- {wait: 1.0}
+- {check: "abs(target[0] - home[0]) < 0.003 and abs(target[1] - home[1]) < 0.003 and abs(target[2] - home[2]) < 0.003", label: "reset: target back home and held D not executed"}
+- {check: "session == m['before_reset']['session'] + 1 and yaw_offset == 0 and gripper > 0.5", label: "reset: new session, yaw offset and gripper restored"}
+- {check: "abs(block[0] - block_init[0]) < 0.002 and abs(block[1] - block_init[1]) < 0.002", label: "reset: block at its initial pose"}
+- {release: D}
+- {wait: 1.0}
+- {check: "abs(target[1] - home[1]) < 0.003", label: "reset: still home after releasing the stale key"}
+- {wait: 1.0}
