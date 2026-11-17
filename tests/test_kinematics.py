@@ -63,3 +63,54 @@ def test_color_sampler_reproducible_and_independent():
     only_block = ColorSampler(pal, seed=7, arm_shell=False)
     assert [only_block.next()["block"] for _ in range(20)] == [r["block"] for r in seq_a]  # sequence not shifted
     assert all(r["palette_version"] == pal.version for r in seq_a)
+
+
+def walk(c, solve, start_q, p0, p1, n=40):
+    """Warm-started walk from p0 to p1 like the teleop loop; returns the last reachable point, q, info."""
+    q, last = start_q, None
+    for s in np.linspace(0, 1, n):
+        p = (1 - s) * np.asarray(p0) + s * np.asarray(p1)
+        q2, ok, info = solve(p, q)
+        if not ok:
+            break
+        q, last = q2, (p, info)
+    return last, q
+
+
+def test_tilt_ik_equals_vertical_ik_where_vertical_reaches():
+    c = chain()
+    q0 = np.array([0.3, 0.0, 0.0, 1.5, 0.0])
+    for p in ([0.18, 0.10, 0.06], [0.12, -0.05, 0.03], [0.24, 0.0, 0.08]):
+        qa, oka, _ = c.solve_ik(p, np.pi / 2, q0, iters=200)
+        qb, okb, ib = c.solve_ik_tilt(p, np.pi / 2, qa + 0.03, 60.0)
+        assert oka and okb, ib
+        assert np.max(np.abs(qa - qb)) < 0.02 and ib["tilt_deg"] < 4.0
+
+
+def test_tilt_extends_reach_forward_and_up():
+    c = chain()
+    pan = c.pan_origin_mount()
+    q0, _, _ = c.solve_ik([0.15, pan[1], 0.03], np.pi / 2, np.array([0.0, 0.0, 0.0, 1.5, 0.0]), iters=300)
+
+    def vertical(p, q):
+        return c.solve_ik(p, np.pi / 2, q)
+
+    def tilted(p, q):
+        return c.solve_ik_tilt(p, np.pi / 2, q, 60.0)
+
+    far = ([0.15, pan[1], 0.03], [0.50, pan[1], 0.03])
+    (pv, _), _ = walk(c, vertical, q0, *far, n=120)
+    (pt, it), _ = walk(c, tilted, q0, *far, n=120)
+    assert pt[0] - pv[0] > 0.08, (pv, pt)   # measured: about 0.30 -> 0.42 at grasp height
+    assert 20 < it["tilt_deg"] <= 60
+    up = ([0.15, pan[1], 0.03], [0.15, pan[1], 0.40])
+    (pv, _), _ = walk(c, vertical, q0, *up, n=120)
+    (pt, _), _ = walk(c, tilted, q0, *up, n=120)
+    assert pt[2] - pv[2] > 0.10, (pv, pt)   # measured: about 0.14 -> 0.28
+
+
+def test_tilt_never_exceeds_max_and_stays_in_limits():
+    c = chain()
+    q, ok, info = c.solve_ik_tilt([0.60, 0.0, 0.05], 0.0, np.array([0.0, 0.5, -0.5, 1.5, 0.0]), 30.0)
+    assert not ok
+    assert np.all(q >= c.lower) and np.all(q <= c.upper)

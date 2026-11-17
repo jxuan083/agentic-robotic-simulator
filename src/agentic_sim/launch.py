@@ -25,6 +25,7 @@ class RunOptions:
     focus: bool = False
     color_dr: bool = False
     color_dr_seed: int | None = None
+    blocks: int = 1                 # number of blocks in the scene (1-8)
     video: bool = True              # acceptance only: record the app window
 
     def merged(self, forced: dict) -> "RunOptions":
@@ -51,6 +52,8 @@ def _isaac_app_args(exp: Experiment, opts: RunOptions) -> list:
         args += ["--color_dr_config", exp.color_dr]
     if opts.focus:
         args.append("--focus")
+    if int(opts.blocks) != 1:
+        args += ["--blocks", str(int(opts.blocks))]
     if opts.color_dr:
         if not exp.color_dr:
             raise LaunchError(f"experiment {exp.name!r} has no colour DR config")

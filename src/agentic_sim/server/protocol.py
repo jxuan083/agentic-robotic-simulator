@@ -98,9 +98,18 @@ def decode_request(line: bytes) -> Request:
     return Request(req_id, cmd, args)
 
 
+def _plain(o):
+    """json.dumps fallback for numpy scalars / arrays (handlers often return simulator values)."""
+    if hasattr(o, "tolist"):  # numpy arrays and scalars (bool_, float32, ...)
+        return o.tolist()
+    if isinstance(o, (set, tuple)):
+        return list(o)
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
 def ok(req_id, result=None) -> bytes:
     return (json.dumps({"id": req_id, "ok": True, "result": result if result is not None else {}},
-                       ensure_ascii=False) + "\n").encode()
+                       ensure_ascii=False, default=_plain) + "\n").encode()
 
 
 def error(req_id, code: str, message: str) -> bytes:

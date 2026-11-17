@@ -196,3 +196,22 @@ def test_gripper_button_is_rate_limited():
         steps += 1
     assert np.isclose(c.state.gripper, c.p.gripper_closed)
     assert steps >= int((c.p.gripper_open - c.p.gripper_closed) / (c.p.gripper_speed / 60))
+
+
+def test_far_reach_tilts_and_vertical_limit_is_configurable():
+    c = make()
+    for _ in range(200):
+        c.step_velocity([0, 0, -1], 0, 0.05, "keyboard")  # down to grasp height
+    for _ in range(400):
+        c.step_velocity([1, 0, 0], 0, 1 / 60, "keyboard")
+    assert c.state.pos[0] > 0.38 and c.state.info["tilt_deg"] > 20
+    chain = So101Chain.from_dict(yaml.safe_load(open(os.path.join(ROOT, "configs/so101_chain.yaml"))))
+    cfg = load("configs/teleop.yaml")
+    cfg["ik"]["max_tilt_deg"] = 4.0  # vertical only: the earlier reach
+    v = load_controller(chain, cfg)
+    for _ in range(200):
+        v.step_velocity([0, 0, -1], 0, 0.05, "keyboard")
+    for _ in range(400):
+        v.step_velocity([1, 0, 0], 0, 1 / 60, "keyboard")
+    accepted_tilt = np.degrees(np.arccos(np.clip(v.chain.ee_pose_mount(v.state.q_goal)[2, 2], -1, 1)))
+    assert v.state.pos[0] < 0.32 and accepted_tilt <= 4.0  # (state.info is the last, rejected attempt)

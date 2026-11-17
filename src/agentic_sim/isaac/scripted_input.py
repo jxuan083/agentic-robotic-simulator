@@ -16,6 +16,8 @@ Script = YAML list of steps:
   - {focus_loss: 1.0, hold: [W]}                   hold keys, then report the window unfocused for N seconds (simulated)
   - {press: W} / {release: W}                      key down / up that stays held across steps
   - {mark: name}                                   snapshot the frame state; checks read it as m['name']['target']
+  - {set: {blocks: 4, color_dr: true, color_dr_seed: 5}}   edit the panel's scene-settings fields (the model values,
+                                                   as typed into the fields; applied by the next Reset)
   - {check: "expr", label: name}                   record a pass/fail result
 Viewport handle (primary mouse path; the cursor is driven like an operator watching the screen):
   - {vdrag_to: [x, y], tol: 0.002, timeout: 10}    press on the handle, move the cursor to bring the target to (x, y)
@@ -64,6 +66,11 @@ class ScriptedInput:
         self.done = False
         self._next()
 
+    def rebind(self, panel, handle, set_camera):
+        """Continue this script in a rebuilt session (block count changed): point it at the new UI."""
+        self.panel, self.handle, self.set_camera = panel, handle, set_camera
+        self.log(f"script: continues in the rebuilt scene at step {self.i}")
+
     # ---- raw events --------------------------------------------------------------
     def _key(self, name, down):
         et = KeyboardEventType.KEY_PRESS if down else KeyboardEventType.KEY_RELEASE
@@ -94,7 +101,7 @@ class ScriptedInput:
         self.log(f"script step {self.i}: {self.steps[self.i]}")
 
     def _cond(self, expr, ns):
-        env = {"__builtins__": {}, "abs": abs, "min": min, "max": max, "len": len, "sorted": sorted, "zip": zip, "all": all, "any": any, "round": round,
+        env = {"__builtins__": {}, "abs": abs, "min": min, "max": max, "len": len, "sorted": sorted, "zip": zip, "all": all, "any": any, "round": round, "range": range, "set": set, "tuple": tuple,
                "m": self.marks}
         return bool(eval(expr, env, ns))
 
@@ -128,6 +135,9 @@ class ScriptedInput:
         elif "release" in s:
             self._key(s["release"], False)
             self._sticky.remove(s["release"])
+            self._next()
+        elif "set" in s:
+            self.panel.set_settings(s["set"])
             self._next()
         elif "mark" in s:
             self.marks[s["mark"]] = self._snap(ns)

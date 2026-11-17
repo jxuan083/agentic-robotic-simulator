@@ -1,4 +1,4 @@
-"""Build the minimal lab_current scene: table, two trays (open-top colliders), one block, SO-101, lights, axes."""
+"""Build the minimal lab_current scene: table, two trays (open-top colliders), 1-8 blocks, SO-101, lights, axes."""
 
 from __future__ import annotations
 
@@ -61,13 +61,28 @@ def _tray(root, spec, friction):
 @dataclass
 class SceneHandles:
     robot: Articulation
-    block: RigidObject
-    block_init_pos: tuple
+    blocks: list            # RigidObject per block; blocks[0] is /World/Block
+    block_prims: list
+    block_init_pos: list    # (x, y, z) per block
     block_init_rot: tuple
+    block_colors: list      # baseline display colour (sRGB-ish) per block, for the panel
     trays: dict
 
+    @property
+    def block(self) -> RigidObject:
+        return self.blocks[0]
 
-def build_scene(scene: dict) -> SceneHandles:
+
+def block_prim(i: int) -> str:
+    return "/World/Block" if i == 0 else f"/World/Block_{i}"
+
+
+def block_count_range(scene: dict) -> tuple:
+    bl = scene["block"]
+    return 1, int(bl.get("max_count", 1))
+
+
+def build_scene(scene: dict, n_blocks: int | None = None) -> SceneHandles:
     tb = scene["table"]
     tsx, tsy, tsz = v(tb["size"])
     tcx, tcy = v(tb["center_xy"])
@@ -79,31 +94,52 @@ def build_scene(scene: dict) -> SceneHandles:
         trays[name] = _tray(f"/World/Trays/{name}", scene["trays"][name], v(scene["trays"]["friction"]))
 
     bl = scene["block"]
+    lo, hi = block_count_range(scene)
+    n = int(bl.get("count", 1) if n_blocks is None else n_blocks)
+    if not lo <= n <= hi:
+        raise ValueError(f"block count {n} outside {lo}..{hi}")
     e = v(bl["edge"])
-    bx, by = v(bl["init_xy"])
     floor_top = trays["storage_pink"]["floor_top"]
-    init_pos = (bx, by, floor_top + e / 2 + 0.0005)
+    layout = [tuple(v(bl["init_xy"]))] + [tuple(xy) for xy in (v(bl["layout_xy"])[1:] if "layout_xy" in bl else [])]
+    if len(layout) < n:
+        raise ValueError(f"scene block.layout_xy has {len(layout)} positions, {n} blocks requested")
+    # material colours (linear, written to the shader) and display colours (panel) per block; block 0 keeps the
+    # scene colour as before, the others take palette colours (sRGB design values -> linear, like colour DR)
+    colors, display = [tuple(bl["color"])], [tuple(bl["color"])]
+    if n > 1:
+        from agentic_sim.color_dr import Palette, srgb_to_linear
+        pal = Palette.load(bl["extra_palette"])
+        for i in range(1, n):
+            rgb = pal.colors[i % len(pal.colors)].rgb
+            colors.append(tuple(srgb_to_linear(rgb)))
+            display.append(tuple(rgb))
     init_rot = _yaw_quat(v(bl["init_yaw_deg"]))
-    block = RigidObject(
-        RigidObjectCfg(
-            prim_path="/World/Block",
-            spawn=sim_utils.CuboidCfg(
-                size=(e, e, e),
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                    solver_position_iteration_count=16, solver_velocity_iteration_count=1,
-                    max_depenetration_velocity=1.0,
+    blocks, prims, inits = [], [], []
+    for i in range(n):
+        bx, by = layout[i]
+        init_pos = (bx, by, floor_top + e / 2 + 0.0005)
+        blocks.append(RigidObject(
+            RigidObjectCfg(
+                prim_path=block_prim(i),
+                spawn=sim_utils.CuboidCfg(
+                    size=(e, e, e),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        solver_position_iteration_count=16, solver_velocity_iteration_count=1,
+                        max_depenetration_velocity=1.0,
+                    ),
+                    mass_props=sim_utils.MassPropertiesCfg(mass=v(bl["mass"])),
+                    collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.0),
+                    physics_material=sim_utils.RigidBodyMaterialCfg(
+                        static_friction=v(bl["friction"])[0], dynamic_friction=v(bl["friction"])[1],
+                        friction_combine_mode="max",
+                    ),
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=tuple(colors[i]), roughness=0.5),
                 ),
-                mass_props=sim_utils.MassPropertiesCfg(mass=v(bl["mass"])),
-                collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.0),
-                physics_material=sim_utils.RigidBodyMaterialCfg(
-                    static_friction=v(bl["friction"])[0], dynamic_friction=v(bl["friction"])[1],
-                    friction_combine_mode="max",
-                ),
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=tuple(bl["color"]), roughness=0.5),
-            ),
-            init_state=RigidObjectCfg.InitialStateCfg(pos=init_pos, rot=init_rot),
-        )
-    )
+                init_state=RigidObjectCfg.InitialStateCfg(pos=init_pos, rot=init_rot),
+            )
+        ))
+        prims.append(block_prim(i))
+        inits.append(init_pos)
 
     robot = Articulation(so101_cfg("/World/Robot", pos=tuple(v(scene["robot"]["base_pos"])), rot=ROBOT_ROT_WXYZ))
 
@@ -118,7 +154,7 @@ def build_scene(scene: dict) -> SceneHandles:
     _box("/World/Axes/y", (t, L, t), (o[0], o[1] + L / 2, t / 2), (0.1, 0.8, 0.1), collide=False)
     _box("/World/Axes/z", (t, t, L), (o[0], o[1], L / 2), (0.1, 0.2, 0.9), collide=False)
 
-    return SceneHandles(robot, block, init_pos, init_rot, trays)
+    return SceneHandles(robot, blocks, prims, inits, init_rot, display, trays)
 
 
 def block_in_tray(pos, tray: dict, edge: float) -> bool:

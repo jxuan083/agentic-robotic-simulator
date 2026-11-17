@@ -110,3 +110,30 @@ def test_raw_bad_lines_get_error_responses(server):
 def test_localhost_only():
     with pytest.raises(ValueError):
         SimServer(FakeSim(), host="0.0.0.0", port=0)
+
+
+def test_numpy_results_are_encoded_and_bad_results_reported():
+    import numpy as np
+
+    class Sim:
+        def cmd_get_state(self):
+            return {"inside": np.bool_(True), "pos": np.array([0.1, 0.2]), "x": np.float32(1.5)}
+
+        def cmd_status(self):
+            return {"bad": object()}
+
+    srv = SimServer(Sim(), port=0, backend="fake", log=lambda *a: None)
+    stop = threading.Event()
+    t = threading.Thread(target=lambda: [srv.poll(0.01) for _ in iter(stop.is_set, True)])
+    t.start()
+    try:
+        with SimClient(*srv.address, timeout=2) as c:
+            assert c.call("get_state") == {"inside": True, "pos": [0.1, 0.2], "x": 1.5}
+            with pytest.raises(RemoteError) as ei:
+                c.call("status")
+            assert ei.value.code == P.FAILED
+            assert c.call("get_state")["inside"] is True  # still serving
+    finally:
+        stop.set()
+        t.join(2)
+        srv.close()

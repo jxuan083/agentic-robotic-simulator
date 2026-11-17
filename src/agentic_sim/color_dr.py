@@ -54,16 +54,24 @@ class ColorSampler:
         self._rng = np.random.default_rng(self.seed)
         self.session = -1
 
-    def next(self) -> dict:
-        """Colours for the next session. Both draws always happen (fixed order), so turning one target off does not
-        shift the other's sequence."""
+    def next(self, n_blocks: int = 1) -> dict:
+        """Colours for the next session. The first block and the arm shell are always drawn first, in that order, so
+        turning one target off, or adding blocks, does not shift their sequence; blocks 2..n are drawn after them
+        (independent draws: two blocks may share a colour, as in the real batch)."""
         self.session += 1
         n = len(self.palette.colors)
         b = self.palette.colors[int(self._rng.integers(n))]
         a = self.palette.colors[int(self._rng.integers(n))]
+        extra = [self.palette.colors[int(self._rng.integers(n))] for _ in range(max(0, int(n_blocks) - 1))]
         rec = {"session": self.session, "seed": self.seed, "palette_version": self.palette.version}
         if self.block:
-            rec["block"] = {"color_id": b.id, "name": b.name, "rgb": list(b.rgb)}
+            rec["block"] = _entry(b)
+            if extra:
+                rec["extra_blocks"] = [_entry(c) for c in extra]
         if self.arm_shell:
-            rec["arm_shell"] = {"color_id": a.id, "name": a.name, "rgb": list(a.rgb)}
+            rec["arm_shell"] = _entry(a)
         return rec
+
+
+def _entry(c: PaletteColor) -> dict:
+    return {"color_id": c.id, "name": c.name, "rgb": list(c.rgb)}

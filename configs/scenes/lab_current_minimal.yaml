@@ -40,6 +40,17 @@ block:
   init_xy: {value: [0.170, 0.120], source: provisional, note: inside the pink tray, within reach}
   init_yaw_deg: {value: 0.0, source: provisional}
   color: [0.85, 0.15, 0.15]
+  # Several blocks (panel / --blocks, 1-8): block i starts at layout_xy[i] (block 0 = init_xy). A 4 x 2 grid inside
+  # the pink tray, 6 cm apart in x and 7.5 cm in y, so the open gripper (about 5 cm) fits between neighbours.
+  count: 1
+  max_count: 8
+  layout_xy:
+    value: [[0.170, 0.120], [0.230, 0.120], [0.110, 0.120], [0.290, 0.120],
+            [0.170, 0.195], [0.230, 0.195], [0.110, 0.195], [0.290, 0.195]]
+    source: provisional
+    note: chosen for the provisional tray; not a measured lab layout
+  # baseline colours when colour DR is off: block 0 keeps `color`, blocks 1..7 take palette colours 1..7
+  extra_palette: configs/palettes/block_colors.yaml
 
 camera:
   # viewer camera only (no sensor camera in this issue)

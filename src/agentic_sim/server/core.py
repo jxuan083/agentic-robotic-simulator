@@ -87,7 +87,11 @@ class SimServer:
             return P.error(req.id, P.FAILED, f"{type(e).__name__}: {e}")
         if req.cmd == "shutdown":
             self.stop_requested = True
-        return P.ok(req.id, result)
+        try:
+            return P.ok(req.id, result)
+        except (TypeError, ValueError) as e:  # result not JSON-encodable: report it, keep serving
+            self._log(f"[server] {req.cmd}: result not encodable: {e}")
+            return P.error(req.id, P.FAILED, f"result not JSON-encodable: {e}")
 
     def _send(self, conn, data: bytes):
         try:

@@ -50,6 +50,7 @@ class TeleopParams:
     joint_rate_limit: float
     yaw_offset_limit: float
     dt_max: float
+    max_tilt_deg: float = 4.0
 
     @classmethod
     def from_cfg(cls, c: dict) -> "TeleopParams":
@@ -71,6 +72,7 @@ class TeleopParams:
             joint_rate_limit=float(c["ik"]["joint_rate_limit"]),
             yaw_offset_limit=float(c["ik"]["yaw_offset_limit"]),
             dt_max=float(c["dt_max"]),
+            max_tilt_deg=float(c["ik"].get("max_tilt_deg", 4.0)),
         )
 
 
@@ -146,7 +148,7 @@ class EETargetController:
         cpos = np.clip(pos, self.p.ws_lo, self.p.ws_hi)
         clamped = bool(np.any(np.abs(cpos - pos) > 1e-9))
         yaw_offset = float(np.clip(yaw_offset, -self.p.yaw_offset_limit, self.p.yaw_offset_limit))
-        q, ok, info = self.chain.solve_ik(cpos, self.yaw_for(cpos, yaw_offset), s.q_goal)
+        q, ok, info = self.chain.solve_ik_tilt(cpos, self.yaw_for(cpos, yaw_offset), s.q_goal, self.p.max_tilt_deg)
         if ok:
             dq = np.abs(q - s.q_goal)
             j = int(np.argmax(dq))
