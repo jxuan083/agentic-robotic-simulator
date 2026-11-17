@@ -271,7 +271,7 @@ ISAAC_ARGS='--color_dr --color_dr_seed 7' tools/run_acceptance.sh color_dr   # D
 
 錄影（只錄應用程式視窗）：`mouse_pick_place.mp4`（專注模式）、`viewport_drag.mp4`（到縮小視窗那一步為止）、`focus_mode.mp4`、`dr_a/color_dr.mp4`，都在 `outputs/acceptance/` 下。
 
-**體感尚未確認**：上面都是注入事件的自動驗收，需要真人實際操作確認手感。
+**真人操作**：2026-11-17 由使用者實際操作，手感可接受，參數維持預設（`fine_drag_scale` 0.25、滾輪 5 mm／1 mm）。上面的數據仍來自注入事件的自動驗收。
 
 ### 驗收結果（2026-11-16：第一版）
 
@@ -296,7 +296,7 @@ ISAAC_ARGS='--color_dr --color_dr_seed 7' tools/run_acceptance.sh color_dr   # D
 | robustness | 0.050 rad（等於 3 rad/s 限速） | 2.13 rad/s | 73–81（刻意超出範圍） | 29–54 |
 
 驗收範圍的限制：
-- 所有結果來自注入事件的腳本，不是真人操作。
+- 本節數據來自注入事件的腳本；真人操作確認見上方第二版結果。
 - 失焦是模擬的。
 - 場景數值都是 provisional。
 
@@ -335,7 +335,7 @@ vsync 和 60 Hz 限速會讓每幀固定等到約 17 ms。關掉後渲染降到�
 3. **失焦**：驗收腳本裡的失焦是模擬的。效能測試時真實失焦也發生過，所有輸入都被丟棄，符合設計。
    - 自動驗收必須讓 Isaac 視窗保持焦點，執行時不要操作桌面。
    - CSV 的 `os_focus` 欄記錄真實焦點，`run_acceptance.sh` 偵測到失焦會印 WARNING。
-4. **尚未由真人操作確認體感**：目前結果都來自注入事件的腳本，只證明行為正確，不代表手感好。主畫面拖曳、細調倍率與滾輪步距需要實際操作後再調整。
+4. **手感參數**：2026-11-17 使用者實際操作後，手感可接受。主畫面拖曳的細調倍率與滾輪步距仍可在 `configs/teleop.yaml` 調整。
 5. **重力下垂**：Workshop 的關節剛性偏低（Pitch stiffness 30），抬高時 EE 比目標低約 4–7 mm，停止操作後的跟隨誤差約 3–5 mm。抓放不受影響，實機對照時要注意。
 6. **模擬慢於真實時間**：見[效能](#效能)。
 7. **`SimulationApp.close()` 可能卡住**（Isaac Sim 5.1）：程式在輸出都寫完後直接以 `os._exit(0)` 結束。

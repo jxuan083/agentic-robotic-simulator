@@ -36,7 +36,7 @@ flowchart LR
 | 實機遙操作、相機、校正、影像／狀態記錄 | 既有實機工作區可運作（雙臂配置），待移植與單臂化 |
 | 實機 DAgger 接管（控制權切換、清空政策佇列、來源標記） | 既有程式可沿用；修正資料納入再訓練尚未串成流程 |
 | SO-101 leader 讀取（JSONL 狀態格式、錄製與重播工具） | 既有雙臂版，待補單臂選擇與本機輸入 adapter |
-| Isaac Sim 場景、keyboard／mouse EE 操作 | 第一份 issue（[#1](https://github.com/jxuan083/agentic-robotic-simulator/issues/1)）：已實作，含主畫面滑鼠操作、專注模式與顏色 DR（預設關閉）。注入事件的驗收腳本通過，待真人操作確認體感。場景數值為 provisional（[docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md)） |
+| Isaac Sim 場景、keyboard／mouse EE 操作 | 第一份 issue（[#1](https://github.com/jxuan083/agentic-robotic-simulator/issues/1)）：已實作，含主畫面滑鼠操作、專注模式與顏色 DR（預設關閉）。注入事件的驗收腳本通過，使用者實際操作確認手感可接受。場景數值為 provisional（[docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md)） |
 | 共用介面（RobotProfile、SceneSpec、TaskSpec 等） | 已定義文件，程式預計實作 |
 | ACT 訓練與推論 adapter | 預計實作（既有工作區有 ACT 訓練設定，尚無 ACT checkpoint） |
 | Agent、任務執行器、需求帳本 | 預計實作 |
