@@ -1,0 +1,32 @@
+# Focus (operation) layout: M hides the editor windows and docks the compact panel next to the viewport; the
+# handle, buttons and keyboard keep working; M again restores the previous layout.
+- {wait: 3.0}
+- {mark: before}
+- {tap: M}
+- {wait: 1.0}
+- {check: "focus_mode and len(editors_visible) == 0", label: "focus: editor windows hidden"}
+- {check: "len(selection) == 0", label: "focus: nothing selected in the scene"}
+- {vdrag_to: [0.20, 0.04], tol: 0.002, timeout: 8}
+- {check: "m['drag']['press_jump'] < 1e-6 and abs(target[0] - 0.20) < 0.003 and abs(target[1] - 0.04) < 0.003 and m['drag']['max_step'] < 0.015", label: "focus: handle drag works in the enlarged viewport"}
+- {click: close}
+- {wait: 1.0}
+- {click: yaw_minus}
+- {wait: 0.8}
+- {check: "gripper < -0.1 and yaw_offset < -0.2", label: "focus: gripper and yaw buttons work"}
+- {click: pause}
+- {wait: 0.3}
+- {check: "paused", label: "focus: pause button works"}
+- {click: pause}
+- {wait: 0.3}   # keys pressed while still paused are dropped by design
+- {hold: [S], until: "target[0] <= 0.18", timeout: 3}
+- {check: "target[0] <= 0.181", label: "focus: keyboard works"}
+- {click: reset}
+- {wait: 1.0}
+- {check: "abs(target[0] - home[0]) < 0.003 and focus_mode", label: "focus: reset works and keeps the layout"}
+- {mark: before_exit}
+- {tap: M}
+- {wait: 1.0}
+- {check: "max(abs(cam[0] - m['before_exit']['cam'][0]), abs(cam[1] - m['before_exit']['cam'][1]), abs(cam[2] - m['before_exit']['cam'][2])) < 1e-6", label: "focus off: camera unchanged"}
+- {check: "not focus_mode and sorted(editors_visible) == sorted(m['before']['editors_visible'])", label: "focus off: previous layout restored"}
+- {check: "front_tabs == m['before']['front_tabs']", label: "focus off: the same tabs are in front as before"}
+- {wait: 1.0}

@@ -1,0 +1,70 @@
+# 狀態、可沿用資產與待確認事項
+
+更新：2026-11-17。
+
+## 已完成
+
+- 本 repo：README 與 docs 架構文件。
+- 本 repo：Isaac Sim 最小桌面場景與 keyboard／mouse EE 操作（issue #1），以注入事件的驗收腳本完成抓放、不可達、失焦、暫停、reset 驗收。2026-11-17 加入主畫面滑鼠操作、專注模式與顏色 DR（預設關閉）；使用者實際操作確認手感可接受（2026-11-17）。見 [isaac-ee-teleop.md](isaac-ee-teleop.md)。
+- 既有實機工作區（尚未移入本 repo）：雙臂 SO-101 實機遙操作、相機串流、馬達校正、影像／狀態記錄、DAgger 接管與資料保存程式可運作。
+
+## 可沿用與待補介面
+
+| 既有資產 | 沿用方式 | 待補 |
+|---|---|---|
+| 馬達校正與 LeRobot 校正格式 | 實機端繼續使用，`RobotProfile` 以 ID 引用 | 單臂選擇；校正原始檔留在實機執行端 |
+| 相機串流設定（top + 腕部，640×480／30 FPS，目前為 RGB） | 實機 backend 的相機設定來源；位置轉換採用 RealSense 深度 | 接入 RealSense 深度串流、RGB-depth 對齊、相機內外參校正（目前只有視覺姿態對齊工具） |
+| 影像／狀態記錄（LeRobot dataset） | 作為 episode 格式基礎 | 追溯欄位（環境來源、版本、結果）；sim 資料命名空間 |
+| DAgger 控制權切換、清空動作佇列、人工／政策來源標記 | 實機與模擬 DAgger 的行為依據 | 單臂化；接到命令契約；修正資料 → 檢查 → 再訓練 → 比較的串接 |
+| DAgger 加權資料載入器 | 再訓練時沿用加權概念 | 對應到 ACT 訓練流程 |
+| WebSocket 推論服務／執行端分離 | 推論架構參考 | 接到 policy adapter |
+| Leader 讀取與 JSONL 狀態格式（`validate`／`emit-example`／`replay`） | 同機 leader 輸入的起點；JSONL 用於錄製與重播 | 單臂選擇、本機輸入 adapter、關節與夾爪映射 |
+| ACT／Diffusion Policy 訓練設定 | ACT 主線起點 | 單臂積木資料；目前無 ACT checkpoint |
+
+既有實機工作區的資料集與 π0.5 checkpoint 屬雙臂衣物任務，不直接用於單臂積木任務。ACT 需要針對本案單臂積木任務蒐集資料並訓練，但沿用既有 LeRobot ACT 訓練設定，不從零重寫。
+
+## 預計實作
+
+第 1 項是第一份 issue，已定案。第 2 項以後的拆分與先後，在後續 issue 討論時決定。
+
+1. **Isaac Sim 最小桌面場景與 keyboard／mouse EE 操作**（第一份 issue，[#1](https://github.com/jxuan083/agentic-robotic-simulator/issues/1)）。單支 SO-101、桌面、儲存盤、放置盤與一顆積木。以 keyboard 或 mouse 控制夾爪中心，完成一次手動抓放。只建立這個流程需要的薄介面，不先建立完整的 `mock` 框架。
+2. 模擬端 episode 記錄；共用型別與設定載入依需要擴充。
+3. 資料檢查、分割與 manifest；`mock` backend 依測試需要建立。
+4. ACT 訓練與 policy adapter；模擬端推論與評估。
+5. Leader 接入同機模擬（單臂、本機輸入 adapter）。
+6. 實機 backend：移植既有實機程式到命令契約與 episode 格式。
+7. DAgger 完整閉環（sim 與 real）。
+8. 感知、任務執行器、需求帳本、agent。
+9. 任務隨機化、`competition_draft`、controller。
+
+模擬端下一步（待實驗室確認環境與相機資訊後討論）：在模擬場景加入相機視角、依實驗室實際佈置擺放場景、單臂／雙臂配置。
+
+## 待確認
+
+| 項目 | 說明 |
+|---|---|
+| 軟體版本 | NVIDIA SO-101 Workshop 文件列 Isaac Sim 5.1.0／Isaac Lab 2.3.0／LeRobot 0.4.3；SimReady 文章採另一版本；既有實機工作區的不同環境分別使用 LeRobot 0.4.3 與 0.4.4。先維持各角色環境分開，選定共用資料格式與介面後再處理相容性。模擬端已實測鎖定 `nvcr.io/nvidia/isaac-lab:2.3.2`（Isaac Sim 5.1.0、`isaaclab` 0.54.2），見 [isaac-ee-teleop.md](isaac-ee-teleop.md#測試環境與版本) |
+| 單臂選用 | 使用既有雙臂中的哪一支 follower／leader，或另配單臂 |
+| RealSense 規格 | 已確定採用 RealSense；待記錄型號、深度串流設定與 RGB-depth 對齊方式 |
+| 相機配置 | Global 相機位置與腕部相機；內外參校正方式 |
+| EE 可行姿態與範圍 | 已定案：基座座標、兩指間抓取中心、向下抓取方向。模型驗證後的偏移、工作區與可達範圍已記錄於 [isaac-ee-teleop.md](isaac-ee-teleop.md#座標系ee-與限制)（provisional，待實機對照） |
+| 比賽場地 | 桌面高度與擺法 |
+| 托盤尺寸 | 到貨後量測內底、壁厚、盤緣高度、圓角 |
+| Controller | 型號與映射 |
+| Control Flow | 預留擴充，不是 ACT 基線的必要條件；接入時再取得對應程式與權重 |
+| Agent 模型服務 | 使用的 LLM 與部署方式 |
+| Leader adapter 通訊方式 | 同程序直接讀取或本機程序間通訊，於實作議題決定 |
+| 本機模擬效能 | 接 leader 的電腦執行選定 Isaac Sim 版本的相容性與效能待實測；有問題先回報討論，不改回跨機方案。目前模擬端實測約 40 fps（CPU PhysX），模擬約為真實時間的 0.67 倍，見 [isaac-ee-teleop.md](isaac-ee-teleop.md#效能) |
+
+## 參考來源
+
+| 來源 | 用途 | 查閱快照（2026-11-16） |
+|---|---|---|
+| [NVIDIA Sim-to-Real SO-101 Workshop](https://github.com/isaac-sim/Sim-to-Real-SO-101-Workshop)／[教學](https://docs.nvidia.com/learning/physical-ai/sim-to-real-so-101/latest/index.html) | SO-101 資產、場景、LeRobot 接合；Workshop 使用 Isaac Lab 管理環境，不代表需訓練 RL | `ce807d9` |
+| [NVIDIA SimReady 資產流程](https://developer.nvidia.com/blog/5-steps-to-create-simready-assets-for-robotics-with-frontier-ai-models/) | 資產尺度、外觀、物理與動態測試 | — |
+| [Seeed SO-100M wiki](https://wiki.seeedstudio.com/lerobot_so100m_new/)、[LeRobot ACT](https://huggingface.co/docs/lerobot/act) | 單臂採集與 ACT 操作 | — |
+| [LeHome solution](https://github.com/IliaLarchenko/lehome_solution) | 既有實機工作區的上游；沿用實機與 DAgger 經驗，不沿用其雙臂 checkpoint | `ca73828` |
+| [EBiM benchmark](https://github.com/EBiM-Benchmark/benchmark) | 場景與任務組織 | — |
+| [EBiM task2 submission](https://github.com/sevleete/ebim-task2-offline-submission) | 推論服務與執行端分離；不沿用其 FR3 動作參數 | `c7d3cd7` |
+
+接手時以各 repo 當下狀態為準，快照僅供追溯。

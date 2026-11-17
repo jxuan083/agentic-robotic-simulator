@@ -1,0 +1,17 @@
+# Block colour palette (eight colours, eight blocks each in the real batch).
+# Names come from photos and measurement notes of the real blocks. There is NO measured colour code or RGB:
+# the rgb values below are provisional sRGB design values for simulation only, not calibrated to the real material.
+# They are converted to linear before being written to renderer materials (the log records both).
+# color_id is stable: later RGB adjustments must keep the id and bump `version`.
+version: block_colors_v1-provisional
+source: provisional
+note: names from photos / measurement notes; rgb chosen by eye for simulation, not measured
+colors:
+  - {id: 0, name: red,         rgb: [0.80, 0.08, 0.08]}
+  - {id: 1, name: orange,      rgb: [0.95, 0.42, 0.05]}
+  - {id: 2, name: yellow,      rgb: [0.95, 0.82, 0.08]}
+  - {id: 3, name: light_green, rgb: [0.62, 0.85, 0.18]}   # yellow-green
+  - {id: 4, name: dark_green,  rgb: [0.05, 0.40, 0.14]}
+  - {id: 5, name: blue,        rgb: [0.08, 0.24, 0.80]}
+  - {id: 6, name: cyan,        rgb: [0.10, 0.72, 0.70]}   # blue-green
+  - {id: 7, name: purple,      rgb: [0.48, 0.18, 0.68]}

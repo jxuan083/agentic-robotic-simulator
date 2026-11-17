@@ -1,0 +1,19 @@
+# Colour DR enabled (run with --color_dr --color_dr_seed N): colours drawn at start-up and at every reset (R key),
+# written to the materials, unchanged within a session.
+- {wait: 2.0}
+- {check: "dr is not None and dr['session'] == 0 and dr_records == 1", label: "start-up: one draw (session 0)"}
+- {check: "max(abs(a - b) for a, b in zip(block_mat_rgb, dr['block']['linear'])) < 1e-5", label: "start-up: block material = drawn colour"}
+- {check: "max(abs(a - b) for a, b in zip(shell_mat_rgb, dr['arm_shell']['linear'])) < 1e-5", label: "start-up: arm shell material = drawn colour"}
+- {mark: s0}
+- {hold: [W], until: "target[0] >= 0.18", timeout: 3}
+- {wait: 1.0}
+- {check: "block_mat_rgb == m['s0']['block_mat_rgb'] and shell_mat_rgb == m['s0']['shell_mat_rgb'] and dr_records == 1", label: "colours unchanged during operation"}
+- {tap: R}
+- {wait: 2.5}
+- {check: "dr['session'] == 1 and dr_records == 2 and max(abs(a - b) for a, b in zip(block_mat_rgb, dr['block']['linear'])) < 1e-5 and max(abs(a - b) for a, b in zip(shell_mat_rgb, dr['arm_shell']['linear'])) < 1e-5", label: "reset 1: new draw applied"}
+- {tap: R}
+- {wait: 2.5}
+- {tap: R}
+- {wait: 2.5}
+- {check: "dr['session'] == 3 and dr_records == 4", label: "reset 2-3: one draw per reset"}
+- {wait: 0.5}
