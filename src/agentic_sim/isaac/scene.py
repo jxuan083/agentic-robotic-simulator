@@ -56,7 +56,7 @@ def block_prim(i: int) -> str:
     return "/World/Block" if i == 0 else f"/World/Block_{i}"
 
 
-def build_scene(scene: dict, n_blocks: int | None = None) -> SceneHandles:
+def build_scene(scene: dict, n_blocks: int | None = None, colors: list | None = None) -> SceneHandles:
     tb = table_box(scene)
     tsz = tb["size"][2]
     sim_utils.GroundPlaneCfg().func("/World/ground", sim_utils.GroundPlaneCfg(), translation=(0.0, 0.0, -tsz))
@@ -66,7 +66,7 @@ def build_scene(scene: dict, n_blocks: int | None = None) -> SceneHandles:
     for name in TRAYS:
         trays[name] = _tray(f"/World/Trays/{name}", scene["trays"][name], v(scene["trays"]["friction"]))
 
-    lay = block_layout(scene, n_blocks)
+    lay = block_layout(scene, n_blocks, colors)
     e, n, colors, display, init_rot = lay.edge, len(lay.init_pos), lay.linear_rgb, lay.display_rgb, lay.init_rot
     blocks, prims, inits = [], [], []
     for i in range(n):

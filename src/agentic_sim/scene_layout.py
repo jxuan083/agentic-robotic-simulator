@@ -3,7 +3,7 @@
 Every backend builds the same table, trays and blocks from these numbers, so the scene is defined once:
   table_box(scene)          static table box (size, centre), top face at z = 0
   tray_parts(spec)          five boxes per open-top tray (floor + four walls) and the tray's interior
-  block_layout(scene, n)    initial positions and colours of n blocks
+  block_layout(scene, n)    initial positions and colours of n blocks (or named colours, one per block)
   block_in_tray(pos, tray)  block resting inside a tray (acceptance checks, panel counts)
 """
 
@@ -75,11 +75,16 @@ class BlockLayout:
     linear_rgb: list        # linear colour per block (renderer materials that expect linear values)
 
 
-def block_layout(scene: dict, n_blocks: int | None = None) -> BlockLayout:
-    """Block 0 at block.init_xy with the scene colour; blocks 1..n-1 at block.layout_xy[i] with palette colours."""
+def block_layout(scene: dict, n_blocks: int | None = None, colors: list | None = None) -> BlockLayout:
+    """Block 0 at block.init_xy with the scene colour; blocks 1..n-1 at block.layout_xy[i] with palette colours.
+
+    colors: palette colour names, one per block (task scenes, e.g. [red, red, blue]); sets the block count and
+    replaces the default colours. Positions are the same layout slots."""
     bl = scene["block"]
     lo, hi = block_count_range(scene)
     n = int(bl.get("count", 1) if n_blocks is None else n_blocks)
+    if colors:
+        n = len(colors)
     if not lo <= n <= hi:
         raise ValueError(f"block count {n} outside {lo}..{hi}")
     e = v(bl["edge"])
@@ -88,7 +93,15 @@ def block_layout(scene: dict, n_blocks: int | None = None) -> BlockLayout:
     if len(layout) < n:
         raise ValueError(f"scene block.layout_xy has {len(layout)} positions, {n} blocks requested")
     linear, display = [tuple(bl["color"])], [tuple(bl["color"])]
-    if n > 1:
+    if colors:
+        from agentic_sim.color_dr import srgb_to_linear
+        by_name = palette_by_name(bl["extra_palette"])
+        unknown = [c for c in colors if c not in by_name]
+        if unknown:
+            raise ValueError(f"unknown block colour(s) {unknown}; palette has {sorted(by_name)}")
+        display = [tuple(by_name[c]) for c in colors]
+        linear = [tuple(srgb_to_linear(rgb)) for rgb in display]
+    elif n > 1:
         from agentic_sim.color_dr import Palette, srgb_to_linear
         pal = Palette.load(bl["extra_palette"])
         for i in range(1, n):
@@ -98,6 +111,12 @@ def block_layout(scene: dict, n_blocks: int | None = None) -> BlockLayout:
     inits = [(x, y, floor_top + e / 2 + 0.0005) for x, y in layout[:n]]
     return BlockLayout(e, v(bl["mass"]), tuple(v(bl["friction"])), inits, yaw_quat(v(bl["init_yaw_deg"])),
                        display, linear)
+
+
+def palette_by_name(path: str) -> dict:
+    """Palette colour name -> display rgb."""
+    from agentic_sim.color_dr import Palette
+    return {c.name: tuple(c.rgb) for c in Palette.load(path).colors}
 
 
 def block_in_tray(pos, tray: dict, edge: float) -> bool:

@@ -29,6 +29,11 @@ COMMANDS = {
     "get_state": {},
     "run_acceptance": {"scenario": (str, True)},
     "shutdown": {},
+    # task executor (issue #5): orders, answers, state; the executor takes the arm on the first order
+    "task_order": {"counts": (dict, True), "mode": (str, False)},
+    "task_answer": {"id": (int, True), "choice": (str, True), "color": (str, False), "xy": (list, False)},
+    "task_state": {},
+    "task_stop": {},
 }
 
 # error codes

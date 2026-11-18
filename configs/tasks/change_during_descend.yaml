@@ -1,0 +1,19 @@
+# Issue #5 acceptance 2: the order changes while the gripper descends onto red 2 (open, not touching yet).
+# The arm goes straight back up; red 2 is not lifted (moved < 5 mm); then the 2 blue are delivered.
+name: change_during_descend
+blocks: [red, red, red, blue, blue, yellow]
+order: {red: 3}
+timeout_s: 150
+events:
+  - when: {event: phase, skill: pick, color: red, nth: 2, phase: descend}
+    after_s: 0.3
+    order: {total: {red: 1, blue: 2}}
+checks:
+  - {final_placement: {red: 1, blue: 2}}
+  - {ledger: {target: {red: 1, blue: 2}, delivered: {red: 1, blue: 2}}}
+  - {not_lifted: {block: 1, mm: 5.0}}
+  - {max_displacement: {blocks: [2], mm: 2.0}}
+  - stop_latency
+  - no_drop
+  - no_stale_commands
+  - skills_ok

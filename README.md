@@ -40,7 +40,8 @@ flowchart LR
 | 實驗選單、常駐模擬伺服器、MuJoCo backend | [#3](https://github.com/jxuan083/agentic-robotic-simulator/issues/3) 已完成（P1–P4，PR [#4](https://github.com/jxuan083/agentic-robotic-simulator/pull/4) 合併）：實驗設定檔、控制協定、選單、常駐 Isaac 伺服器與 MuJoCo backend（和 Isaac 一致的鍵盤／滑鼠操作、操作面板與俯視圖、常駐伺服器、FK 對齊 < 0.01 mm）與跨引擎比較（同一條 EE 軌跡在兩個引擎：都完成抓放；差異主要來自關節增益）已完成；增益與控制器平滑度等實機量測後再調（[docs/sim-server.md](docs/sim-server.md)、[docs/mujoco-backend.md](docs/mujoco-backend.md)、[docs/cross-engine-comparison.md](docs/cross-engine-comparison.md)） |
 | 共用介面（RobotProfile、SceneSpec、TaskSpec 等） | 已定義文件，程式預計實作 |
 | ACT 訓練與推論 adapter | 預計實作（既有工作區有 ACT 訓練設定，尚無 ACT checkpoint） |
-| Agent、任務執行器、需求帳本 | 預計實作 |
+| 任務執行器、需求帳本 | [#5](https://github.com/jxuan083/agentic-robotic-simulator/issues/5) 已完成（模擬）：需求帳本（revision、核對後才計入）、可取消的抓放技能、改單／持物詢問／多交取回／缺料詢問，Isaac 與 MuJoCo 都通過驗收。只用模擬真值、抓取為腳本化技能，不含 LLM（[docs/task-executor.md](docs/task-executor.md)） |
+| Agent（LLM、聊天介面） | 預計實作 |
 | 評估報表 | 預計實作；驗收數字為目標，尚無成果 |
 
 完整狀態、可沿用資產與待確認事項見 [docs/status.md](docs/status.md)。
@@ -65,6 +66,7 @@ flowchart LR
 | [docs/teleop-data-training.md](docs/teleop-data-training.md) | 遙操作、episode 資料、檢查與分割、ACT 訓練 |
 | [docs/inference-dagger-evaluation.md](docs/inference-dagger-evaluation.md) | 自主推論、DAgger 閉環、再訓練比較與評估 |
 | [docs/agent.md](docs/agent.md) | Agent、任務執行器、需求帳本與缺料流程 |
+| [docs/task-executor.md](docs/task-executor.md) | 需求帳本與任務執行器的實作、改單規則、驗收場景（#5） |
 | [docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md) | Isaac Sim 最小場景與 keyboard／mouse EE 操作：環境、啟動、操作、驗收、已知問題 |
 | [docs/sim-server.md](docs/sim-server.md) | 實驗設定檔、選單、主機端 uv 環境、模擬伺服器控制協定 |
 | [docs/status.md](docs/status.md) | 已完成／預計實作／待確認、可沿用資產與參考來源 |

@@ -1,0 +1,23 @@
+# Issue #5 acceptance 3a: the order changes while red 2 is carried. The arm stops and keeps the block, asks what to
+# do, does not move or let go until the answer; the answer "return" puts red 2 back where it came from.
+name: hold_return
+blocks: [red, red, red, blue, blue, yellow]
+order: {red: 3}
+timeout_s: 160
+events:
+  - when: {event: phase, skill: place, color: red, nth: 2, phase: transport}
+    after_s: 0.5
+    order: {total: {red: 1, blue: 2}}
+  - when: {event: question, kind: held_item}
+    after_s: 3.0
+    answer: {choice: return}
+checks:
+  - {question: {kind: held_item, color: red, block: 1}}
+  - {hold_still: {mm: 3.0}}
+  - {block_in: {block: 1, tray: storage, near_init_mm: 15}}
+  - {final_placement: {red: 1, blue: 2}}
+  - {ledger: {target: {red: 1, blue: 2}, delivered: {red: 1, blue: 2}}}
+  - stop_latency
+  - no_drop
+  - no_stale_commands
+  - skills_ok

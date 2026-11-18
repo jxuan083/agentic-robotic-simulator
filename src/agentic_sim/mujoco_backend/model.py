@@ -71,7 +71,8 @@ def _box(parent, name, size, pos, rgba, friction=None, quat=(1, 0, 0, 0), collid
     return g
 
 
-def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None = None) -> MjScene:
+def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None = None,
+          colors: list | None = None) -> MjScene:
     rc = robot_cfg or load(ROBOT_CONFIG)
     spec = mujoco.MjSpec.from_file(model_path(rc))
     phys = rc["physics"]
@@ -129,7 +130,7 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
     top.proj = mujoco.mjtProjection.mjPROJ_ORTHOGRAPHIC
     top.fovy = MAP_X[1] - MAP_X[0]
 
-    lay = block_layout(scene_cfg, n_blocks)
+    lay = block_layout(scene_cfg, n_blocks, colors)
     for i, (pos, rgb) in enumerate(zip(lay.init_pos, lay.display_rgb)):
         b = wb.add_body()
         b.name = f"block_{i}"

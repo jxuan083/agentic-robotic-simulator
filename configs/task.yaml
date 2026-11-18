@@ -1,0 +1,38 @@
+# Task executor parameters (issue #5): scripted pick / place skills driven through the shared EE controller.
+# Every value is provisional: chosen for the provisional scene in simulation, not measured on the real arm.
+source: provisional
+motion:
+  linear_speed: 0.12        # m/s of the EE target along a skill path
+  yaw_speed: 1.0            # rad/s of the operator yaw offset
+  safe_z: 0.09              # m; transport / hold height of the EE (held block bottom about 6 cm above the table)
+  grasp_dz: 0.008           # m; EE above the block centre when closing (finger pads around the upper half)
+  place_clearance: 0.006    # m; held block bottom above the tray floor when the gripper opens
+  fixed_finger_gap: 0.005   # m; grasp point shifted toward the fixed finger (see docs/isaac-ee-teleop.md)
+  settle_qd: 0.15           # rad/s; joint command at the IK solution and arm speed below this = arrived
+  move_timeout_s: 8.0       # one path segment
+  blocked_frames: 90        # frames in a row with every target step rejected -> the move fails
+gripper:
+  close_wait_s: 0.5         # after the jaw command reaches the closed end
+  open_wait_s: 0.3
+grasp_check:
+  lifted_dz: 0.03           # m; block centre risen this much after the lift = holding
+  max_block_ee: 0.035       # m; block centre within this of the EE while holding (otherwise: dropped)
+verify:
+  settle_s: 1.5             # wait up to this long for the placed block to come to rest
+  rest_speed: 0.01          # m/s
+  ee_clear: 0.03            # m; EE at least this far above the placed block (released, not touching)
+stop:
+  arm_stopped_qd: 0.1       # rad/s; arm counts as stopped (stop latency measurement)
+retry:
+  pick_attempts: 2          # per block, then the block is marked uncertain and skipped
+shortage:
+  recheck_s: 1.0            # "wait" answer: look at the storage tray again this often
+# Placement slots in the beige tray (mount frame, m). Spaced 7 cm so the open gripper fits between placed blocks
+# (needed to retrieve one). Inside the reach of the vertical gripper.
+placement_slots:
+  - [0.16, -0.09]
+  - [0.23, -0.09]
+  - [0.16, -0.16]
+  - [0.23, -0.16]
+  - [0.30, -0.09]
+  - [0.30, -0.16]

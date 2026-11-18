@@ -71,6 +71,9 @@ class SessionConfig:
     blocks: int | None = None          # number of blocks (default: the scene's block.count)
     script: str | None = None          # acceptance script (injected input events)
     trajectory: str | None = None      # scripted EE target sequence (cross-engine comparison); replaces all input
+    block_colors: list | None = None   # colour name per block (task scenes); sets the block count
+    task: str | None = None            # task scenario (configs/tasks/*.yaml): the executor drives the arm
+    task_log: str | None = None        # executor event log (JSONL)
     log: str | None = None             # per-frame CSV
     result: str | None = None          # result JSON (script runs)
     profile: bool = False
@@ -99,7 +102,9 @@ class TeleopSession:
             sim_utils.SimulationCfg(dt=PHYSICS_DT, render_interval=SUBSTEPS, device=cfg.device))
         cam = scene_cfg["camera"]
         sim.set_camera_view(cam["eye"], cam["target"])
-        h = self.h = build_scene(scene_cfg, cfg.blocks)
+        from agentic_sim.task.runner import scenario_colors
+        self.block_color_names = cfg.block_colors or scenario_colors(cfg.task)
+        h = self.h = build_scene(scene_cfg, cfg.blocks, colors=self.block_color_names)
         self.robot, self.block, self.blocks = h.robot, h.block, h.blocks
         self.rebuild_request: dict | None = None
 
@@ -151,6 +156,7 @@ class TeleopSession:
         if cfg.trajectory:
             from agentic_sim.teleop.trajectory import make_driver
             self.traj = make_driver(cfg.trajectory, self.ctrl)
+        self.task = None
         log(f"asset: Sim-to-Real-SO-101-Workshop@{WORKSHOP_COMMIT}; provisional scene fields: "
             f"{', '.join(provisional_fields(scene_cfg))}")
         log(f"EE offset in gripper link (provisional): {self.chain.ee_offset.tolist()}; "
@@ -190,6 +196,41 @@ class TeleopSession:
         self.prof_t = time.monotonic()
         self.frames = 0
         self.last_frame = {}
+        if cfg.task:
+            self.start_task()
+
+    # ---- task executor (issue #5) ----------------------------------------------------------------
+    def start_task(self):
+        """Hand the arm to the task executor (scenario from cfg.task, or orders from the server)."""
+        from agentic_sim.task.runner import TaskRunner, default_color_names
+        if self.task is not None:
+            self.task.close()
+        colors = self.block_color_names or default_color_names(self.scene_cfg, len(self.blocks))
+        self.task = TaskRunner(self.ctrl, self.scene_cfg, self.h.block_init_pos, colors, CONTROL_DT, self.log,
+                               scenario=self.cfg.task, event_log=self.cfg.task_log)
+        return self.task
+
+    def stop_task(self):
+        """Give the arm back to the operator (keyboard / mouse) where it is."""
+        if self.task is not None:
+            self.task.close()
+            self.task = None
+            self.ctrl.clear_gripper_goal()
+            self.log("task stopped: operator input active")
+
+    def task_obs(self):
+        from agentic_sim.task.runner import quat_yaw
+        from agentic_sim.task.skills import Obs
+        q = self.robot.data.joint_pos[0, self.arm_ids].cpu().numpy()
+        # arm speed from the measured joint positions frame to frame: PhysX reports a constant joint velocity of
+        # about 0.2 rad/s for an arm at rest while the jaw squeezes a block, so joint_vel cannot tell "stopped"
+        prev, self._task_q_prev = getattr(self, "_task_q_prev", None), q.copy()
+        qd = 0.0 if prev is None else float(np.max(np.abs(q - prev))) / CONTROL_DT
+        return Obs(t=self.t_sim, ee=self.ctrl.chain.ee_pose_mount(q)[:3, 3].copy(), qd_max=qd,
+                   jaw=float(self.robot.data.joint_pos[0, self.jaw_id]),
+                   blocks=[b.data.root_pos_w[0].cpu().numpy() for b in self.blocks],
+                   block_yaw=[quat_yaw(b.data.root_quat_w[0].cpu().numpy()) for b in self.blocks],
+                   block_speed=[float(b.data.root_lin_vel_w[0].norm()) for b in self.blocks])
 
     # ---- scene settings -----------------------------------------------------------------
     def settings(self) -> dict:
@@ -266,7 +307,8 @@ class TeleopSession:
 
     @property
     def script_done(self) -> bool:
-        return (self.script is not None and self.script.done) or (self.traj is not None and self.traj.done(self.t_sim))
+        return ((self.script is not None and self.script.done) or (self.traj is not None and self.traj.done(self.t_sim))
+                or (self.task is not None and self.task.done))
 
     # ---- one control frame --------------------------------------------------------------
     def step(self) -> bool:
@@ -289,6 +331,10 @@ class TeleopSession:
             self.do_reset()
             self.paused = False
             dt = 0.0
+            if self.task is not None:   # a reset ends the task; a scenario run starts again from its first order
+                self.stop_task()
+                if self.cfg.task:
+                    self.start_task()
         for a in actions:
             if a == "focus":  # layout only: does not touch the teleop state
                 self.focus_mode.toggle()
@@ -313,8 +359,9 @@ class TeleopSession:
             kb.clear()
             panel.cancel()
             handle.cancel()
-            ctrl.clear_yaw_goal()
-            ctrl.clear_gripper_goal()
+            if self.task is None:  # operator goals only: a running task keeps its own gripper / yaw goals
+                ctrl.clear_yaw_goal()
+                ctrl.clear_gripper_goal()
 
         input_lat_ms = None
         mouse_d = np.zeros(3)
@@ -331,6 +378,11 @@ class TeleopSession:
                 panel.cancel()
                 handle.cancel()
                 self.traj.apply(self.t_sim)
+            if self.task is not None:  # the executor is the only control source while a task runs
+                kb.clear()
+                panel.cancel()
+                handle.cancel()
+                self.task.step(self.task_obs())
             lin, yaw, grip = kb.directions()
             ctrl.step_velocity(lin, yaw, dt, "keyboard")
             ctrl.step_gripper(grip, dt, "keyboard")
@@ -386,6 +438,9 @@ class TeleopSession:
             if self.focus_at_frame < 0:
                 self.focus_mode.enter()
         mode = "focus lost" if not focused else ("keyboard" if s.source == "keyboard" else s.source)
+        if self.task is not None:
+            mode = "task executor"
+        panel.set_task(self.task.ex.panel_lines() if self.task is not None else None)
         panel.update(mode, self.paused, kb.shift, s.status, s.message, s.pos, s.yaw_offset, ee, all_pos, s.gripper,
                      self.block_colors, tilt_deg=tilt_deg, in_placement=n_placed)
         follow_mm = float(np.linalg.norm(s.pos - ee)) * 1000.0
@@ -483,6 +538,8 @@ class TeleopSession:
         if self.script is not None:
             out["script"] = {"step": self.script.i, "steps": len(self.script.steps), "done": self.script.done,
                              "passed": sum(x["ok"] for x in self.script.results), "checks": len(self.script.results)}
+        if self.task is not None:
+            out["task"] = self.task.ex.view()
         return out
 
     def finish(self) -> dict:
@@ -513,6 +570,16 @@ class TeleopSession:
             self.log(f"wrote {self.cfg.result}: trajectory {res['trajectory']}, block in placement "
                      f"{res['block_in_placement']}, rejected frames {res['rejected_frames']}")
             out["result"] = self.cfg.result
+        if self.task is not None and self.task.scenario is not None and self.cfg.result:
+            res = self.task.result(self.task_obs(), "isaac", {"stats": self.stats, "metrics": summary,
+                                                              "blocks": self.block_color_names})
+            os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
+            with open(self.cfg.result, "w") as f:
+                json.dump(res, f, indent=2, ensure_ascii=False)
+            self.log(f"wrote {self.cfg.result}: {res['passed']}/{res['checks_total']} checks passed")
+            out.update({"result": self.cfg.result, "passed": res["passed"], "checks": res["checks_total"]})
+        if self.task is not None:
+            self.task.close()
         if self.script is not None and self.cfg.result:
             os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
             passed = sum(r["ok"] for r in self.script.results)
@@ -559,5 +626,7 @@ class TeleopSession:
 def session_config_with(cfg: SessionConfig, settings: dict) -> SessionConfig:
     """A copy of cfg with the panel's scene settings (rebuild after a block-count change)."""
     from dataclasses import replace
-    return replace(cfg, blocks=int(settings["blocks"]), color_dr=bool(settings["color_dr"]),
+    n = int(settings["blocks"])
+    colors = cfg.block_colors if cfg.block_colors and len(cfg.block_colors) == n else None
+    return replace(cfg, blocks=n, block_colors=colors, color_dr=bool(settings["color_dr"]),
                    color_dr_seed=int(settings["color_dr_seed"]))

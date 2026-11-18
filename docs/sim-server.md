@@ -134,11 +134,15 @@ uv run tools/sim.py --server up --backend mujoco
 | `hello` | `client`、`protocol_version`（選填） | 每個連線的第一個請求，回傳協定版本與 backend |
 | `status` | | 目前實驗、選項（含面板改過的場景設定）、session、狀態 |
 | `list_experiments` | | 伺服器可載入的實驗 |
-| `load_experiment` | `name`、`options`（選填：`focus`、`color_dr`、`color_dr_seed`、`blocks`） | 載入或切換實驗 |
+| `load_experiment` | `name`、`options`（選填：`focus`、`color_dr`、`color_dr_seed`、`blocks`、`block_colors`） | 載入或切換實驗。`block_colors` 是每顆積木的顏色名稱，會決定積木數量 |
 | `reset`、`pause`、`resume` | | 與面板按鈕相同（`reset` 也會套用面板 SCENE 中尚未套用的設定） |
 | `get_state` | | EE、目標、關節、夾爪傾角、積木（`block` 是積木 0，`blocks` 是全部）、目前的場景設定 |
 | `run_acceptance` | `scenario` | 立即回應，進度從 `status` 查詢 |
 | `shutdown` | | 停止伺服器 |
+| `task_order` | `counts`（例如 `{"red": 1, "blue": 2}`）、`mode`（`total`／`add`，預設 `total`） | 下需求或改單；第一次下單時任務執行器接手手臂。見 [task-executor.md](task-executor.md) |
+| `task_answer` | `id`、`choice`，選填 `color`、`xy` | 回答執行器提出的問題 |
+| `task_state` | | 帳本、手上物件、目前技能與階段、待回答的問題、停止延遲紀錄 |
+| `task_stop` | | 停止任務，手臂交回鍵盤／滑鼠 |
 
 錯誤碼：
 

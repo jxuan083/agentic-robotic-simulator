@@ -182,6 +182,8 @@ def main(argv=None) -> int:
     ap.add_argument("--color-dr", action="store_true")
     ap.add_argument("--seed", type=int, default=None, help="colour DR seed")
     ap.add_argument("--blocks", type=int, default=1, choices=range(1, 9), metavar="1-8", help="number of blocks")
+    ap.add_argument("--block-colors", default=None, help="colour name per block, comma-separated (task scenes, e.g. "
+                    "red,red,blue); sets the block count")
     ap.add_argument("--no-video", action="store_true")
     ap.add_argument("--direct", action="store_true", help="run in its own process even if a server is running")
     ap.add_argument("--dry-run", action="store_true", help="print the direct command, do not run it")
@@ -197,8 +199,9 @@ def main(argv=None) -> int:
             if not (a.backend and a.experiment and a.mode):
                 ap.error("non-interactive use needs --backend, --experiment and --mode")
             backend, exp, mode, scenario = a.backend, load_experiment(a.experiment), a.mode, a.scenario
-            opts = RunOptions(focus=a.focus and backend == "isaac", color_dr=a.color_dr, color_dr_seed=a.seed, blocks=a.blocks,
-                              video=not a.no_video)
+            colors = a.block_colors.split(",") if a.block_colors else None
+            opts = RunOptions(focus=a.focus and backend == "isaac", color_dr=a.color_dr, color_dr_seed=a.seed,
+                              blocks=len(colors) if colors else a.blocks, block_colors=colors, video=not a.no_video)
             use_server = not (a.direct or a.dry_run) and backend in SERVER_SCRIPTS and probe(backend) is not None
         else:
             if not sys.stdin.isatty():

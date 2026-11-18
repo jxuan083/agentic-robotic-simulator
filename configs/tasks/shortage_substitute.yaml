@@ -1,0 +1,21 @@
+# Issue #5 acceptance 5: only one blue in stock. After red 1 the order becomes 1 red + 2 blue; the one blue is
+# delivered, then the executor asks (delivered, missing, what is left) and does not substitute on its own. The answer
+# "substitute yellow" changes the order to 1 red, 1 blue, 1 yellow.
+name: shortage_substitute
+blocks: [red, red, red, blue, yellow]
+order: {red: 3}
+timeout_s: 160
+events:
+  - when: {event: verified, color: red, delivered: 1}
+    order: {total: {red: 1, blue: 2}}
+  - when: {event: question, kind: shortage}
+    after_s: 2.0
+    answer: {choice: substitute, color: yellow}
+checks:
+  - {question: {kind: shortage, delivered: {red: 1, blue: 1}, missing: {blue: 1}, available: {red: 2, yellow: 1}}}
+  - {untouched_until_answer: {blocks: [4], mm: 2.0}}
+  - {final_placement: {red: 1, blue: 1, yellow: 1}}
+  - {ledger: {target: {red: 1, blue: 1, yellow: 1}, delivered: {red: 1, blue: 1, yellow: 1}}}
+  - no_drop
+  - no_stale_commands
+  - skills_ok

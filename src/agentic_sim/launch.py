@@ -27,6 +27,7 @@ class RunOptions:
     color_dr: bool = False
     color_dr_seed: int | None = None
     blocks: int = 1                 # number of blocks in the scene (1-8)
+    block_colors: list | None = None  # colour name per block (task scenes); sets the block count
     video: bool = True              # acceptance only: record the app window
 
     def merged(self, forced: dict) -> "RunOptions":
@@ -53,7 +54,9 @@ def _app_args(exp: Experiment, opts: RunOptions, backend: str = "isaac") -> list
         args += ["--color_dr_config", exp.color_dr]
     if opts.focus and backend == "isaac":
         args.append("--focus")
-    if int(opts.blocks) != 1:
+    if opts.block_colors:
+        args += ["--block_colors", ",".join(opts.block_colors)]
+    elif int(opts.blocks) != 1:
         args += ["--blocks", str(int(opts.blocks))]
     if opts.color_dr:
         if not exp.color_dr:

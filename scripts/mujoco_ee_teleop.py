@@ -3,6 +3,8 @@
     uv run scripts/mujoco_ee_teleop.py [--blocks 3] [--color_dr --color_dr_seed 7]
     uv run scripts/mujoco_ee_teleop.py --script configs/acceptance/keyboard_pick_place.yaml \
         --log out.csv --result out.json --exit_after_script
+    uv run scripts/mujoco_ee_teleop.py --task configs/tasks/hold_return.yaml --task_log out.jsonl \
+        --result out.json --exit_after_script         # task executor scenario (issue #5)
 
 Same scene YAML, teleop config, key map and EE controller as the Isaac version (docs/mujoco-backend.md).
 --headless runs without a window (scripts only; the keys still go through the same KeyState).
@@ -30,6 +32,10 @@ parser.add_argument("--log", default=None, help="CSV debug log path")
 parser.add_argument("--result", default=None, help="JSON summary path (script / trajectory runs)")
 parser.add_argument("--trajectory", default=None, help="scripted EE target sequence (configs/trajectories/*.yaml); "
                     "replaces keyboard / mouse input, ends the run with --exit_after_script")
+parser.add_argument("--task", default=None, help="task scenario (configs/tasks/*.yaml): the task executor drives the "
+                    "arm; ends the run with --exit_after_script")
+parser.add_argument("--task_log", default=None, help="executor event log (JSONL)")
+parser.add_argument("--block_colors", default=None, help="comma-separated colour names, one per block")
 parser.add_argument("--exit_after_script", action="store_true")
 parser.add_argument("--max_time", type=float, default=0.0, help="exit after N wall seconds (0 = run until closed)")
 parser.add_argument("--color_dr", action="store_true", help="enable colour domain randomization (default off)")
@@ -61,7 +67,8 @@ def main():
     session = MjSession(SessionConfig(
         scene=args.scene, teleop=args.teleop, color_dr_config=args.color_dr_config, color_dr=args.color_dr,
         color_dr_seed=args.color_dr_seed, color_dr_log=args.color_dr_log, blocks=args.blocks, script=args.script,
-        log=args.log, result=args.result, trajectory=args.trajectory), log, keys=keys, focused=focused,
+        log=args.log, result=args.result, trajectory=args.trajectory, task=args.task, task_log=args.task_log,
+        block_colors=args.block_colors.split(",") if args.block_colors else None), log, keys=keys, focused=focused,
         viewer=viewer)
     if viewer:
         viewer.attach(session, reset_camera=True)
