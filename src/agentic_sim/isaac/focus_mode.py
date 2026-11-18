@@ -22,6 +22,20 @@ class FocusMode:
         self._saved_panel = None
         self._pending_front = []
         self._pending_frames = 0
+        self._dock_in_frames = -1
+
+    def set_panel(self, panel_window):
+        """Point the layout at another panel window (persistent server: a new session brings a new panel).
+        While the layout is active the new panel is docked a few frames later (a brand-new window cannot be
+        docked before it has been laid out)."""
+        self._panel = panel_window
+        self._dock_in_frames = 10 if (panel_window is not None and self.active) else -1
+
+    def _dock_panel(self):
+        try:
+            self._panel.dock_in(ui.Workspace.get_window("Viewport"), ui.DockPosition.RIGHT, PANEL_RATIO)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"focus mode: could not dock the panel ({e}); it stays floating")
 
     @staticmethod
     def _front(w) -> bool:
@@ -51,7 +65,12 @@ class FocusMode:
         return out
 
     def update(self):
-        """Call once per frame (finishes the deferred part of leaving focus mode)."""
+        """Call once per frame (finishes the deferred parts: front tabs after leaving, docking a new panel)."""
+        if self._dock_in_frames >= 0:
+            self._dock_in_frames -= 1
+            if self._dock_in_frames < 0 and self._panel is not None and self.active:
+                self._dock_panel()
+                self._log("focus mode: new panel docked")
         if not self._pending_front:
             return
         self._pending_frames -= 1
@@ -90,10 +109,7 @@ class FocusMode:
             ui.Workspace.show_window(title, False)  # through the extension's own show / hide callback
         p = self._panel
         self._saved_panel = (p.position_x, p.position_y, p.width, p.height)
-        try:
-            p.dock_in(ui.Workspace.get_window("Viewport"), ui.DockPosition.RIGHT, PANEL_RATIO)
-        except Exception as e:  # noqa: BLE001
-            self._log(f"focus mode: could not dock the panel ({e}); it stays floating")
+        self._dock_panel()
         self.active = True
         self._log(f"focus mode: on (saved editor visibility {self._saved_visible})")
 
@@ -107,11 +123,13 @@ class FocusMode:
         self._pending_front = list(self._saved_front)
         self._pending_frames = 3
         p = self._panel
-        try:
-            p.undock()
-        except Exception as e:  # noqa: BLE001
-            self._log(f"focus mode: could not undock the panel ({e})")
-        if self._saved_panel is not None:
-            p.position_x, p.position_y, p.width, p.height = self._saved_panel
+        self._dock_in_frames = -1
+        if p is not None:  # None: the panel was already destroyed (session closed)
+            try:
+                p.undock()
+            except Exception as e:  # noqa: BLE001
+                self._log(f"focus mode: could not undock the panel ({e})")
+            if self._saved_panel is not None:
+                p.position_x, p.position_y, p.width, p.height = self._saved_panel
         self.active = False
         self._log(f"focus mode: off, after {self._describe()}")

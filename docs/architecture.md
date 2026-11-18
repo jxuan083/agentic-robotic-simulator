@@ -9,7 +9,7 @@ flowchart TD
     AG --> EX[任務執行器與需求帳本]
     EX --> SK[技能／Policy adapter]
     SK --> OWN
-    OWN --> BK[Backend：mock／isaac／real]
+    OWN --> BK[Backend：mock／isaac／mujoco／real]
     BK --> OB[影像與關節觀察]
     OB --> PE[感知與結果核對]
     PE --> EX
@@ -27,7 +27,7 @@ flowchart TD
 | 任務執行器 | 技能順序、控制權、取消、重試、結果回報；維護需求帳本 | 解讀自然語言 |
 | 技能／Policy adapter | 幾何技能（接近、搬運、放置）與學習政策（ACT 等）；封裝影像、狀態、正規化與動作段 | 決定任務順序 |
 | 控制權與輸入映射 | 決定當下由人或政策控制；把各種輸入轉成統一命令 | 任務邏輯 |
-| Backend | 把命令送到 mock／Isaac Sim／實機，回傳觀察 | 決策 |
+| Backend | 把命令送到 mock／Isaac Sim／MuJoCo／實機，回傳觀察 | 決策 |
 | 感知與結果核對 | RGB 辨色；深度與外參做位置轉換；核對動作結果，信心不足回報不確定 | 修改任務 |
 | 資料與訓練 | 記錄 episode、檢查、分割、訓練、產生 policy manifest | 線上控制 |
 
@@ -39,6 +39,7 @@ flowchart TD
 |---|---|---|
 | `mock` | 無物理，驗證任務流程、agent、資料格式 | 立即重置 |
 | `isaac` | Isaac Sim 場景，遙操作採集、政策推論與評估 | 程式重置場景與隨機種子 |
+| `mujoco` | MuJoCo 場景（同一份場景設定），在不能跑 Isaac 的電腦上做物理與流程驗證（[mujoco-backend.md](mujoco-backend.md)） | 程式重置場景與隨機種子 |
 | `real` | SO-101 實機 | 現場復位流程，不假裝提供與模擬相同的重置 |
 
 模擬真值只用於評分與除錯；正式 agent 執行使用感知結果，評估報表分開標示兩者。
@@ -48,7 +49,7 @@ flowchart TD
 | 模組 | 內容 |
 |---|---|
 | `core` | 共用資料型別、設定載入、命令契約、控制權 |
-| `backends` | `mock`、`isaac`、`real` |
+| `backends` | `mock`、`isaac`、`mujoco`、`real` |
 | `teleop` | keyboard／mouse EE、leader 本機輸入 adapter、controller |
 | `perception` | 辨色、位置轉換、結果核對 |
 | `policies` | ACT adapter 與其他政策 adapter |

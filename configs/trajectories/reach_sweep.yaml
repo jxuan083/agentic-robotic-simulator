@@ -1,0 +1,19 @@
+# Cross-engine comparison (issue #3 P4): no contact, gripper open. Sweeps the vertical-grasp region, the tilted far
+# reach, a high point and both sides, pausing at each keyframe so tracking (follow error, gravity sag) can be read
+# at rest and in motion.
+name: reach_sweep
+start: {pos: [0.150, 0.000, 0.090], yaw: 0.0, gripper: 0.52}
+segments:
+  - {t: 1.0, label: home}
+  - {t: 1.5, pos: [0.250, 0.000, 0.060], label: vertical}
+  - {t: 1.0, label: vertical}
+  - {t: 1.5, pos: [0.360, 0.000, 0.060], label: far_tilted}
+  - {t: 1.5, label: far_tilted}
+  - {t: 2.0, pos: [0.280, 0.000, 0.220], label: high}
+  - {t: 1.5, label: high}
+  - {t: 2.0, pos: [0.200, 0.200, 0.120], label: left}
+  - {t: 1.0, label: left}
+  - {t: 2.5, pos: [0.180, -0.250, 0.050], label: right_low}
+  - {t: 1.0, label: right_low}
+  - {t: 2.0, pos: [0.150, 0.000, 0.090], label: home}
+  - {t: 1.5, label: home}

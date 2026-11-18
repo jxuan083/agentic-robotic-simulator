@@ -1,0 +1,29 @@
+# Top view (panel, auxiliary): drag = move the target relatively (like the 3D handle), wheel = height. Only mouse
+# events on the top view; the 3D view is not touched. MuJoCo window (its top view is open by default).
+- {wait: 2.5}
+- {mark: start}
+- {note: "drag on the top view to (0.20, 0.08)"}
+- {drag_to: [0.20, 0.08], tol: 0.003, timeout: 8}
+- {wait: 0.8}
+- {check: "abs(target[0] - 0.20) < 0.003 and abs(target[1] - 0.08) < 0.003 and abs(target[2] - m['start']['target'][2]) < 1e-6", label: "drag: target reaches the dragged point at the same height"}
+- {check: "abs(ee[0] - target[0]) < 0.01 and abs(ee[1] - target[1]) < 0.01", label: "drag: the arm follows"}
+- {mark: before_wheel}
+- {note: "wheel on the top view: height only"}
+- {wheel: -1, until: "target[2] <= m['before_wheel']['target'][2] - 0.04", timeout: 6}
+- {check: "target[2] < m['before_wheel']['target'][2] - 0.035 and abs(target[0] - m['before_wheel']['target'][0]) < 1e-6 and abs(target[1] - m['before_wheel']['target'][1]) < 1e-6", label: "wheel: height changes, x / y stay"}
+- {note: "drag past the reach and keep holding, then drag back"}
+- {drag_hold: [0.45, 0.40], seconds: 2.0, timeout: 6}
+- {check: "status in ('joint_limit', 'ik_no_solution', 'joint_jump', 'workspace_limit') and stats['max_dq_cmd_per_frame'] < 0.06", label: "unreachable: target stops at the boundary, no joint-command jump"}
+- {mark: edge}
+# like robustness' mouse section: a short drag back inward must take effect at once (the blocked part of the push was
+# dropped, not accumulated). A fast long swipe back from the tilted far reach is partly rejected as joint jumps
+# (max_joint_step), and a straight line from the far edge to another far point can cross poses beyond the tilt
+# limit; the operator drags back toward the arm (here toward home) in moderate steps.
+- {drag_hold: [0.15, 0.0], seconds: 0.6, timeout: 3}
+- {wait: 0.5}
+- {check: "abs(target[0] - home[0]) + abs(target[1] - home[1]) < abs(m['edge']['target'][0] - home[0]) + abs(m['edge']['target'][1] - home[1]) - 0.01 and status == 'ok'", label: "drag back toward home: recovers immediately (no accumulated overshoot)"}
+- {check: "len(held) == 0 and stats['rejected_targets'] >= 1", label: "mouse only; the push past the reach was rejected and counted"}
+- {click: reset}
+- {wait: 1.5}
+- {check: "abs(target[0] - home[0]) < 0.003 and abs(target[1] - home[1]) < 0.003 and abs(target[2] - home[2]) < 0.003", label: "Reset button: target back home"}
+- {wait: 0.5}

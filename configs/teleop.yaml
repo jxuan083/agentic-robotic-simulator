@@ -5,11 +5,14 @@ ee_offset_in_gripper_link:
   note: >-
     Grasp centre between the fingers in the `gripper` link frame. x = fixed-finger inner face (-0.0079) plus half
     the block edge; z = middle of the finger pads (finger tips at about -0.104). Measured from the workshop USD mesh.
-home_ee: [0.15, 0.0, 0.12]
+home_ee: [0.15, 0.0, 0.09]   # same arm pose as before the base fix (0.12 with the base 30 mm too high); the
+                             # vertical gripper reaches at most about 0.10 m here
 workspace:
-  x: [0.06, 0.34]
-  y: [-0.30, 0.30]
-  z: [0.024, 0.22]    # z min keeps the finger tips (about 0.02 below the EE) above the tray floor
+  # A coarse safety box only; the reach itself comes from the IK (joint limits + max_tilt_deg). x min keeps the
+  # target off the robot base, z min keeps the finger tips (at most about 0.02 below the EE) above the tray floor.
+  x: [0.06, 0.45]
+  y: [-0.45, 0.45]
+  z: [0.024, 0.40]
 gripper:
   open: 0.52          # rad, about 53 mm between the fingers
   closed: -0.1745     # rad, joint lower limit; squeezes a 29.5 mm block (contact at about 0.18 rad)
@@ -28,4 +31,9 @@ ik:
   max_joint_step: 0.25   # rad per accepted target update; larger changes are rejected as a jump
   joint_rate_limit: 3.0  # rad/s applied to the commanded joint targets
   yaw_offset_limit: 1.57
+  # The gripper points straight down wherever it can; beyond that reach (far out, or high up) it tilts outward only
+  # as much as needed, up to this angle from vertical. 4 = the earlier vertical-only behaviour (reach about 0.28 m
+  # from the pan axis at grasp height); 60 reaches about 0.40 m. Provisional: chosen from the joint limits, not
+  # checked against the real arm's self-collision or table contact.
+  max_tilt_deg: 60
 dt_max: 0.1             # s; elapsed-time clamp so a stalled frame cannot produce a large increment

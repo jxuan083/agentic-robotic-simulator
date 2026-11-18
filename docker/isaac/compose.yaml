@@ -1,0 +1,38 @@
+# Persistent Isaac Sim server (issue #3). Use docker/isaac/server.sh, which sets the variables below:
+#   docker/isaac/server.sh up | down | status | logs
+# Same image, caches and mounts as docker/isaac/run.sh; Kit and the assets load once and stay loaded.
+name: ars-isaac
+services:
+  isaac-server:
+    image: ${ISAAC_LAB_IMAGE:-nvcr.io/nvidia/isaac-lab:2.3.2}
+    container_name: ${ISAAC_SERVER_CONTAINER:-ars-isaac-server}
+    network_mode: host            # the control port listens on 127.0.0.1 only
+    shm_size: 8g
+    gpus: all
+    stop_grace_period: 30s
+    environment:
+      ACCEPT_EULA: "Y"
+      PRIVACY_CONSENT: "Y"
+      DISPLAY: ${DISPLAY:?set DISPLAY to the X display that shows the Isaac window}
+      XAUTHORITY: /root/.Xauthority
+      SO101_WORKSHOP_DIR: /workspace/so101_workshop
+      PYTHONPATH: /workspace/ars/src
+      PYTHONDONTWRITEBYTECODE: "1"
+      HOST_UID: ${HOST_UID:?}
+      HOST_GID: ${HOST_GID:?}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:?}:/root/.Xauthority:ro
+      - ${ISAAC_CACHE_DIR:?}/kit:/isaac-sim/kit/cache:rw
+      - ${ISAAC_CACHE_DIR:?}/ov:/root/.cache/ov:rw
+      - ${ISAAC_CACHE_DIR:?}/pip:/root/.cache/pip:rw
+      - ${ISAAC_CACHE_DIR:?}/glcache:/root/.cache/nvidia/GLCache:rw
+      - ${ISAAC_CACHE_DIR:?}/computecache:/root/.nv/ComputeCache:rw
+      - ${ISAAC_CACHE_DIR:?}/logs:/root/.nvidia-omniverse/logs:rw
+      - ${ISAAC_CACHE_DIR:?}/data:/root/.local/share/ov/data:rw
+      - ${ISAAC_CACHE_DIR:?}/documents:/root/Documents:rw
+      - ${SO101_WORKSHOP_DIR:?}:/workspace/so101_workshop:ro
+      - ../..:/workspace/ars:rw
+    working_dir: /workspace/ars
+    entrypoint: ["/isaac-sim/python.sh", "scripts/isaac_sim_server.py"]
+    command: ["--experiment", "${ISAAC_SERVER_EXPERIMENT:-minimal_pick_place}"]

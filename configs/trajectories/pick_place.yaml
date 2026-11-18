@@ -1,0 +1,19 @@
+# Cross-engine comparison (issue #3 P4): pick block 0 from the pink tray, place it in the beige tray.
+# Same targets as the keyboard / mouse pick-and-place scenarios (operator clearance: 5 mm short on the fixed-finger
+# side, yaw -0.59 so the fingers face the cube sides). Fed straight into the EE controller, sampled at sim time.
+name: pick_place
+start: {pos: [0.150, 0.000, 0.090], yaw: 0.0, gripper: 0.52}
+segments:
+  - {t: 1.0, label: settle}
+  - {t: 1.6, pos: [0.170, 0.115, 0.090], yaw: -0.59, label: approach}
+  - {t: 1.4, pos: [0.170, 0.115, 0.025], label: descend}
+  - {t: 0.8, label: descend}
+  - {t: 1.2, gripper: -0.1745, label: grasp}
+  - {t: 0.8, label: grasp}
+  - {t: 1.5, pos: [0.170, 0.115, 0.100], label: lift}
+  - {t: 2.5, pos: [0.190, -0.120, 0.100], label: carry}
+  - {t: 0.5, label: carry}
+  - {t: 1.2, pos: [0.190, -0.120, 0.040], label: lower}
+  - {t: 0.8, gripper: 0.52, label: release}
+  - {t: 1.2, pos: [0.190, -0.120, 0.100], label: retreat}
+  - {t: 1.5, label: retreat}

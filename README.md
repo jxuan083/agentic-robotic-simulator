@@ -36,7 +36,8 @@ flowchart LR
 | 實機遙操作、相機、校正、影像／狀態記錄 | 既有實機工作區可運作（雙臂配置），待移植與單臂化 |
 | 實機 DAgger 接管（控制權切換、清空政策佇列、來源標記） | 既有程式可沿用；修正資料納入再訓練尚未串成流程 |
 | SO-101 leader 讀取（JSONL 狀態格式、錄製與重播工具） | 既有雙臂版，待補單臂選擇與本機輸入 adapter |
-| Isaac Sim 場景、keyboard／mouse EE 操作 | 第一份 issue（[#1](https://github.com/jxuan083/agentic-robotic-simulator/issues/1)）：已實作，含主畫面滑鼠操作、專注模式與顏色 DR（預設關閉）。注入事件的驗收腳本通過，使用者實際操作確認手感可接受。場景數值為 provisional（[docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md)） |
+| Isaac Sim 場景、keyboard／mouse EE 操作 | 第一份 issue（[#1](https://github.com/jxuan083/agentic-robotic-simulator/issues/1)）：已實作，含主畫面滑鼠操作、專注模式、顏色 DR（預設關閉，可在面板切換）、1–8 顆積木與傾斜抓取（擴大到達範圍）。注入事件的驗收腳本通過，使用者實際操作確認手感可接受。場景數值為 provisional（[docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md)） |
+| 實驗選單、常駐模擬伺服器、MuJoCo backend | [#3](https://github.com/jxuan083/agentic-robotic-simulator/issues/3) 已完成（P1–P4）：實驗設定檔、控制協定、選單、常駐 Isaac 伺服器與 MuJoCo backend（和 Isaac 一致的鍵盤／滑鼠操作、操作面板與俯視圖、常駐伺服器、FK 對齊 < 0.01 mm）與跨引擎比較（同一條 EE 軌跡在兩個引擎：都完成抓放；差異主要來自關節增益）已完成，等待合併；增益與控制器平滑度等實機量測後再調（[docs/sim-server.md](docs/sim-server.md)、[docs/mujoco-backend.md](docs/mujoco-backend.md)、[docs/cross-engine-comparison.md](docs/cross-engine-comparison.md)） |
 | 共用介面（RobotProfile、SceneSpec、TaskSpec 等） | 已定義文件，程式預計實作 |
 | ACT 訓練與推論 adapter | 預計實作（既有工作區有 ACT 訓練設定，尚無 ACT checkpoint） |
 | Agent、任務執行器、需求帳本 | 預計實作 |
@@ -65,4 +66,5 @@ flowchart LR
 | [docs/inference-dagger-evaluation.md](docs/inference-dagger-evaluation.md) | 自主推論、DAgger 閉環、再訓練比較與評估 |
 | [docs/agent.md](docs/agent.md) | Agent、任務執行器、需求帳本與缺料流程 |
 | [docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md) | Isaac Sim 最小場景與 keyboard／mouse EE 操作：環境、啟動、操作、驗收、已知問題 |
+| [docs/sim-server.md](docs/sim-server.md) | 實驗設定檔、選單、主機端 uv 環境、模擬伺服器控制協定 |
 | [docs/status.md](docs/status.md) | 已完成／預計實作／待確認、可沿用資產與參考來源 |

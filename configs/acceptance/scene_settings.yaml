@@ -1,0 +1,40 @@
+# Panel scene settings (colour DR on / off, seed, block count), applied by Reset. The `set` steps edit the panel's
+# fields (as if typed in); Reset is a real click on the panel button. A block-count change rebuilds the scene and the
+# script continues in the new scene.
+- {wait: 2.0}
+- {check: "n_blocks == 1 and dr is None and len(pending) == 0", label: "start: one block, colour DR off, nothing pending"}
+- {note: "turn colour DR on with seed 5 in the panel: nothing changes until Reset"}
+- {set: {color_dr: true, color_dr_seed: 5}}
+- {wait: 0.5}
+- {check: "pending == {'color_dr': True, 'color_dr_seed': 5} and dr is None", label: "DR on: shown as pending, not applied before Reset"}
+- {click: reset}
+- {wait: 1.5}
+- {check: "dr is not None and dr['seed'] == 5 and dr['session'] == 0 and len(pending) == 0", label: "Reset applies DR: first draw of seed 5"}
+- {check: "max(abs(a - b) for a, b in zip(block_mat_rgb, dr['block']['written'])) < 1e-5 and max(abs(a - b) for a, b in zip(shell_mat_rgb, dr['arm_shell']['written'])) < 1e-5", label: "DR on: block and arm materials = drawn colours"}
+- {click: reset}
+- {wait: 1.5}
+- {check: "dr['session'] == 1 and dr['seed'] == 5", label: "every Reset draws new colours"}
+- {note: "four blocks: Reset rebuilds the scene"}
+- {set: {blocks: 4}}
+- {wait: 0.3}
+- {check: "pending == {'blocks': 4}", label: "block count shown as pending"}
+- {click: reset}
+- {wait: 4.0}
+- {check: "n_blocks == 4 and settings == {'blocks': 4, 'color_dr': True, 'color_dr_seed': 5} and len(pending) == 0", label: "rebuilt with 4 blocks, DR settings kept"}
+- {check: "all(abs(b[0] - i[0]) < 0.003 and abs(b[1] - i[1]) < 0.003 and abs(b[2] - i[2]) < 0.003 for b, i in zip(blocks, blocks_init))", label: "4 blocks: resting at their layout positions in the pink tray"}
+- {check: "all(max(abs(a - c) for a, c in zip(mat, d['written'])) < 1e-5 for mat, d in zip(blocks_mat_rgb, [dr['block']] + dr['extra_blocks']))", label: "4 blocks: each block material = its drawn colour"}
+- {mark: four}
+- {wait: 2.0}
+- {check: "all(max(abs(b[k] - a[k]) for k in range(3)) < 0.001 for a, b in zip(m['four']['blocks'], blocks))", label: "4 blocks: stable at rest (no drift or jitter)"}
+- {note: "colour DR off again"}
+- {set: {color_dr: false}}
+- {click: reset}
+- {wait: 1.5}
+- {check: "dr is None and max(abs(a - b) for a, b in zip(block_mat_rgb, [0.85, 0.15, 0.15])) < 1e-5 and max(abs(a - b) for a, b in zip(shell_mat_rgb, [1.0, 0.82, 0.12])) < 1e-5", label: "DR off: baseline colours restored"}
+- {check: "len(set(tuple(x) for x in blocks_mat_rgb)) == 4", label: "DR off: the 4 blocks keep distinct baseline colours"}
+- {note: "back to one block"}
+- {set: {blocks: 1}}
+- {click: reset}
+- {wait: 4.0}
+- {check: "n_blocks == 1 and settings['blocks'] == 1 and len(pending) == 0", label: "rebuilt with 1 block"}
+- {wait: 0.5}

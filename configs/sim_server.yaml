@@ -1,0 +1,5 @@
+# Simulation servers: one per backend, localhost only (no cross-machine access).
+protocol_version: 1
+servers:
+  isaac:  {host: 127.0.0.1, port: 47801}
+  mujoco: {host: 127.0.0.1, port: 47802}

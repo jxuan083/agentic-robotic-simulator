@@ -1,0 +1,41 @@
+# Extended reach: pick the block and place it at the far end of the beige tray (x 0.35, y -0.17: 0.38 m from the
+# pan axis), beyond the vertical-only reach (about 0.23-0.26 m from the pan axis at 0.10 m height, i.e. x <= 0.21 at
+# this y). The gripper tilts outward only where it has to. Then lift high above home.
+# Same key-driven operator as keyboard_pick_place.
+- {wait: 3.0}
+- {hold: [O], until: "gripper >= 0.5", timeout: 3}
+- {hold: [W], until: "target[0] >= 0.168", timeout: 4}
+- {hold: [A], until: "target[1] >= 0.112", timeout: 4}
+- {hold: [Z], until: "yaw_offset <= -0.59", timeout: 3}
+- {wait: 1.0}
+- {hold: [Q], until: "target[2] <= 0.025", timeout: 4}
+- {wait: 1.5}
+- {check: "tilt_deg < 5", label: "near the base the gripper still points straight down"}
+- {hold: [C], until: "gripper <= -0.17", timeout: 3}
+- {wait: 1.0}
+- {hold: [E], until: "target[2] >= 0.10", timeout: 4}
+- {wait: 1.0}
+- {check: "block[2] > 0.06", label: "lift: block raised with the gripper"}
+- {note: "carry to the far end of the beige tray"}
+- {hold: [D], until: "target[1] <= -0.170", timeout: 6}
+- {hold: [W], until: "target[0] >= 0.350", timeout: 5}
+- {wait: 1.5}
+- {check: "status == 'ok' and abs(target[0] - 0.35) < 0.01 and abs(ee[0] - target[0]) < 0.01 and abs(ee[1] - target[1]) < 0.01", label: "far reach: (0.35, -0.17) accepted and tracked (vertical-only limit here was x 0.21)"}
+- {check: "tilt_deg > 15 and block[2] > 0.06", label: "far reach: gripper tilted outward, block still held"}
+- {mark: far}
+- {hold: [Q], until: "target[2] <= 0.045", timeout: 4}
+- {wait: 0.8}
+- {hold: [O], until: "gripper >= 0.5", timeout: 3}
+- {wait: 1.0}
+- {hold: [E], until: "target[2] >= 0.10", timeout: 4}
+- {wait: 1.5}
+- {check: "block_in_placement and block[0] > 0.31", label: "place: block resting at the far end of the beige tray"}
+- {check: "stats['rejected_targets'] == 0 and stats['max_dq_cmd_per_frame'] < 0.06", label: "no rejected targets, no joint-command jumps"}
+- {tap: R}
+- {wait: 1.5}
+- {check: "abs(target[0] - home[0]) < 0.003 and abs(target[2] - home[2]) < 0.003 and tilt_deg < 5", label: "reset: home, gripper vertical again"}
+- {note: "lift high above home"}
+- {hold: [E], until: "target[2] >= 0.25 or status != 'ok'", timeout: 5}
+- {wait: 1.5}
+- {check: "target[2] >= 0.25 and abs(ee[2] - target[2]) < 0.01", label: "height: 0.25 m above home reachable (vertical-only reaches about 0.11 m with the base on the table)"}
+- {wait: 1.0}

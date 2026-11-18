@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Capture ONLY the Isaac Sim window by X window id (never the whole desktop, never overlapping windows).
+# Capture ONLY one application window by X window id (never the whole desktop, never overlapping windows).
+# Isaac Sim by default; ISAAC_WINDOW_NAME=<window title> for another (e.g. the MuJoCo window).
 #   tools/record_isaac_window.sh shot  outputs/shot.png
 #   tools/record_isaac_window.sh video outputs/run.mp4 [max_seconds]   # stops when the window closes
 set -euo pipefail
