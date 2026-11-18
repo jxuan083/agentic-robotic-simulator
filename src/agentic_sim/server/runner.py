@@ -17,12 +17,12 @@ from agentic_sim.experiments import Experiment
 from agentic_sim.launch import RunOptions
 from agentic_sim.server.client import SimClient
 
-SESSION_OPTIONS = ("focus", "color_dr", "color_dr_seed", "blocks")
+SESSION_OPTIONS = ("focus", "color_dr", "color_dr_seed", "blocks", "block_colors")
 
 
 def session_options(opts: RunOptions) -> dict:
     d = asdict(opts)
-    return {k: d[k] for k in SESSION_OPTIONS}
+    return {k: d[k] for k in SESSION_OPTIONS if not (k == "block_colors" and d[k] is None)}
 
 
 def same_options(loaded: dict, wanted: dict) -> bool:
@@ -33,6 +33,8 @@ def same_options(loaded: dict, wanted: dict) -> bool:
         if bool(loaded.get(k)) != bool(wanted.get(k)):
             return False
     if int(loaded.get("blocks") or 1) != int(wanted.get("blocks") or 1):
+        return False
+    if (loaded.get("block_colors") or None) != (wanted.get("block_colors") or None):
         return False
     if wanted.get("color_dr") and wanted.get("color_dr_seed") is not None:
         return loaded.get("color_dr_seed") == wanted["color_dr_seed"]

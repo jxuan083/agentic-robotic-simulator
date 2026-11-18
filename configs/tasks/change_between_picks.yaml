@@ -1,0 +1,16 @@
+# Issue #5 acceptance 1: the order changes between two picks (red 1 delivered and verified, red 2 not started).
+# "Total 1 red, 2 blue" is a new total: red is complete, 2 blue are left. Red 2 and red 3 must not be touched.
+name: change_between_picks
+blocks: [red, red, red, blue, blue, yellow]
+order: {red: 3}
+timeout_s: 150
+events:
+  - when: {event: verified, color: red, delivered: 1}
+    order: {total: {red: 1, blue: 2}}
+checks:
+  - {final_placement: {red: 1, blue: 2}}
+  - {ledger: {target: {red: 1, blue: 2}, delivered: {red: 1, blue: 2}}}
+  - {max_displacement: {blocks: [1, 2], mm: 2.0}}
+  - no_drop
+  - no_stale_commands
+  - skills_ok

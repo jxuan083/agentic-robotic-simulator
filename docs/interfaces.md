@@ -75,3 +75,5 @@ adapter 可在同一程序內直接讀取 leader，或在必要時使用本機�
 | `evidence` | 用於核對的觀察（影像引用、感知結果）；模擬真值另欄標示 |
 
 需求帳本只在外部核對確認後才增加完成數量，技能自報成功不直接計入。
+
+模擬中的實作（#5）：`agentic_sim.task.skills.SkillResult`，另外記錄各階段耗時（`phases`）與結束時手上的積木（`holding`）；`evidence` 目前是模擬真值，標明 `"observation": "sim_truth"`。見 [task-executor.md](task-executor.md)。

@@ -119,6 +119,9 @@ class TeleopPanel:
                 with ui.VStack(spacing=8, height=0):
                     self._build_header()
                     _card(self._build_status)
+                    self.task_frame = ui.Frame(height=0, visible=False)
+                    with self.task_frame:
+                        _card(self._build_task)
                     _card(self._build_controls, spacing=3)
                     _card(self._build_scene, spacing=5)
                     self._build_help(help_text)
@@ -152,6 +155,27 @@ class TeleopPanel:
             ui.Spacer(width=10)
             ui.Circle(width=10, height=10, style={"background_color": EE_COLOR, "border_width": 0})
             ui.Label("actual EE", name="dim", width=0)
+
+    def _build_task(self):
+        ui.Label("TASK  (executor has the arm)", name="section", height=16)
+        self.task_label = ui.Label("", name="value", word_wrap=True, height=0)
+        self.task_q_label = ui.Label("", name="pending", word_wrap=True, height=0)
+        self._task_text = None
+
+    def set_task(self, lines):
+        """Task card content: [(text, kind)] with kind text / dim / ask; None hides the card."""
+        if lines is None:
+            if self.task_frame.visible:
+                self.task_frame.visible = False
+            self._task_text = None
+            return
+        body = "\n".join(t for t, k in lines if k != "ask")
+        ask = "\n".join(t for t, k in lines if k == "ask")
+        if (body, ask) != self._task_text:   # relayout only when the text changes
+            self.task_label.text, self.task_q_label.text = body, ask
+            self._task_text = (body, ask)
+        if not self.task_frame.visible:
+            self.task_frame.visible = True
 
     def _build_controls(self):
         ui.Label("CONTROLS", name="section", height=16)

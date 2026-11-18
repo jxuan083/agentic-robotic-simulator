@@ -5,6 +5,7 @@ Run inside the pinned container (see docs/isaac-ee-teleop.md):
 Optional:
     --script configs/acceptance/keyboard_pick_place.yaml   drive the UI with injected input events
     --log outputs/run.csv                                  per-frame debug log
+    --task configs/tasks/hold_return.yaml                  task executor scenario (issue #5)
 """
 
 import argparse
@@ -21,6 +22,10 @@ parser.add_argument("--log", default=None, help="CSV debug log path")
 parser.add_argument("--result", default=None, help="JSON summary path (script / trajectory runs)")
 parser.add_argument("--trajectory", default=None, help="scripted EE target sequence (configs/trajectories/*.yaml); "
                     "replaces keyboard / mouse input, ends the run with --exit_after_script")
+parser.add_argument("--task", default=None, help="task scenario (configs/tasks/*.yaml): the task executor drives the "
+                    "arm; ends the run with --exit_after_script")
+parser.add_argument("--task_log", default=None, help="executor event log (JSONL)")
+parser.add_argument("--block_colors", default=None, help="comma-separated colour names, one per block")
 parser.add_argument("--exit_after_script", action="store_true")
 parser.add_argument("--max_time", type=float, default=0.0, help="exit after N wall seconds (0 = run until closed)")
 parser.add_argument("--profile", action="store_true", help="print per-section frame timing every 5 s")
@@ -52,7 +57,8 @@ def main():
         scene=args.scene, teleop=args.teleop, color_dr_config=args.color_dr_config, focus=args.focus,
         color_dr=args.color_dr, color_dr_seed=args.color_dr_seed, color_dr_log=args.color_dr_log, blocks=args.blocks,
         script=args.script, log=args.log, result=args.result, profile=args.profile, device=args.device,
-        trajectory=args.trajectory), log)
+        trajectory=args.trajectory, task=args.task, task_log=args.task_log,
+        block_colors=args.block_colors.split(",") if args.block_colors else None), log)
     t_start = time.monotonic()
     while app.is_running():
         now = time.monotonic()

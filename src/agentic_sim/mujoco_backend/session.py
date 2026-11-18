@@ -54,6 +54,9 @@ class SessionConfig:
     log: str | None = None
     result: str | None = None
     trajectory: str | None = None      # scripted EE target sequence (cross-engine comparison); replaces all input
+    block_colors: list | None = None   # colour name per block (task scenes); sets the block count
+    task: str | None = None            # task scenario (configs/tasks/*.yaml): the executor drives the arm
+    task_log: str | None = None        # executor event log (JSONL)
 
 
 class MjColorRandomizer:
@@ -158,7 +161,9 @@ class MjSession:
         self._finished = None
         self.scene_cfg = load(cfg.scene)
         teleop_cfg = load(cfg.teleop)
-        self.sc = build(self.scene_cfg, cfg.blocks)
+        from agentic_sim.task.runner import scenario_colors
+        self.block_color_names = cfg.block_colors or scenario_colors(cfg.task)
+        self.sc = build(self.scene_cfg, cfg.blocks, colors=self.block_color_names)
         self.m = self.sc.model
         self.d = mujoco.MjData(self.m)
         rc = load(ROBOT_CONFIG)["physics"]
@@ -189,6 +194,7 @@ class MjSession:
         if cfg.trajectory:
             from agentic_sim.teleop.trajectory import make_driver
             self.traj = make_driver(cfg.trajectory, self.ctrl)
+        self.task = None
         log(f"MuJoCo {mujoco.__version__}, menagerie SO-101 @{self.sc.robot_cfg['model']['menagerie_commit'][:7]}; "
             f"physics dt {self.m.opt.timestep:.5f} s x {self.substeps} per control frame; provisional scene fields: "
             f"{', '.join(provisional_fields(self.scene_cfg))}")
@@ -216,6 +222,38 @@ class MjSession:
         self.prev_target = self.ctrl.state.pos.copy()
         self.prev_status = "ok"
         self.last_frame = {}
+        if cfg.task:
+            self.start_task()
+
+    # ---- task executor (issue #5) ----------------------------------------------------------------
+    def start_task(self):
+        """Hand the arm to the task executor (scenario from cfg.task, or orders from the server)."""
+        from agentic_sim.task.runner import TaskRunner, default_color_names
+        if self.task is not None:
+            self.task.close()
+        colors = self.block_color_names or default_color_names(self.scene_cfg, len(self.sc.block_bodies))
+        self.task = TaskRunner(self.ctrl, self.scene_cfg, self.sc.block_init_pos, colors, self.control_dt, self.log,
+                               scenario=self.cfg.task, event_log=self.cfg.task_log)
+        return self.task
+
+    def stop_task(self):
+        """Give the arm back to the operator (keyboard / mouse) where it is."""
+        if self.task is not None:
+            self.task.close()
+            self.task = None
+            self.ctrl.clear_gripper_goal()
+            self.log("task stopped: operator input active")
+
+    def task_obs(self):
+        from agentic_sim.task.runner import quat_yaw
+        from agentic_sim.task.skills import Obs
+        q = self.arm_q()
+        # arm speed from the measured joint positions frame to frame (same definition as the Isaac session)
+        prev, self._task_q_prev = getattr(self, "_task_q_prev", None), q.copy()
+        qd = 0.0 if prev is None else float(np.max(np.abs(q - prev))) / self.control_dt
+        return Obs(t=self.t_sim, ee=self.ctrl.chain.ee_pose_mount(q)[:3, 3].copy(), qd_max=qd, jaw=self.jaw(),
+                   blocks=self.block_positions(), block_yaw=[quat_yaw(self.d.xquat[b]) for b in self.sc.block_bodies],
+                   block_speed=[float(np.linalg.norm(self.d.qvel[a:a + 3])) for a in self.sc.block_qvel])
 
     # ---- settings / commands --------------------------------------------------------
     def settings(self) -> dict:
@@ -300,7 +338,8 @@ class MjSession:
 
     @property
     def script_done(self) -> bool:
-        return (self.script is not None and self.script.done) or (self.traj is not None and self.traj.done(self.t_sim))
+        return ((self.script is not None and self.script.done) or (self.traj is not None and self.traj.done(self.t_sim))
+                or (self.task is not None and self.task.done))
 
     def focused(self) -> bool:
         if self.script is not None and self.script.focus_override is not None:
@@ -325,6 +364,10 @@ class MjSession:
             self.do_reset()
             self.paused = False
             dt = 0.0
+            if self.task is not None:   # a reset ends the task; a scenario run starts again from its first order
+                self.stop_task()
+                if self.cfg.task:
+                    self.start_task()
         for a in actions:
             if a == "pause":
                 self.paused = not self.paused
@@ -348,8 +391,9 @@ class MjSession:
             keys.clear()
             panel.cancel()
             handle.cancel()
-            ctrl.clear_yaw_goal()
-            ctrl.clear_gripper_goal()
+            if self.task is None:  # operator goals only: a running task keeps its own gripper / yaw goals
+                ctrl.clear_yaw_goal()
+                ctrl.clear_gripper_goal()
         max_dq_cmd, step_ms = 0.0, 0.0
         input_lat_ms, mouse_d = None, np.zeros(3)
         if self.paused:
@@ -363,6 +407,11 @@ class MjSession:
                 panel.cancel()
                 handle.cancel()
                 self.traj.apply(self.t_sim)
+            if self.task is not None:  # the executor is the only control source while a task runs
+                keys.clear()
+                panel.cancel()
+                handle.cancel()
+                self.task.step(self.task_obs())
             lin, yaw, grip = keys.directions()
             ctrl.step_velocity(lin, yaw, dt, "keyboard")
             ctrl.step_gripper(grip, dt, "keyboard")
@@ -432,8 +481,11 @@ class MjSession:
                                  "" if input_lat_ms is None else round(input_lat_ms, 2), *np.round(mouse_d, 6),
                                  int(keys.shift), int(handle.dragging)])
         mode = "focus lost" if not focused else ("ready" if s.source == "none" else s.source)
+        if self.task is not None:
+            mode = "task executor"
         panel.update(mode, self.paused, keys.shift, s.status, s.message, s.pos, s.yaw_offset, ee, all_pos, s.gripper,
                      self.color_dr.block_rgbs(self.sc.block_colors), tilt_deg=tilt_deg, in_placement=n_placed)
+        panel.set_task(self.task.ex.panel_lines() if self.task is not None else None)
         if self.script is not None:
             ns = {"target": s.pos, "ee": ee, "block": bpos, "status": s.status, "gripper": s.gripper, "jaw": jaw,
                   "paused": self.paused, "session": s.session, "focused": focused, "held": set(keys.held),
@@ -487,6 +539,8 @@ class MjSession:
         if self.script is not None:
             out["script"] = {"step": self.script.i, "steps": len(self.script.steps), "done": self.script.done,
                              "passed": sum(x["ok"] for x in self.script.results), "checks": len(self.script.results)}
+        if self.task is not None:
+            out["task"] = self.task.ex.view()
         return out
 
     def finish(self) -> dict:
@@ -509,6 +563,16 @@ class MjSession:
         out = {"metrics": summary}
         if self.traj is not None and self.cfg.result:
             out.update(self._write_trajectory_result(summary))
+        if self.task is not None and self.task.scenario is not None and self.cfg.result:
+            res = self.task.result(self.task_obs(), "mujoco", {"mujoco": mujoco.__version__, "stats": self.stats,
+                                                               "metrics": summary, "blocks": self.block_color_names})
+            os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
+            with open(self.cfg.result, "w") as f:
+                json.dump(res, f, indent=2, ensure_ascii=False)
+            self.log(f"wrote {self.cfg.result}: {res['passed']}/{res['checks_total']} checks passed")
+            out.update({"result": self.cfg.result, "passed": res["passed"], "checks": res["checks_total"]})
+        if self.task is not None:
+            self.task.close()
         if self.script is not None and self.cfg.result:
             os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
             passed = sum(x["ok"] for x in self.script.results)
@@ -527,5 +591,7 @@ class MjSession:
 def session_config_with(cfg: SessionConfig, settings: dict) -> SessionConfig:
     """A copy of cfg with the panel's scene settings (rebuild after a block-count change)."""
     from dataclasses import replace
-    return replace(cfg, blocks=int(settings["blocks"]), color_dr=bool(settings["color_dr"]),
+    n = int(settings["blocks"])
+    colors = cfg.block_colors if cfg.block_colors and len(cfg.block_colors) == n else None
+    return replace(cfg, blocks=n, block_colors=colors, color_dr=bool(settings["color_dr"]),
                    color_dr_seed=int(settings["color_dr_seed"]))

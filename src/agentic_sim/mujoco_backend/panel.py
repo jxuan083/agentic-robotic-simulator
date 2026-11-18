@@ -1,6 +1,7 @@
 """Operation panel of the MuJoCo window: same content and behaviour as the Isaac panel (agentic_sim.isaac.panel).
 
   status card     status pill + reason, target, actual EE, follow error, gripper yaw / tilt / jaw, blocks
+  TASK            only while the task executor runs: ledger per colour, holding, skill / phase, open question
   CONTROLS        Open / Close gripper, Yaw -15 / +15, Pause (Resume) / Reset / Reset view
   SCENE           blocks 1-8, colour DR on / off, seed (- / + / type digits / New seed); applied on Reset
   Help            collapsible
@@ -81,6 +82,7 @@ class MjPanel:
         self.map_rect = None             # top-view area (rendered by the viewer)
         self._content_h = 0.0
         self._seed_rect = None
+        self.task_lines = None           # task executor lines (text, kind) while a task runs
 
     # ---- scene settings (same API as the Isaac panel) ------------------------------------
     def settings(self) -> dict:
@@ -104,6 +106,10 @@ class MjPanel:
 
     def mark_applied(self, settings: dict):
         self.applied = dict(settings)
+
+    def set_task(self, lines):
+        """Task card content: [(text, kind)] with kind text / dim / ask; None hides the card."""
+        self.task_lines = lines
 
     def set_colors(self, text: str):
         self.colors_text = text
@@ -298,6 +304,19 @@ class MjPanel:
         cv.rect(x + 210, yy + 6, 9, 9, (*EE_RGB, 1))
         cv.text(x + 226, yy, "actual EE", DIM)
         y += card_h + 8
+
+        # task executor (issue #5): ledger, holding, skill / phase, open question
+        if self.task_lines:
+            wrapped = [(ln, k) for t, k in self.task_lines for ln in (cv.wrap(t, w - 16) or [""])]
+            task_h = 6 + lh + lh * len(wrapped) + 8
+            cv.rect(x, y, w, task_h, BG_CARD)
+            yy = y + 6
+            cv.text(x + 8, yy, "TASK  (executor has the arm)", SECTION)
+            yy += lh
+            for ln, k in wrapped:
+                cv.text(x + 8, yy, ln, PENDING_RGB if k == "ask" else (TEXT if k == "text" else DIM))
+                yy += lh
+            y += task_h + 8
 
         # controls
         bh = 30

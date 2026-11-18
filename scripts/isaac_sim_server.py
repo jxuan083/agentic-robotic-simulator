@@ -37,6 +37,7 @@ from agentic_sim.isaac.session import CONTROL_DT, SessionConfig, TeleopSession  
 from dataclasses import replace  # noqa: E402
 from agentic_sim.launch import RunOptions  # noqa: E402
 from agentic_sim.server.core import SimServer  # noqa: E402
+from agentic_sim.task.server_cmds import TaskCommands  # noqa: E402
 
 BACKEND = "isaac"
 
@@ -82,7 +83,7 @@ def focus_app_window() -> bool:
         return False
 
 
-class IsaacServer:
+class IsaacServer(TaskCommands):
     """Command handlers (cmd_<name>), called by SimServer.poll() on the Kit main thread between frames."""
 
     def __init__(self):
@@ -108,7 +109,7 @@ class IsaacServer:
         cfg = SessionConfig(scene=exp.scene, teleop=exp.teleop,
                             color_dr_config=exp.color_dr or "configs/color_randomization.yaml",
                             focus=opts.focus, color_dr=opts.color_dr, color_dr_seed=opts.color_dr_seed,
-                            blocks=opts.blocks, profile=args.profile, device=args.device)
+                            blocks=opts.blocks, block_colors=opts.block_colors, profile=args.profile, device=args.device)
         if script:
             cfg.script = f"configs/acceptance/{script}.yaml"
             cfg.log = os.path.join(out_dir, f"{script}.csv")
@@ -133,6 +134,8 @@ class IsaacServer:
         """The panel asked for another block count: rebuild the session with the panel's settings."""
         want = self.session.rebuild_request
         opts = replace(self.current_options(), **want)
+        if opts.block_colors and len(opts.block_colors) != opts.blocks:   # another count: default colours
+            opts.block_colors = None
         carry = self.session.handover_script() if self._job_running() else None
         self._close_session(keep_layout=opts.focus)
         if carry is not None:  # an acceptance script changed the block count: it continues in the new scene

@@ -25,6 +25,7 @@ from agentic_sim.launch import RunOptions  # noqa: E402
 from agentic_sim.mujoco_backend.model import ROBOT_CONFIG  # noqa: E402
 from agentic_sim.mujoco_backend.session import MjSession, SessionConfig, session_config_with  # noqa: E402
 from agentic_sim.server.core import SimServer  # noqa: E402
+from agentic_sim.task.server_cmds import TaskCommands  # noqa: E402
 from agentic_sim.teleop.keys import KeyState  # noqa: E402
 
 BACKEND = "mujoco"
@@ -51,7 +52,7 @@ def rss_mb() -> float:
     return -1.0
 
 
-class MujocoServer:
+class MujocoServer(TaskCommands):
     """Command handlers (cmd_<name>), called by SimServer.poll() from the main loop between frames."""
 
     def __init__(self, viewer, keys: KeyState):
@@ -69,7 +70,8 @@ class MujocoServer:
     def _open(self, exp, opts: RunOptions, script=None, out_dir=None, carry_script=None):
         cfg = SessionConfig(scene=exp.scene, teleop=exp.teleop,
                             color_dr_config=exp.color_dr or "configs/color_randomization.yaml",
-                            color_dr=opts.color_dr, color_dr_seed=opts.color_dr_seed, blocks=opts.blocks)
+                            color_dr=opts.color_dr, color_dr_seed=opts.color_dr_seed, blocks=opts.blocks,
+                            block_colors=opts.block_colors)
         if script:
             cfg.script = f"configs/acceptance/{script}.yaml"
             cfg.log = os.path.join(out_dir, f"{script}.csv")
@@ -96,6 +98,8 @@ class MujocoServer:
         """The panel asked for another block count: rebuild the session with the panel's settings."""
         want = self.session.rebuild_request
         opts = replace(self.current_options(), **want)
+        if opts.block_colors and len(opts.block_colors) != opts.blocks:   # another count: default colours
+            opts.block_colors = None
         carry = self.session.handover_script() if self._job_running() else None
         if carry is not None:  # an acceptance script changed the block count: it continues in the new scene
             self._open(self.experiment, opts, script=self.job["scenario"], out_dir=self.job["out_dir"],

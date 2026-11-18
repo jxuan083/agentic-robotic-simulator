@@ -7,6 +7,7 @@
 - 本 repo：README 與 docs 架構文件。
 - 本 repo：Isaac Sim 最小桌面場景與 keyboard／mouse EE 操作（issue #1），以注入事件的驗收腳本完成抓放、不可達、失焦、暫停、reset 驗收。2026-11-17 加入主畫面滑鼠操作、專注模式與顏色 DR（預設關閉）；使用者實際操作確認手感可接受（2026-11-17）。之後加入面板改版（顏色 DR 與 seed、積木數量 1–8，Reset 套用）與傾斜抓取（到達範圍從約 0.28 m 擴大到約 0.40 m，傾斜上限 provisional）。見 [isaac-ee-teleop.md](isaac-ee-teleop.md)。
 - 本 repo：實驗設定檔、選單、模擬伺服器控制協定與常駐 Isaac 伺服器（issue #3 的 P1、P2），見 [sim-server.md](sim-server.md)。MuJoCo backend（P3：同一份場景與控制器、和 Isaac 一致的鍵盤／滑鼠操作與操作面板、俯視圖、常駐伺服器）已完成，見 [mujoco-backend.md](mujoco-backend.md)；跨引擎比較（P4）已完成，見 [cross-engine-comparison.md](cross-engine-comparison.md)。
+- 本 repo：需求帳本與可取消的技能執行器（issue #5）：改單、持物詢問、多交取回、缺料詢問在 Isaac 與 MuJoCo 的 GUI 驗收都通過。只用模擬真值，抓取為腳本化技能，尚未接 LLM、感知與 ACT。見 [task-executor.md](task-executor.md)。
 - 既有實機工作區（尚未移入本 repo）：雙臂 SO-101 實機遙操作、相機串流、馬達校正、影像／狀態記錄、DAgger 接管與資料保存程式可運作。
 
 ## 可沿用與待補介面
@@ -35,7 +36,7 @@
 5. Leader 接入同機模擬（單臂、本機輸入 adapter）。
 6. 實機 backend：移植既有實機程式到命令契約與 episode 格式。
 7. DAgger 完整閉環（sim 與 real）。
-8. 感知、任務執行器、需求帳本、agent。
+8. 感知、agent（任務執行器與需求帳本已在模擬中完成，#5）。
 9. 任務隨機化、`competition_draft`、controller。
 
 模擬端下一步（待實驗室確認環境與相機資訊後討論）：在模擬場景加入相機視角、依實驗室實際佈置擺放場景、單臂／雙臂配置。

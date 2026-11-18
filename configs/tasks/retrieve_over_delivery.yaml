@@ -1,0 +1,17 @@
+# Issue #5 acceptance 4: the order changes after red 2 has already been placed and verified. Red is over-delivered by
+# one: reported, then taken back from the placement tray to the storage tray without moving the blocks next to it.
+name: retrieve_over_delivery
+blocks: [red, red, red, blue, blue, yellow]
+order: {red: 3}
+timeout_s: 180
+events:
+  - when: {event: verified, color: red, delivered: 2}
+    order: {total: {red: 1, blue: 2}}
+checks:
+  - {over_delivery: {color: red, over: 1, action: retrieve}}
+  - {neighbours_still: {mm: 5.0}}
+  - {final_placement: {red: 1, blue: 2}}
+  - {ledger: {target: {red: 1, blue: 2}, delivered: {red: 1, blue: 2}}}
+  - no_drop
+  - no_stale_commands
+  - skills_ok
