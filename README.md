@@ -41,7 +41,8 @@ flowchart LR
 | 共用介面（RobotProfile、SceneSpec、TaskSpec 等） | 已定義文件，程式預計實作 |
 | ACT 訓練與推論 adapter | 預計實作（既有工作區有 ACT 訓練設定，尚無 ACT checkpoint） |
 | 任務執行器、需求帳本 | [#5](https://github.com/jxuan083/agentic-robotic-simulator/issues/5) 已完成（模擬）：需求帳本（revision、核對後才計入）、可取消的抓放技能、改單／持物詢問／多交取回／缺料詢問，Isaac 與 MuJoCo 都通過驗收。只用模擬真值、抓取為腳本化技能，不含 LLM（[docs/task-executor.md](docs/task-executor.md)） |
-| Agent（LLM、聊天介面） | 預計實作 |
+| 繁中聊天層 | [#7](https://github.com/jxuan083/agentic-robotic-simulator/issues/7) 已完成（模擬）：繁中命令列聊天接任務執行器：模型（Qwen3.5-9B，本機 vLLM，可替換）只判斷意圖，程式依帳本檢查後才送命令；改單、追加、只改單一顏色、反問、回答問題、進度與主動回報。語句表與完整對話（Isaac、MuJoCo）都通過（[docs/chat-layer.md](docs/chat-layer.md)） |
+| Agent（任務規劃、感知整合） | 預計實作 |
 | 評估報表 | 預計實作；驗收數字為目標，尚無成果 |
 
 完整狀態、可沿用資產與待確認事項見 [docs/status.md](docs/status.md)。
@@ -67,6 +68,7 @@ flowchart LR
 | [docs/inference-dagger-evaluation.md](docs/inference-dagger-evaluation.md) | 自主推論、DAgger 閉環、再訓練比較與評估 |
 | [docs/agent.md](docs/agent.md) | Agent、任務執行器、需求帳本與缺料流程 |
 | [docs/task-executor.md](docs/task-executor.md) | 需求帳本與任務執行器的實作、改單規則、驗收場景（#5） |
+| [docs/chat-layer.md](docs/chat-layer.md) | 繁中聊天層：模型服務、意圖規則、語句表與完整對話驗收（#7） |
 | [docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md) | Isaac Sim 最小場景與 keyboard／mouse EE 操作：環境、啟動、操作、驗收、已知問題 |
 | [docs/sim-server.md](docs/sim-server.md) | 實驗設定檔、選單、主機端 uv 環境、模擬伺服器控制協定 |
 | [docs/status.md](docs/status.md) | 已完成／預計實作／待確認、可沿用資產與參考來源 |

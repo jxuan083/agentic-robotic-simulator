@@ -432,8 +432,11 @@ class TaskExecutor:
         return {"state": self.state, "revision": led.revision, "ledger": led.snapshot(),
                 "holding": None if self.holding is None else {"block": self.holding, "color": self.color(self.holding)},
                 "skill": None if sk is None else {"name": sk.name, "phase": sk.phase, "block": sk.params.get("block"),
-                                                  "purpose": sk.params.get("purpose")},
-                "question": self.question, "placement": self._counts_in("placement") if self.obs else {}}
+                                                  "purpose": sk.params.get("purpose"), "color": sk.params.get("color"),
+                                                  "nth": sk.params.get("nth")},
+                "question": self.question, "placement": self._counts_in("placement") if self.obs else {},
+                "storage": self._counts_in("storage") if self.obs else {},
+                "colors_in_scene": sorted(set(self.world.colors)), "events": len(self.events)}
 
     def panel_lines(self) -> list:
         """(text, kind) lines for the simulator panels; kind: text / dim / ask."""

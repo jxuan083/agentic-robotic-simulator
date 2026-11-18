@@ -1,0 +1,105 @@
+# Fixed Traditional Chinese utterance table for the chat layer (run with the real model: tools/chat_eval.py).
+# Each case: a task state preset, what the user types, and what must happen:
+#   expect: send       a command must be sent, equal to `command` (cmd + args)
+#   expect: clarify    nothing is sent; the system asks back (ambiguous colour / count / place)
+#   expect: reject     nothing is sent; not a task the system can do
+#   expect: status     progress answered from the ledger (nothing sent)
+#   expect: stop       pointed to the stop controls (nothing sent)
+#   expect: no_send    any reply without a command (e.g. no open question, colour not on the table)
+# Scoring: correct command / correct ask-back / correct no-command / missed (should have sent) / mis-executed
+# (sent when it should not have, or sent a different command).
+presets:
+  empty:          # no order yet
+    active: false
+    colors_in_scene: [blue, red, yellow]
+    ledger: {revision: 0, target: {}, delivered: {}, need: {}, over: {}}
+  red3_d1:        # order 3 red, 1 delivered
+    active: true
+    state: running
+    colors_in_scene: [blue, red, yellow]
+    ledger: {revision: 1, target: {red: 3}, delivered: {red: 1}, need: {red: 2}, over: {}}
+    holding: null
+    question: null
+  red1_blue2:     # order 1 red + 2 blue, 1 red delivered
+    active: true
+    state: running
+    colors_in_scene: [blue, red, yellow]
+    ledger: {revision: 2, target: {red: 1, blue: 2}, delivered: {red: 1}, need: {blue: 2}, over: {}}
+    holding: null
+    question: null
+  held_q:         # holding a red the new order does not need: question 1
+    active: true
+    state: waiting
+    colors_in_scene: [blue, red, yellow]
+    ledger: {revision: 2, target: {red: 1, blue: 2}, delivered: {red: 1}, need: {blue: 2}, over: {}}
+    holding: {block: 1, color: red}
+    question: {id: 1, kind: held_item, rev: 2, color: red, block: 1, options: [return, place_at, deliver],
+               text: "Holding 1 red ..."}
+  shortage_q:     # one blue short: question 2
+    active: true
+    state: waiting
+    colors_in_scene: [blue, red, yellow]
+    ledger: {revision: 2, target: {red: 1, blue: 2}, delivered: {red: 1, blue: 1}, need: {blue: 1}, over: {}}
+    holding: null
+    question: {id: 2, kind: shortage, rev: 2, options: [substitute, reduce, wait], delivered: {red: 1, blue: 1},
+               missing: {blue: 1}, available: {red: 2, yellow: 1}, text: "Delivered ..."}
+cases:
+  # ---- total -------------------------------------------------------------------------------------------
+  - {group: total, preset: empty, text: 我要三顆紅色的積木, expect: send, command: {cmd: task_order, mode: total, counts: {red: 3}}}
+  - {group: total, preset: empty, text: 給我兩個藍的和一個黃的, expect: send, command: {cmd: task_order, mode: total, counts: {blue: 2, yellow: 1}}}
+  - {group: total, preset: empty, text: 我要2顆紅色、1顆藍色, expect: send, command: {cmd: task_order, mode: total, counts: {red: 2, blue: 1}}}
+  - {group: total, preset: red3_d1, text: 總共一紅兩藍, expect: send, command: {cmd: task_order, mode: total, counts: {red: 1, blue: 2}}}
+  - {group: total, preset: red3_d1, text: 全部改成一顆紅色跟兩顆藍色, expect: send, command: {cmd: task_order, mode: total, counts: {red: 1, blue: 2}}}
+  - {group: total, preset: red3_d1, text: 只要兩顆黃色就好, expect: send, command: {cmd: task_order, mode: total, counts: {yellow: 2}}}
+  - {group: total, preset: empty, text: 幫我放一顆紅色到放置盤, expect: send, command: {cmd: task_order, mode: total, counts: {red: 1}}}
+  # ---- add ---------------------------------------------------------------------------------------------
+  - {group: add, preset: red3_d1, text: 再加一顆藍色, expect: send, command: {cmd: task_order, mode: add, counts: {blue: 1}}}
+  - {group: add, preset: red3_d1, text: 另外再多兩個黃的, expect: send, command: {cmd: task_order, mode: add, counts: {yellow: 2}}}
+  - {group: add, preset: red1_blue2, text: 多一顆紅的, expect: send, command: {cmd: task_order, mode: add, counts: {red: 1}}}
+  - {group: add, preset: red1_blue2, text: 再來2個藍色, expect: send, command: {cmd: task_order, mode: add, counts: {blue: 2}}}
+  # ---- change one colour (others kept) -----------------------------------------------------------------
+  - {group: set, preset: red1_blue2, text: 藍色改成三顆, expect: send, command: {cmd: task_order, mode: total, counts: {red: 1, blue: 3}}}
+  - {group: set, preset: red1_blue2, text: 紅的不要了, expect: send, command: {cmd: task_order, mode: total, counts: {blue: 2}}}
+  - {group: set, preset: red3_d1, text: 紅色只要兩顆就好, expect: send, command: {cmd: task_order, mode: total, counts: {red: 2}}}
+  - {group: set, preset: red1_blue2, text: 藍色改成一顆, expect: send, command: {cmd: task_order, mode: total, counts: {red: 1, blue: 1}}}
+  # ---- colour words and numbers ------------------------------------------------------------------------
+  - {group: words, preset: empty, text: 要三個紅的, expect: send, command: {cmd: task_order, mode: total, counts: {red: 3}}}
+  - {group: words, preset: empty, text: 來一顆青色的, expect: send, command: {cmd: task_order, mode: total, counts: {cyan: 1}}}
+  - {group: ambiguous, preset: empty, text: 來一顆水藍色, expect: clarify}
+  - {group: words, preset: empty, text: 我要二顆橙色, expect: send, command: {cmd: task_order, mode: total, counts: {orange: 2}}}
+  - {group: words, preset: empty, text: 要一顆墨綠的, expect: send, command: {cmd: task_order, mode: total, counts: {dark_green: 1}}}
+  - {group: words, preset: empty, text: 拿兩個藍色積木給我, expect: send, command: {cmd: task_order, mode: total, counts: {blue: 2}}}
+  - {group: words, preset: empty, text: 我要 3 顆黃色, expect: send, command: {cmd: task_order, mode: total, counts: {yellow: 3}}}
+  # ---- ambiguous: ask back -----------------------------------------------------------------------------
+  - {group: ambiguous, preset: red3_d1, text: 改成兩藍, expect: clarify}
+  - {group: ambiguous, preset: red1_blue2, text: 改成三黃, expect: clarify}
+  - {group: ambiguous, preset: empty, text: 我要綠色的, expect: clarify}
+  - {group: ambiguous, preset: red3_d1, text: 再來幾顆藍色, expect: clarify}
+  - {group: ambiguous, preset: empty, text: 幫我拿一些積木, expect: clarify}
+  - {group: ambiguous, preset: held_q, text: 放到旁邊, expect: clarify}
+  # ---- not a task / not possible -----------------------------------------------------------------------
+  - {group: invalid, preset: red3_d1, text: 手臂往左移五公分, expect: reject}
+  - {group: invalid, preset: empty, text: 我要三顆粉紅色, expect: reject}
+  - {group: invalid, preset: empty, text: 我要十顆紅色, expect: reject}
+  - {group: invalid, preset: red3_d1, text: 幫我泡一杯咖啡, expect: reject}
+  - {group: invalid, preset: red3_d1, text: 把夾爪打開, expect: reject}
+  # ---- stop --------------------------------------------------------------------------------------------
+  - {group: stop, preset: red3_d1, text: 停！, expect: stop}
+  - {group: stop, preset: red3_d1, text: 緊急停止, expect: stop}
+  # ---- progress ----------------------------------------------------------------------------------------
+  - {group: status, preset: red3_d1, text: 現在做到哪？, expect: status}
+  - {group: status, preset: red1_blue2, text: 還差幾顆？, expect: status}
+  - {group: status, preset: red1_blue2, text: 已經放了幾顆紅色？, expect: status}
+  # ---- answers: held item (question 1) -----------------------------------------------------------------
+  - {group: answer, preset: held_q, text: 放回去, expect: send, command: {cmd: task_answer, id: 1, choice: return}}
+  - {group: answer, preset: held_q, text: 放回原來的位置, expect: send, command: {cmd: task_answer, id: 1, choice: return}}
+  - {group: answer, preset: held_q, text: 還是放進去好了, expect: send, command: {cmd: task_answer, id: 1, choice: deliver}}
+  - {group: answer, preset: held_q, text: 照樣送出, expect: send, command: {cmd: task_answer, id: 1, choice: deliver}}
+  - {group: answer, preset: held_q, text: "放到 0.30, 0.05 的位置", expect: send, command: {cmd: task_answer, id: 1, choice: place_at, xy: [0.3, 0.05]}}
+  # ---- answers: shortage (question 2) ------------------------------------------------------------------
+  - {group: answer, preset: shortage_q, text: 換成黃色, expect: send, command: {cmd: task_answer, id: 2, choice: substitute, color: yellow}}
+  - {group: answer, preset: shortage_q, text: 用黃的代替, expect: send, command: {cmd: task_answer, id: 2, choice: substitute, color: yellow}}
+  - {group: answer, preset: shortage_q, text: 那就少一顆吧, expect: send, command: {cmd: task_answer, id: 2, choice: reduce}}
+  - {group: answer, preset: shortage_q, text: 等一下會補料, expect: send, command: {cmd: task_answer, id: 2, choice: wait}}
+  - {group: answer, preset: shortage_q, text: 換成紫色, expect: no_send}
+  - {group: answer, preset: red3_d1, text: 放回去, expect: no_send}
