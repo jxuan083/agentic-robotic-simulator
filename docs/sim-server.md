@@ -9,7 +9,7 @@
 | P1 | 實驗設定檔、控制協定、選單 | 已完成 |
 | P2 | Isaac 常駐伺服器 | 已完成 |
 | P3 | MuJoCo backend | 已完成，見 [mujoco-backend.md](mujoco-backend.md) |
-| P4 | 跨引擎比較 | 未開始 |
+| P4 | 跨引擎比較 | 已完成，見 [cross-engine-comparison.md](cross-engine-comparison.md) |
 
 選單的兩種執行方式：
 - **伺服器在跑**：把請求送給伺服器，不必重開 Isaac，場景約 1 秒內重建完成。

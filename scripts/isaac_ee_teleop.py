@@ -18,7 +18,9 @@ parser.add_argument("--scene", default="configs/scenes/lab_current_minimal.yaml"
 parser.add_argument("--teleop", default="configs/teleop.yaml")
 parser.add_argument("--script", default=None, help="YAML input script for automated runs")
 parser.add_argument("--log", default=None, help="CSV debug log path")
-parser.add_argument("--result", default=None, help="JSON summary path (script runs)")
+parser.add_argument("--result", default=None, help="JSON summary path (script / trajectory runs)")
+parser.add_argument("--trajectory", default=None, help="scripted EE target sequence (configs/trajectories/*.yaml); "
+                    "replaces keyboard / mouse input, ends the run with --exit_after_script")
 parser.add_argument("--exit_after_script", action="store_true")
 parser.add_argument("--max_time", type=float, default=0.0, help="exit after N wall seconds (0 = run until closed)")
 parser.add_argument("--profile", action="store_true", help="print per-section frame timing every 5 s")
@@ -49,7 +51,8 @@ def main():
     session = TeleopSession(SessionConfig(
         scene=args.scene, teleop=args.teleop, color_dr_config=args.color_dr_config, focus=args.focus,
         color_dr=args.color_dr, color_dr_seed=args.color_dr_seed, color_dr_log=args.color_dr_log, blocks=args.blocks,
-        script=args.script, log=args.log, result=args.result, profile=args.profile, device=args.device), log)
+        script=args.script, log=args.log, result=args.result, profile=args.profile, device=args.device,
+        trajectory=args.trajectory), log)
     t_start = time.monotonic()
     while app.is_running():
         now = time.monotonic()

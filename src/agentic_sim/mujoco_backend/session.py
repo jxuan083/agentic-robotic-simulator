@@ -53,6 +53,7 @@ class SessionConfig:
     script: str | None = None
     log: str | None = None
     result: str | None = None
+    trajectory: str | None = None      # scripted EE target sequence (cross-engine comparison); replaces all input
 
 
 class MjColorRandomizer:
@@ -184,6 +185,10 @@ class MjSession:
             self.script = MjScript(load(cfg.script), self.keys, log)
         if self.script is not None:
             self.script.rebind(self, viewer)
+        self.traj = None
+        if cfg.trajectory:
+            from agentic_sim.teleop.trajectory import make_driver
+            self.traj = make_driver(cfg.trajectory, self.ctrl)
         log(f"MuJoCo {mujoco.__version__}, menagerie SO-101 @{self.sc.robot_cfg['model']['menagerie_commit'][:7]}; "
             f"physics dt {self.m.opt.timestep:.5f} s x {self.substeps} per control frame; provisional scene fields: "
             f"{', '.join(provisional_fields(self.scene_cfg))}")
@@ -295,7 +300,7 @@ class MjSession:
 
     @property
     def script_done(self) -> bool:
-        return self.script is not None and self.script.done
+        return (self.script is not None and self.script.done) or (self.traj is not None and self.traj.done(self.t_sim))
 
     def focused(self) -> bool:
         if self.script is not None and self.script.focus_override is not None:
@@ -353,6 +358,11 @@ class MjSession:
             handle.cancel()
         else:
             t0 = time.perf_counter()
+            if self.traj is not None:  # comparison run: the trajectory is the only input
+                keys.clear()
+                panel.cancel()
+                handle.cancel()
+                self.traj.apply(self.t_sim)
             lin, yaw, grip = keys.directions()
             ctrl.step_velocity(lin, yaw, dt, "keyboard")
             ctrl.step_gripper(grip, dt, "keyboard")
@@ -446,6 +456,20 @@ class MjSession:
         self.frames += 1
         return not self.script_done
 
+    def block_in_placement(self) -> bool:
+        return bool(block_in_tray(self.last_frame["block"], self.placement, self.sc.edge))
+
+    def _write_trajectory_result(self, summary) -> dict:
+        from agentic_sim.teleop.trajectory import trajectory_result
+        res = trajectory_result("mujoco", self, summary, self.block_in_placement())
+        res["mujoco"] = mujoco.__version__
+        os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
+        with open(self.cfg.result, "w") as f:
+            json.dump(res, f, indent=2)
+        self.log(f"wrote {self.cfg.result}: trajectory {res['trajectory']}, block in placement "
+                 f"{res['block_in_placement']}, rejected frames {res['rejected_frames']}")
+        return {"result": self.cfg.result}
+
     # ---- reporting ------------------------------------------------------------------------
     def state(self) -> dict:
         s = self.ctrl.state
@@ -483,6 +507,8 @@ class MjSession:
         if self.cfg.log or self.cfg.result:
             self.log("metrics: " + json.dumps(summary))
         out = {"metrics": summary}
+        if self.traj is not None and self.cfg.result:
+            out.update(self._write_trajectory_result(summary))
         if self.script is not None and self.cfg.result:
             os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
             passed = sum(x["ok"] for x in self.script.results)

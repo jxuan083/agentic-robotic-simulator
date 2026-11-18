@@ -70,6 +70,7 @@ class SessionConfig:
     color_dr_log: str | None = None
     blocks: int | None = None          # number of blocks (default: the scene's block.count)
     script: str | None = None          # acceptance script (injected input events)
+    trajectory: str | None = None      # scripted EE target sequence (cross-engine comparison); replaces all input
     log: str | None = None             # per-frame CSV
     result: str | None = None          # result JSON (script runs)
     profile: bool = False
@@ -146,6 +147,10 @@ class TeleopSession:
             from agentic_sim.isaac.scripted_input import ScriptedInput
             self.script = ScriptedInput(load(cfg.script), self.panel, log, handle=self.handle, set_camera=set_camera)
 
+        self.traj = None
+        if cfg.trajectory:
+            from agentic_sim.teleop.trajectory import make_driver
+            self.traj = make_driver(cfg.trajectory, self.ctrl)
         log(f"asset: Sim-to-Real-SO-101-Workshop@{WORKSHOP_COMMIT}; provisional scene fields: "
             f"{', '.join(provisional_fields(scene_cfg))}")
         log(f"EE offset in gripper link (provisional): {self.chain.ee_offset.tolist()}; "
@@ -261,7 +266,7 @@ class TeleopSession:
 
     @property
     def script_done(self) -> bool:
-        return self.script is not None and self.script.done
+        return (self.script is not None and self.script.done) or (self.traj is not None and self.traj.done(self.t_sim))
 
     # ---- one control frame --------------------------------------------------------------
     def step(self) -> bool:
@@ -321,6 +326,11 @@ class TeleopSession:
             handle.cancel()
             sim.render()
         else:
+            if self.traj is not None:  # comparison run: the trajectory is the only input
+                kb.clear()
+                panel.cancel()
+                handle.cancel()
+                self.traj.apply(self.t_sim)
             lin, yaw, grip = kb.directions()
             ctrl.step_velocity(lin, yaw, dt, "keyboard")
             ctrl.step_gripper(grip, dt, "keyboard")
@@ -493,6 +503,16 @@ class TeleopSession:
         if self.cfg.log or self.cfg.result:
             self.log("metrics: " + json.dumps(summary))
         out = {"metrics": summary}
+        if self.traj is not None and self.cfg.result:
+            from agentic_sim.teleop.trajectory import trajectory_result
+            res = trajectory_result("isaac", self, summary,
+                                    block_in_tray(self.last_frame["block"], self.h.trays["placement_beige"], self.edge))
+            os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
+            with open(self.cfg.result, "w") as f:
+                json.dump(res, f, indent=2)
+            self.log(f"wrote {self.cfg.result}: trajectory {res['trajectory']}, block in placement "
+                     f"{res['block_in_placement']}, rejected frames {res['rejected_frames']}")
+            out["result"] = self.cfg.result
         if self.script is not None and self.cfg.result:
             os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
             passed = sum(r["ok"] for r in self.script.results)

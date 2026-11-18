@@ -129,3 +129,43 @@ def test_check_that_raises_is_a_fail_not_a_crash():
     for _ in range(3):
         s.step({"dr": None})
     assert s.done and [r["ok"] for r in s.results] == [False, True] and "TypeError" in s.results[0]["error"]
+
+
+def test_trajectory_sampling_and_driver():
+    from agentic_sim.kinematics import So101Chain
+    from agentic_sim.teleop.ee_target import load_controller
+    from agentic_sim.teleop.trajectory import CommandReplay, Trajectory, TrajectoryDriver
+    tr = Trajectory({"start": {"pos": [0.15, 0, 0.09], "gripper": 0.52},
+                     "segments": [{"t": 1.0, "label": "a"}, {"t": 2.0, "pos": [0.2, 0.05, 0.09], "yaw": -0.5,
+                                                             "label": "b"}, {"t": 1.0, "gripper": -0.1745}]}, "x")
+    assert tr.duration == 4.0 and tr.phase(0.5) == "a" and tr.phase(2.0) == "b"
+    p, yaw, g = tr.sample(2.0)                                     # halfway through the move: smoothstep = 0.5
+    assert np.allclose(p, [0.175, 0.025, 0.09]) and abs(yaw + 0.25) < 1e-9 and g == 0.52
+    assert np.allclose(tr.sample(9.0)[0], [0.2, 0.05, 0.09]) and tr.sample(9.0)[2] == -0.1745
+    chain = So101Chain.from_dict(load("configs/so101_chain.yaml"))
+    ctrl = load_controller(chain, load("configs/teleop.yaml"), base_pos=(0, 0, -0.0301))
+    d = TrajectoryDriver(tr, ctrl)
+    t, rows = 0.0, []
+    while not d.done(t):
+        d.apply(t)
+        ctrl.joint_command(1 / 60)
+        rows.append((t + 1 / 60, *ctrl.state.pos, ctrl.state.yaw_offset, ctrl.state.gripper, *ctrl.state.q_cmd))
+        t += 1 / 60
+    assert d.rejected_frames == 0 and np.allclose(ctrl.state.pos, [0.2, 0.05, 0.09])
+    # replay the recorded commands: identical, frame by frame
+    import csv
+    import tempfile
+    from agentic_sim.kinematics import ARM_JOINTS
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["t_sim", "tx", "ty", "tz", "yaw_off", "grip_cmd", *[f"qcmd_{j}" for j in ARM_JOINTS]])
+        w.writerows([[round(r[0], 4), *r[1:]] for r in rows])
+    ctrl2 = load_controller(So101Chain.from_dict(load("configs/so101_chain.yaml")), load("configs/teleop.yaml"),
+                            base_pos=(0, 0, -0.0301))
+    rp, out, t = CommandReplay(f.name, ctrl2), [], 0.0
+    while not rp.done(t):
+        rp.apply(t)
+        ctrl2.joint_command(1 / 60)
+        out.append(ctrl2.state.q_cmd.copy())
+        t += 1 / 60
+    assert len(out) == len(rows) and np.allclose(np.array(out), np.array([r[6:] for r in rows]))

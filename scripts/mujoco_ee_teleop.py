@@ -27,7 +27,9 @@ parser.add_argument("--scene", default="configs/scenes/lab_current_minimal.yaml"
 parser.add_argument("--teleop", default="configs/teleop.yaml")
 parser.add_argument("--script", default=None, help="YAML input script for automated runs")
 parser.add_argument("--log", default=None, help="CSV debug log path")
-parser.add_argument("--result", default=None, help="JSON summary path (script runs)")
+parser.add_argument("--result", default=None, help="JSON summary path (script / trajectory runs)")
+parser.add_argument("--trajectory", default=None, help="scripted EE target sequence (configs/trajectories/*.yaml); "
+                    "replaces keyboard / mouse input, ends the run with --exit_after_script")
 parser.add_argument("--exit_after_script", action="store_true")
 parser.add_argument("--max_time", type=float, default=0.0, help="exit after N wall seconds (0 = run until closed)")
 parser.add_argument("--color_dr", action="store_true", help="enable colour domain randomization (default off)")
@@ -59,7 +61,8 @@ def main():
     session = MjSession(SessionConfig(
         scene=args.scene, teleop=args.teleop, color_dr_config=args.color_dr_config, color_dr=args.color_dr,
         color_dr_seed=args.color_dr_seed, color_dr_log=args.color_dr_log, blocks=args.blocks, script=args.script,
-        log=args.log, result=args.result), log, keys=keys, focused=focused, viewer=viewer)
+        log=args.log, result=args.result, trajectory=args.trajectory), log, keys=keys, focused=focused,
+        viewer=viewer)
     if viewer:
         viewer.attach(session, reset_camera=True)
     t_start = time.monotonic()
