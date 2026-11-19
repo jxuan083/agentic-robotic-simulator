@@ -60,6 +60,8 @@ def main(argv=None) -> int:
                 return {"queued": True}
 
             agent = ChatAgent(call, llm, cfg)
+            if st.get("question"):            # a table case assumes the user is looking at the open question
+                agent.q_shown = st["question"]["id"]
             t0 = time.monotonic()
             agent.handle(case["text"])
             rec = agent.transcript[-1]

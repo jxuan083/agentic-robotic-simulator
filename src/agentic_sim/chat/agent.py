@@ -8,8 +8,10 @@
 
 Before a command is sent the task state is read again: if the order revision or the open question changed while the
 model was thinking, the turn is planned again on the new state (once). An answer is bound to the question the user
-saw: if the open question is not the last one shown to the user (a new one came up before or while the model was
-thinking), nothing is sent and the new question is shown instead. Every command carries a request_id unique to the
+saw when the text arrived (`shown`, a snapshot of q_shown taken then; updates while the model thinks do not move it).
+If no question had been shown (None, e.g. a CLI that just connected), or the open question is another one (it changed
+before or while the model was thinking), nothing is sent and the open question is shown instead. The executor checks
+the id again when it applies the answer. Every command carries a request_id unique to the
 turn, so a transport retry is applied once; saying the same thing again is a new turn with a new id.
 
 Each turn's record says what happened: sent, or a reply (ask / reject / info / error), or a failure
@@ -39,7 +41,7 @@ class ChatAgent:
         self.events_seen = 0
         self.session = uuid.uuid4().hex[:8]
         self.turn = 0
-        self.q_shown = None        # id of the last question shown to the user (None: not known, e.g. no reports)
+        self.q_shown = None        # id of the last question shown to the user (None: none shown yet)
         self.log = log or (lambda m: None)
         self.clock = clock
 
@@ -85,19 +87,31 @@ class ChatAgent:
                 time.sleep(0.2)
 
     # ---- one user turn ---------------------------------------------------------------------------
-    def _new_question(self, st: dict) -> list:
+    def _new_question(self, st: dict, shown) -> list:
         q = st.get("question")
         if q:
             self.q_shown = q["id"]
-            return [f"問題已經換了，剛才那句沒有送出。{self.words.question(q)}"]
+            head = "這句沒有送出，請看目前的問題再回答。" if shown is None else "問題已經換了，剛才那句沒有送出。"
+            return [f"{head}{self.words.question(q)}"]
         return ["剛才的問題已經不需要回答了，這句沒有送出。"]
 
-    def handle(self, text: str) -> list:
+    def show_open_question(self) -> list:
+        """On connect: show the question the task is waiting on (its event came before this client's cursor)."""
+        q = self.state().get("question")
+        if not q:
+            return []
+        self.q_shown = q["id"]
+        return [f"目前待答的問題：{self.words.question(q)}"]
+
+    def handle(self, text: str, shown=...) -> list:
+        """One user turn. `shown`: the question id on screen when the text was received (default: q_shown now)."""
         text = text.strip()
         if not text:
             return []
+        if shown is ...:
+            shown = self.q_shown
         self.turn += 1
-        rec = {"turn": self.turn, "t": round(self.clock(), 3), "user": text, "attempts": []}
+        rec = {"turn": self.turn, "t": round(self.clock(), 3), "user": text, "shown": shown, "attempts": []}
         st = self.state()
         out = []
         for attempt in range(2):
@@ -124,17 +138,16 @@ class ChatAgent:
                     self.q_shown = st["question"]["id"]          # the reply showed the open question
                 out = [act.text]
                 break
-            if act.cmd == "task_answer" and self.q_shown is not None and self.q_shown != act.args["id"]:
-                a["action"], a["reply"], a["unseen_question"] = "say", "ask", {"shown": self.q_shown,
-                                                                               "open": act.args["id"]}
-                out = self._new_question(st)
+            if act.cmd == "task_answer" and shown != act.args["id"]:
+                a["action"], a["reply"], a["unseen_question"] = "say", "ask", {"shown": shown, "open": act.args["id"]}
+                out = self._new_question(st, shown)
                 break
             st2 = self.state()
             if self._key(st2) != self._key(st):     # the order or the question changed meanwhile
                 a["stale"] = {"was": self._key(st), "now": self._key(st2)}
                 if act.cmd == "task_answer" and self._key(st2)[1] != self._key(st)[1]:
                     a["action"], a["reply"] = "say", "ask"   # the user answered another question: ask again
-                    out = self._new_question(st2)
+                    out = self._new_question(st2, shown)
                     break
                 st = st2
                 if attempt == 0:

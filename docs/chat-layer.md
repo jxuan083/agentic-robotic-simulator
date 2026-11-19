@@ -72,7 +72,12 @@ uv run tools/chat.py --backend mujoco --load --block-colors red,red,red,blue,blu
 - 顏色只能是色票代號；**套用後**每個顏色最多 8 顆（追加也算，例如已有 7 紅時「再加兩紅」會被拒絕，帳本不變）。需求的顏色不在場景中時照送，但會提醒「系統會回報缺料」。
 - 伺服器也會檢查上限（`configs/task.yaml` 的 `order.max_per_color`），連同還沒套用的改單一起算；超過就回錯誤，不排入、revision 不變。
 - 回答必須對應目前有效的問題 ID，選項必須在該問題的選項內；換色要指定場景中有的顏色；放到指定位置要有座標。
-- **回答綁定使用者看到的問題**：聊天記住最後顯示給使用者的問題 ID。開著的問題不是那一題（在使用者說話前或模型思考期間換了新問題），就不送出，改為顯示新問題、等使用者重新回答；即使新問題也接受同一個選項（例如兩題都能「放回去」）也一樣。問題沒變時照常送出一次。
+- **回答綁定使用者看到的問題**：每句話綁定「收到這句話時畫面上已顯示的問題 ID」，模型思考期間的回報不會改寫這個綁定。以下情況都不送出，改為顯示目前有效的問題、等使用者重新回答：
+  - 當時還沒顯示任何問題，例如 CLI 剛連線。
+  - 開著的問題不是那一題（使用者說話前或模型思考期間換了新問題）。即使新問題也接受同一個選項（例如兩題都能「放回去」）也一樣。
+
+  問題沒變時照常送出一次。執行器套用回答時會再核對一次問題 ID。
+- **CLI 連線時顯示待答問題**：回報從連線當下的事件開始，比連線早的問題不會再以事件送來，所以連線時先讀任務狀態，有待答問題就顯示「目前待答的問題：…」。語句表評估假設使用者正看著預設狀態裡的問題。
 - **送出前再讀一次狀態**：模型思考期間帳本 revision 或問題改變了，就用新狀態重新判斷一次；再變就請使用者重說。
 - **重送只生效一次**：每一句話送出的命令帶一個 `request_id`。傳輸失敗時用同一個 id 重送，伺服器只執行一次並回傳 `"duplicate": true`。使用者刻意再說一次相同的追加，是新的一句、新的 id，會再追加一次。
 - 模型服務沒有回應、回覆無法使用，或命令送不到模擬器時，這句話不送出，並告訴使用者。紀錄中分開標成服務失敗（`service`）、格式失敗（`format`）、傳輸失敗（`transport`）。伺服器拒絕命令（例如超過上限）時告訴使用者帳本沒有改變。
@@ -85,7 +90,7 @@ uv run tools/chat.py --backend mujoco --load --block-colors red,red,red,blue,blu
 |---|---|---|
 | 語句表（真模型） | 固定的繁中語句表：總數／追加、只改單一顏色、顏色同義詞、「兩」與「2」、歧義、無效要求、停止、進度、回答問題。評分見下表 | `uv run tools/chat_eval.py`（`configs/chat/utterances.yaml`）；換模型服務用 `--base-url`、`--model` |
 | 重播（固定回覆） | 持物放回、缺料換色、傳輸重送、刻意重複追加、思考期間狀態改變、模型服務中斷；核對 revision、問題 ID、最終交付 | `tests/test_chat.py` |
-| 完整對話（真模型＋GUI） | 原訂三紅 → 搬運第二顆紅塊時說「總共一紅兩藍就好」→ 回答「放回去」→ 帳本確認一紅兩藍；保存逐句輸入、實際命令、執行器事件、最終帳本與版本 | `uv run tools/chat.py --backend <引擎> --script configs/chat/dialogues/hold_return.yaml` |
+| 完整對話（真模型＋GUI） | 原訂三紅 → 搬運第二顆紅塊時說「總共一紅兩藍就好」→ 回答「放回去」→ 帳本確認一紅兩藍；保存逐句輸入、實際命令、執行器事件、最終帳本與版本。`reconnect_hold` 在等待回答時重新連線聊天，`ambiguous_hold` 檢查歧義時帳本不動 | `tools/run_chat_dialogue.sh <引擎> hold_return\|reconnect_hold\|ambiguous_hold` |
 
 語句表的評分（`src/agentic_sim/chat/scoring.py`）。只有「正確」開頭的才算通過：
 
@@ -160,6 +165,20 @@ uv run tools/chat.py --backend mujoco --load --block-colors red,red,red,blue,blu
 - 完整對話 `hold_return`：Isaac、MuJoCo 各 1 次，5/5 通過，送出的命令與修正前相同，最終帳本紅 1、藍 2。
 - #5 的 6 個任務場景在兩個引擎重跑：12/12 全部通過（Isaac、MuJoCo 各 6 個）。
 
+### CLI 重新連線（2026-11-19，合併條件）
+
+執行器正在等問題時新開 CLI，回報從連線當下的事件開始，畫面上還沒有這個問題；原本 `q_shown` 為空時「放回去」仍會送出。
+
+| 情境 | 結果 | 驗證 |
+|---|---|---|
+| 已有問題，CLI 剛連線，問題還沒顯示就收到回答 | 不送出，顯示目前有效的問題 | `tests/test_chat.py`，用 `tools/chat.py` 的 `Repl` |
+| CLI 連線時顯示待答的問題 2，再回答 | 對 ID 2 送出一次；問題事件比連線早，不重複顯示 | 同上 |
+| 收到輸入時看到問題 1，模型思考期間回報換成也接受放回的問題 2 | 舊回答不送出，顯示問題 2；使用者重新回答後對 ID 2 送出一次 | 同上 |
+| 真模型＋GUI：等待回答時聊天重新連線（`reconnect_hold`） | 連線時顯示問題 1，「放回去」送出一次，最終紅 1、藍 2 | Isaac、MuJoCo 各 1 次，5/5 |
+| 互動 CLI：任務停在問題 1 時新開 `tools/chat.py`，從標準輸入回答 | 先顯示「目前待答的問題」，執行器只收到一次 `answer {id: 1, return}`，完成 | Isaac 1 次 |
+
+回歸：`hold_return` 5/5、`ambiguous_hold` 6/6（Isaac、MuJoCo 各 1 次），測試 113/113。
+
 ## 模型服務：BF16 與 Q4_K_M（5090 上篩選，2026-11-19）
 
 為了找出能放到實機執行端（GPU 記憶體較小）的配置，在同一張 5090 上比較兩套模型服務。兩套用同一份程式、提示詞、JSON schema、溫度 0、思考關閉、單一請求、context 8192；推論引擎和精度同時不同，所以差異不能各自歸因。
@@ -207,7 +226,7 @@ CHAT_ARGS="--base-url http://127.0.0.1:8001/v1 --model Qwen3.5-9B-Q4_K_M" tools/
 | `src/agentic_sim/chat/zh.py` | 繁中模板：顏色、數量、問題、事件回報、進度 |
 | `configs/chat.yaml` | 模型服務設定、顏色的中文名稱與同義詞 |
 | `configs/chat/utterances.yaml` | 語句表 |
-| `configs/chat/dialogues/hold_return.yaml`、`ambiguous_hold.yaml` | 完整對話驗收腳本（持物放回、歧義不改帳本） |
+| `configs/chat/dialogues/hold_return.yaml`、`reconnect_hold.yaml`、`ambiguous_hold.yaml` | 完整對話驗收腳本（持物放回、等待回答時重新連線、歧義不改帳本） |
 | `docker/vllm/serve.sh` | 模型服務（BF16，vLLM） |
 | `docker/llamacpp/serve.sh` | 模型服務（Q4_K_M，llama.cpp） |
 | `tools/gpu_mem_log.sh` | 整卡記憶體取樣（比較模型服務用） |

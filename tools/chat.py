@@ -94,6 +94,36 @@ def versions(llm, call) -> dict:
     return out
 
 
+class Repl:
+    """Interactive session: reports are polled on a second connection and printed; the question id on screen when a
+    line arrives is the one its answer is bound to.
+
+      repl.connect()            # report cursor, then show a question that is already open
+      repl.pump()               # background thread: print new reports; the agent learns which question is on screen
+      repl.turn(text, shown)    # shown = agent.q_shown read when the line arrived
+    """
+
+    def __init__(self, agent: ChatAgent, reporter: ChatAgent, poll, say):
+        self.agent, self.reporter, self.poll, self.say = agent, reporter, poll, say
+        self.copied = None
+
+    def connect(self):
+        self.reporter.events_seen = self.poll("task_events").get("next", 0)   # later questions arrive as events
+        for line in self.agent.show_open_question():                         # its event was before the cursor
+            self.say(f"[系統] {line}")
+        self.reporter.q_shown = self.copied = self.agent.q_shown
+
+    def pump(self):
+        for line in self.reporter.poll_reports():
+            self.say(f"[系統] {line}")
+        if self.reporter.q_shown != self.copied:          # printed above: the user has now seen it
+            self.agent.q_shown = self.copied = self.reporter.q_shown
+
+    def turn(self, text: str, shown):
+        for line in self.agent.handle(text, shown=shown):
+            self.say(line)
+
+
 def run_script(agent: ChatAgent, call, spec: dict, out_dir: str, say) -> dict:
     os.makedirs(out_dir, exist_ok=True)
     seen_events: list = []
@@ -102,6 +132,7 @@ def run_script(agent: ChatAgent, call, spec: dict, out_dir: str, say) -> dict:
     log = []
 
     def pump():
+        nonlocal agent
         for line in agent.poll_reports():
             say(f"[系統] {line}")
             log.append({"t": round(time.monotonic() - t0, 3), "who": "system", "text": line})
@@ -122,6 +153,17 @@ def run_script(agent: ChatAgent, call, spec: dict, out_dir: str, say) -> dict:
             while time.monotonic() < end:
                 pump()
                 time.sleep(0.05)
+        if turn.get("reconnect"):     # a new CLI connects: report cursor now, no question shown yet, fresh history
+            new = ChatAgent(call, agent.llm, agent.cfg, log=agent.log)
+            new.transcript = agent.transcript
+            new.events_seen = call("task_events").get("next", 0)
+            agent = new
+            say("（聊天重新連線）")
+            log.append({"t": round(time.monotonic() - t0, 3), "who": "system", "text": "reconnect"})
+            agent.transcript.append({"reconnect": True, "events_from": agent.events_seen})
+            for line in agent.show_open_question():
+                say(f"[系統] {line}")
+                log.append({"t": round(time.monotonic() - t0, 3), "who": "system", "text": line})
         if "say" in turn:
             say(f"> {turn['say']}")
             log.append({"t": round(time.monotonic() - t0, 3), "who": "user", "text": turn["say"]})
@@ -216,15 +258,13 @@ def main(argv=None) -> int:
         stop = threading.Event()
         poll = Link(a.backend, "chat-reports")
         reporter = ChatAgent(poll, llm, cfg)
-        reporter.events_seen = poll("task_events").get("next", 0)
+        repl = Repl(agent, reporter, poll, say)
+        repl.connect()
 
         def loop():
             while not stop.is_set():
                 try:
-                    for line in reporter.poll_reports():
-                        say(f"[系統] {line}")
-                    if reporter.q_shown is not None:
-                        agent.q_shown = reporter.q_shown      # the question the user has seen
+                    repl.pump()
                 except (RemoteError, ConnectionError, OSError):
                     pass
                 stop.wait(float(cfg.get("poll_s", 0.25)))
@@ -233,13 +273,13 @@ def main(argv=None) -> int:
         while True:
             try:
                 text = input("> ")
+                shown = agent.q_shown          # bound when the text arrives; later reports do not move it
             except (EOFError, KeyboardInterrupt):
                 break
             if text.strip() in ("exit", "quit", "離開"):
                 break
             try:
-                for line in agent.handle(text):
-                    say(line)
+                repl.turn(text, shown)
             except RemoteError as e:
                 say(f"錯誤：{e}")
         stop.set()

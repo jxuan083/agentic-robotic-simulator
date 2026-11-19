@@ -317,6 +317,89 @@ def test_answer_to_a_question_still_open_is_sent_once():
     assert [(s["cmd"], s["id"], s["choice"]) for s in srv.sent] == [("task_answer", 1, "return")]
 
 
+# ---- CLI reconnect: the real Repl of tools/chat.py --------------------------------------------------------
+def _chat_cli():
+    import importlib.util
+    if "chat_cli" not in sys.modules:
+        spec = importlib.util.spec_from_file_location("chat_cli", os.path.join(ROOT, "tools", "chat.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["chat_cli"] = mod
+        spec.loader.exec_module(mod)
+    return sys.modules["chat_cli"]
+
+
+class EventServer(StubServer):
+    """StubServer with an event log; events before a client's cursor are history it never receives."""
+    def __init__(self, st, events=()):
+        super().__init__(st)
+        self.events = [dict(e, i=i, t=0.0, rev=2) for i, e in enumerate(events)]
+
+    def ask(self, qid):                      # the executor opens question qid
+        self.st = _held_state(qid)
+        self.events.append({"kind": "question", "qkind": "held_item", "id": qid, "i": len(self.events), "t": 0.0,
+                            "rev": 2, **{k: v for k, v in HELD.items() if k != "kind"}})
+
+    def __call__(self, cmd, request_id=None, **args):
+        if cmd == "task_events":
+            since = args.get("since", len(self.events))
+            return {"next": len(self.events), "events": self.events[since:]}
+        return super().__call__(cmd, request_id=request_id, **args)
+
+
+def _repl(srv, llm):
+    shown_log = []
+    agent, reporter = ChatAgent(srv, llm, CFG), ChatAgent(srv, ReplayLLM([]), CFG)
+    return _chat_cli().Repl(agent, reporter, srv, shown_log.append), agent, shown_log
+
+
+def test_cli_reconnect_answer_before_the_question_is_shown_is_not_sent():
+    srv = EventServer(_held_state(1))
+    srv.ask(2)                                                      # question 2 is open before the CLI connects
+    repl, agent, screen = _repl(srv, ReplayLLM([I("answer", question_id=2, choice="return")] * 2))
+    repl.turn("放回去", shown=agent.q_shown)                         # arrived before anything was shown
+    assert srv.sent == [] and "沒有送出" in screen[-1] and "問題 2" in screen[-1]
+    repl.connect()                                                  # the open question is shown on connect
+    assert "目前待答的問題" in screen[-1] and "問題 2" in screen[-1]
+    repl.pump()
+    assert len(screen) == 2                                         # its event is history: not shown twice
+
+
+def test_cli_reconnect_shows_the_open_question_then_one_answer_is_sent():
+    srv = EventServer(_held_state(1))
+    srv.ask(2)
+    repl, agent, screen = _repl(srv, ReplayLLM([I("answer", question_id=2, choice="return")]))
+    repl.connect()
+    assert screen == [f"[系統] 目前待答的問題：{W.question(dict(HELD, id=2))}"]
+    repl.turn("放回去", shown=agent.q_shown)
+    repl.pump()
+    assert [(s["cmd"], s["id"], s["choice"]) for s in srv.sent] == [("task_answer", 2, "return")]
+    assert screen[-1] == agent.transcript[-1]["replies"][0]
+
+
+def test_cli_question_replaced_while_thinking_old_answer_not_sent():
+    srv = EventServer(_held_state(1))
+    srv.ask(1)
+    repl, agent, screen = _repl(srv, None)
+
+    class Background(ReplayLLM):            # while the model thinks, question 2 (also accepts return) is reported
+        def complete(self, messages, schema=None):
+            if srv.st["question"]["id"] == 1:
+                srv.ask(2)
+                repl.pump()                 # printed and copied to the agent during the turn
+            return super().complete(messages, schema)
+
+    agent.llm = Background([I("answer", question_id=1, choice="return"), I("answer", question_id=2, choice="return")])
+    repl.connect()
+    shown = agent.q_shown
+    assert shown == 1
+    repl.turn("放回去", shown=shown)
+    assert srv.sent == []
+    assert "問題 2" in screen[-2] and "問題已經換了" in screen[-1] and "問題 2" in screen[-1]
+    assert agent.transcript[-1]["shown"] == 1
+    repl.turn("放回去", shown=agent.q_shown)                         # the user saw question 2 and answers again
+    assert [(s["cmd"], s["id"]) for s in srv.sent] == [("task_answer", 2)]
+
+
 def test_set_keeps_an_order_that_arrives_first():
     """Order red 1 + blue 1. The chat reads it, then another source adds one red before "藍色改成兩顆" is applied:
     both changes are kept (red 2, blue 2)."""

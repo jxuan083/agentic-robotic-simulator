@@ -1,0 +1,25 @@
+# Acceptance dialogue (chat layer, CLI reconnect): as hold_return, but the chat reconnects while the executor waits on
+# the held-item question. The question's event is before the new client's cursor, so the CLI shows the open question
+# on connect; "put it back" is then sent once, to that question id. Same commands and final ledger as hold_return.
+name: reconnect_hold
+block_colors: [red, red, red, blue, blue, yellow]
+timeout_s: 300
+turns:
+  - say: 我要三顆紅色的積木
+  - wait: {skill: place, color: red, nth: 2, phase: transport}
+    say: 總共一紅兩藍就好
+  - wait: {question: held_item}
+    after_s: 1.0
+    reconnect: true
+  - after_s: 1.0
+    say: 放回去
+  - wait: {state: done}
+    say: 現在做到哪？
+expect:
+  commands:
+    - {cmd: task_order, mode: total, counts: {red: 3}}
+    - {cmd: task_order, mode: total, counts: {red: 1, blue: 2}}
+    - {cmd: task_answer, choice: return}
+  delivered: {red: 1, blue: 2}
+  target: {red: 1, blue: 2}
+  done: true
