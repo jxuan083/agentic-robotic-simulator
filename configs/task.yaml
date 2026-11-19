@@ -25,6 +25,8 @@ stop:
   arm_stopped_qd: 0.1       # rad/s; arm counts as stopped (stop latency measurement)
 retry:
   pick_attempts: 2          # per block, then the block is marked uncertain and skipped
+order:
+  max_per_color: 8          # blocks of one colour in an order; a larger order is refused, the ledger stays as it was
 shortage:
   recheck_s: 1.0            # "wait" answer: look at the storage tray again this often
 # Placement slots in the beige tray (mount frame, m). Spaced 7 cm so the open gripper fits between placed blocks

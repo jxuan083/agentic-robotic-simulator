@@ -1,0 +1,25 @@
+# Acceptance dialogue (chat layer): the order is 3 red; while the second red is being carried the user changes it to
+# "1 red, 2 blue in total"; the executor stops, keeps the red and asks; the user says "put it back"; the ledger ends
+# with 1 red + 2 blue verified. Lines wait on the live task state, so the change lands in the same skill phase.
+name: hold_return
+block_colors: [red, red, red, blue, blue, yellow]
+timeout_s: 300
+turns:
+  - say: 我要三顆紅色的積木
+  - wait: {skill: place, color: red, nth: 2, phase: transport}
+    say: 總共一紅兩藍就好
+  - wait: {question: held_item}
+    after_s: 1.0
+    say: 放回去
+  - wait: {skill: pick, color: blue, nth: 1}
+    say: 現在做到哪？
+  - wait: {state: done}
+    say: 現在做到哪？
+expect:
+  commands:
+    - {cmd: task_order, mode: total, counts: {red: 3}}
+    - {cmd: task_order, mode: total, counts: {red: 1, blue: 2}}
+    - {cmd: task_answer, choice: return}
+  delivered: {red: 1, blue: 2}
+  target: {red: 1, blue: 2}
+  done: true

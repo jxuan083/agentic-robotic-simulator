@@ -8,6 +8,7 @@
 - 本 repo：Isaac Sim 最小桌面場景與 keyboard／mouse EE 操作（issue #1），以注入事件的驗收腳本完成抓放、不可達、失焦、暫停、reset 驗收。2026-11-17 加入主畫面滑鼠操作、專注模式與顏色 DR（預設關閉）；使用者實際操作確認手感可接受（2026-11-17）。之後加入面板改版（顏色 DR 與 seed、積木數量 1–8，Reset 套用）與傾斜抓取（到達範圍從約 0.28 m 擴大到約 0.40 m，傾斜上限 provisional）。見 [isaac-ee-teleop.md](isaac-ee-teleop.md)。
 - 本 repo：實驗設定檔、選單、模擬伺服器控制協定與常駐 Isaac 伺服器（issue #3 的 P1、P2），見 [sim-server.md](sim-server.md)。MuJoCo backend（P3：同一份場景與控制器、和 Isaac 一致的鍵盤／滑鼠操作與操作面板、俯視圖、常駐伺服器）已完成，見 [mujoco-backend.md](mujoco-backend.md)；跨引擎比較（P4）已完成，見 [cross-engine-comparison.md](cross-engine-comparison.md)。
 - 本 repo：需求帳本與可取消的技能執行器（issue #5）：改單、持物詢問、多交取回、缺料詢問在 Isaac 與 MuJoCo 的 GUI 驗收都通過。只用模擬真值，抓取為腳本化技能，尚未接 LLM、感知與 ACT。見 [task-executor.md](task-executor.md)。
+- 本 repo：繁中命令列聊天層（issue #7）：自然語言下單、改單、回答問題與查詢進度，轉成任務執行器的結構化命令；模型 Qwen3.5-9B（本機 vLLM，可替換）。見 [chat-layer.md](chat-layer.md)。
 - 既有實機工作區（尚未移入本 repo）：雙臂 SO-101 實機遙操作、相機串流、馬達校正、影像／狀態記錄、DAgger 接管與資料保存程式可運作。
 
 ## 可沿用與待補介面
@@ -54,7 +55,7 @@
 | 托盤尺寸 | 到貨後量測內底、壁厚、盤緣高度、圓角 |
 | Controller | 型號與映射 |
 | Control Flow | 預留擴充，不是 ACT 基線的必要條件；接入時再取得對應程式與權重 |
-| Agent 模型服務 | 使用的 LLM 與部署方式 |
+| Agent 模型服務 | 聊天層的開發候選：Qwen3.5-9B，BF16（vLLM，`docker/vllm/serve.sh`）與 Q4_K_M（llama.cpp，`docker/llamacpp/serve.sh`）都可用，已在模擬端比較（見 [chat-layer.md](chat-layer.md)）。Q4 記憶體約 6 GiB；實機執行端與比賽平台待實測，語意比較還要補新語句 |
 | Leader adapter 通訊方式 | 同程序直接讀取或本機程序間通訊，於實作議題決定 |
 | 關節增益與重力下垂 | Isaac（Workshop 增益）靜止下垂 3–12 mm，MuJoCo（Menagerie 增益）< 0.5 mm，兩者都不是實機值。待實機量測各姿態的下垂與夾爪閉合角後再選定或調整，見 [cross-engine-comparison.md](cross-engine-comparison.md) |
 | 傾斜切換處的命令平滑度 | 共用控制器在開始／結束傾斜時關節命令會抖動（硬增益下 EE 最多約 9 mm）；等實機數據回來後一起處理，見 [cross-engine-comparison.md](cross-engine-comparison.md#觀察) |

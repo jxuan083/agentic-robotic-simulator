@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import copy
 
-MODES = ("total", "add")
+MODES = ("total", "add", "set")
 
 
 class Ledger:
@@ -61,21 +61,32 @@ class Ledger:
         self.events.append(e)
         return e
 
-    def set_order(self, counts: dict, mode: str, t: float) -> dict:
-        """mode 'total': the new complete order (colours left out are no longer wanted); 'add': added to the
-        current order. Starts a new revision; approvals of over-delivery belong to the old order and are dropped."""
+    @staticmethod
+    def compose(target: dict, counts: dict, mode: str) -> dict:
+        """The order after applying `counts` with `mode` to `target`:
+        'total' the new complete order (colours left out are no longer wanted); 'add' added to the current order;
+        'set' only the named colours change, to the given counts (0 removes the colour), the others are kept."""
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
         counts = {str(c): int(n) for c, n in (counts or {}).items()}
         if any(n < 0 for n in counts.values()):
             raise ValueError(f"negative count in {counts}")
         if mode == "total":
-            new = {c: n for c, n in counts.items() if n > 0}
-        else:
-            new = dict(self.target)
+            new = dict(counts)
+        elif mode == "add":
+            new = dict(target)
             for c, n in counts.items():
                 new[c] = new.get(c, 0) + n
-            new = {c: n for c, n in new.items() if n > 0}
+        else:
+            new = dict(target)
+            new.update(counts)
+        return {c: n for c, n in new.items() if n > 0}
+
+    def set_order(self, counts: dict, mode: str, t: float) -> dict:
+        """Apply an order (see compose). Starts a new revision; approvals of over-delivery belong to the old order
+        and are dropped."""
+        new = self.compose(self.target, counts, mode)
+        counts = {str(c): int(n) for c, n in (counts or {}).items()}
         self.revision += 1
         self.target = new
         self.accepted_extra = {}

@@ -1,0 +1,20 @@
+# Acceptance dialogue (chat layer): ambiguous changes leave the ledger alone. The order is 1 red + 2 blue; while the
+# arm works the user says "改成兩黃" (keep red and blue or not?) and "再來幾顆藍色" (how many?). Both must only ask
+# back: no command, the order stays at revision 1 and is delivered as ordered.
+name: ambiguous_hold
+block_colors: [red, red, blue, blue, yellow, yellow]
+timeout_s: 300
+turns:
+  - say: 我要一顆紅色和兩顆藍色
+  - wait: {skill: pick, color: red, nth: 1}
+    say: 改成兩黃
+  - say: 再來幾顆藍色
+  - wait: {state: done}
+    say: 現在做到哪？
+expect:
+  commands:
+    - {cmd: task_order, mode: total, counts: {red: 1, blue: 2}}
+  revision: 1
+  delivered: {red: 1, blue: 2}
+  target: {red: 1, blue: 2}
+  done: true

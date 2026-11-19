@@ -65,7 +65,27 @@ class TaskExecutor:
             self._event_log = open(event_log, "w")
 
     # ---- inputs (server / panel / scenario); applied at the next step ----------------------
+    @property
+    def max_per_color(self) -> int:
+        return int((self.cfg.get("order") or {}).get("max_per_color", 8))
+
+    def projected_target(self) -> dict:
+        """The order once every queued order is applied (queued answers are not included)."""
+        t = dict(self.ledger.target)
+        for item in list(self._inputs):
+            if item[0] == "order":
+                t = Ledger.compose(t, item[1], item[2])
+        return t
+
+    def _over_cap(self, target: dict) -> dict:
+        return {c: n for c, n in target.items() if n > self.max_per_color}
+
     def order(self, counts: dict, mode: str = "total"):
+        """Queue an order. Refused at once (ValueError, nothing queued) when the mode or a count is invalid or the
+        result would ask for more than max_per_color blocks of one colour."""
+        over = self._over_cap(Ledger.compose(self.projected_target(), counts, mode))
+        if over:
+            raise ValueError(f"at most {self.max_per_color} blocks per colour; this order would give {over}")
         self._inputs.append(("order", dict(counts), mode))
 
     def answer(self, qid: int, choice: str, **kw):
@@ -255,6 +275,11 @@ class TaskExecutor:
                 self._apply_answer(*item[1:])
 
     def _apply_order(self, counts, mode):
+        over = self._over_cap(Ledger.compose(self.ledger.target, counts, mode))
+        if over:   # checked again here: something else (a shortage answer) may have changed the order meanwhile
+            self.emit("order_rejected", mode=mode, counts=dict(counts),
+                      reason=f"at most {self.max_per_color} per colour: {over}")
+            return
         e = self.ledger.set_order(counts, mode, self.t)
         self._write(e)
         self.restock_wait = False
@@ -432,8 +457,11 @@ class TaskExecutor:
         return {"state": self.state, "revision": led.revision, "ledger": led.snapshot(),
                 "holding": None if self.holding is None else {"block": self.holding, "color": self.color(self.holding)},
                 "skill": None if sk is None else {"name": sk.name, "phase": sk.phase, "block": sk.params.get("block"),
-                                                  "purpose": sk.params.get("purpose")},
-                "question": self.question, "placement": self._counts_in("placement") if self.obs else {}}
+                                                  "purpose": sk.params.get("purpose"), "color": sk.params.get("color"),
+                                                  "nth": sk.params.get("nth")},
+                "question": self.question, "placement": self._counts_in("placement") if self.obs else {},
+                "storage": self._counts_in("storage") if self.obs else {},
+                "colors_in_scene": sorted(set(self.world.colors)), "events": len(self.events)}
 
     def panel_lines(self) -> list:
         """(text, kind) lines for the simulator panels; kind: text / dim / ask."""

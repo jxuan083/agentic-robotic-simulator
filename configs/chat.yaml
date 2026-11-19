@@ -1,0 +1,27 @@
+# Traditional Chinese chat layer (issue: chat layer on top of the #5 task executor).
+# The model only turns what the user types into a structured intent; the program checks it against the live ledger
+# before anything is sent, and every reply / report is rendered from fixed templates.
+llm:
+  # Any OpenAI-compatible chat completions endpoint can be used (base_url / model / api_key_env).
+  base_url: http://127.0.0.1:8000/v1
+  model: Qwen/Qwen3.5-9B          # development candidate (Apache-2.0); served by docker/vllm/serve.sh
+  api_key_env: null               # environment variable holding an API key (null: none, local server)
+  temperature: 0.0                # deterministic as far as the server allows
+  max_tokens: 400
+  timeout_s: 30
+  enable_thinking: false          # Qwen3.5 thinks by default; off for latency (chat_template_kwargs)
+  structured_output: json_schema  # response_format with the intent schema; null = parse plain JSON from the reply
+history_turns: 6                  # earlier user / assistant turns given to the model (for follow-ups to a question)
+send_retries: 2                   # transport retries of one request (same request_id: applied once)
+poll_s: 0.25                      # how often the chat CLI reads new executor events
+max_count: 8                      # largest count per colour in one order (scene holds at most 8 blocks)
+# Palette colour id -> Traditional Chinese name and the words users may use for it (configs/palettes/block_colors.yaml)
+colors:
+  red:         {zh: 紅色, words: [紅, 紅色, 紅的]}
+  orange:      {zh: 橘色, words: [橘, 橘色, 橙, 橙色, 橘的]}
+  yellow:      {zh: 黃色, words: [黃, 黃色, 黃的]}
+  light_green: {zh: 淺綠色, words: [淺綠, 淺綠色, 黃綠, 黃綠色, 草綠]}
+  dark_green:  {zh: 深綠色, words: [深綠, 深綠色, 墨綠]}
+  blue:        {zh: 藍色, words: [藍, 藍色, 藍的]}
+  cyan:        {zh: 青色, words: [青, 青色, 藍綠, 藍綠色]}   # 「水藍」 may mean light blue too: asked back
+  purple:      {zh: 紫色, words: [紫, 紫色, 紫的]}
