@@ -8,10 +8,13 @@
 
 Before a command is sent the task state is read again: if the order revision or the open question changed while the
 model was thinking, the turn is planned again on the new state (once). An answer is bound to the question the user
-saw when the text arrived (`shown`, a snapshot of q_shown taken then; updates while the model thinks do not move it).
-If no question had been shown (None, e.g. a CLI that just connected), or the open question is another one (it changed
-before or while the model was thinking), nothing is sent and the open question is shown instead. The executor checks
-the id again when it applies the answer. Every command carries a request_id unique to the
+saw (`shown`: the CLI samples q_shown when it starts reading the line, so a question printed while the user types
+does not move it). Every answer path (a full answer, or a follow-up that only asks for coordinates / a colour) is
+checked: if no question had been shown (None, e.g. a CLI that just connected) or the open question is another one
+(it changed before the line was read or while the model was thinking), nothing is sent, the full open question is
+shown, and the conversation history is dropped so a follow-up for the old question cannot complete the new one.
+q_shown only moves when a full question text is returned (or printed as a report). The executor checks the id again
+when it applies the answer. Every command carries a request_id unique to the
 turn, so a transport retry is applied once; saying the same thing again is a new turn with a new id.
 
 Each turn's record says what happened: sent, or a reply (ask / reject / info / error), or a failure
@@ -114,6 +117,7 @@ class ChatAgent:
         rec = {"turn": self.turn, "t": round(self.clock(), 3), "user": text, "shown": shown, "attempts": []}
         st = self.state()
         out = []
+        drop_context = False
         for attempt in range(2):
             try:
                 rep = self._ask_model(text, st)
@@ -133,14 +137,14 @@ class ChatAgent:
             a = {"state": self._key(st), "model": rep.model, "latency_s": round(rep.latency_s, 3),
                  "model_output": rep.data, "action": act.kind, "intent": act.intent, "reply": act.reply}
             rec["attempts"].append(a)
-            if act.kind != "send":
-                if st.get("question") and act.reply == "ask" and act.intent == "answer":
-                    self.q_shown = st["question"]["id"]          # the reply showed the open question
-                out = [act.text]
-                break
-            if act.cmd == "task_answer" and shown != act.args["id"]:
-                a["action"], a["reply"], a["unseen_question"] = "say", "ask", {"shown": shown, "open": act.args["id"]}
+            q = st.get("question")
+            if act.intent == "answer" and q and shown != q["id"]:     # any answer path, follow-ups included
+                a["action"], a["reply"], a["unseen_question"] = "say", "ask", {"shown": shown, "open": q["id"]}
                 out = self._new_question(st, shown)
+                drop_context = True
+                break
+            if act.kind != "send":
+                out = [act.text]
                 break
             st2 = self.state()
             if self._key(st2) != self._key(st):     # the order or the question changed meanwhile
@@ -148,6 +152,7 @@ class ChatAgent:
                 if act.cmd == "task_answer" and self._key(st2)[1] != self._key(st)[1]:
                     a["action"], a["reply"] = "say", "ask"   # the user answered another question: ask again
                     out = self._new_question(st2, shown)
+                    drop_context = True
                     break
                 st = st2
                 if attempt == 0:
@@ -172,7 +177,11 @@ class ChatAgent:
             break
         rec["replies"] = out
         self.transcript.append(rec)
-        self.history += [{"role": "user", "content": text}, {"role": "assistant", "content": " ".join(out)}]
+        if drop_context:      # the answer was for a question that is no longer the one on screen: forget it
+            rec["history_dropped"] = len(self.history) // 2
+            self.history = []
+        else:
+            self.history += [{"role": "user", "content": text}, {"role": "assistant", "content": " ".join(out)}]
         return out
 
     # ---- reports ------------------------------------------------------------------------------------

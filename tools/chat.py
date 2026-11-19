@@ -100,7 +100,7 @@ class Repl:
 
       repl.connect()            # report cursor, then show a question that is already open
       repl.pump()               # background thread: print new reports; the agent learns which question is on screen
-      repl.turn(text, shown)    # shown = agent.q_shown read when the line arrived
+      repl.run(read_line)       # input loop: the question on screen is sampled when reading a line starts
     """
 
     def __init__(self, agent: ChatAgent, reporter: ChatAgent, poll, say):
@@ -122,6 +122,22 @@ class Repl:
     def turn(self, text: str, shown):
         for line in self.agent.handle(text, shown=shown):
             self.say(line)
+
+    def run(self, read_line):
+        """read_line(prompt) -> str (raises EOFError / KeyboardInterrupt to end). The question id is sampled before
+        reading starts: a question printed while the user types does not become the one the line answers."""
+        while True:
+            shown = self.agent.q_shown
+            try:
+                text = read_line("> ")
+            except (EOFError, KeyboardInterrupt):
+                return
+            if text.strip() in ("exit", "quit", "離開"):
+                return
+            try:
+                self.turn(text, shown)
+            except RemoteError as e:
+                self.say(f"錯誤：{e}")
 
 
 def run_script(agent: ChatAgent, call, spec: dict, out_dir: str, say) -> dict:
@@ -270,18 +286,7 @@ def main(argv=None) -> int:
                 stop.wait(float(cfg.get("poll_s", 0.25)))
 
         threading.Thread(target=loop, daemon=True).start()
-        while True:
-            try:
-                text = input("> ")
-                shown = agent.q_shown          # bound when the text arrives; later reports do not move it
-            except (EOFError, KeyboardInterrupt):
-                break
-            if text.strip() in ("exit", "quit", "離開"):
-                break
-            try:
-                repl.turn(text, shown)
-            except RemoteError as e:
-                say(f"錯誤：{e}")
+        repl.run(input)
         stop.set()
         return 0
     except (RemoteError, ConnectionError, OSError, TimeoutError) as e:

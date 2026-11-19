@@ -334,10 +334,11 @@ class EventServer(StubServer):
         super().__init__(st)
         self.events = [dict(e, i=i, t=0.0, rev=2) for i, e in enumerate(events)]
 
-    def ask(self, qid):                      # the executor opens question qid
-        self.st = _held_state(qid)
-        self.events.append({"kind": "question", "qkind": "held_item", "id": qid, "i": len(self.events), "t": 0.0,
-                            "rev": 2, **{k: v for k, v in HELD.items() if k != "kind"}})
+    def ask(self, qid, state=None):          # the executor opens question qid (default: holding a red block)
+        self.st = (state or _held_state)(qid)
+        q = self.st["question"]
+        self.events.append({"kind": "question", "qkind": q["kind"], "i": len(self.events), "t": 0.0, "rev": 2,
+                            **{k: v for k, v in q.items() if k != "kind"}})
 
     def __call__(self, cmd, request_id=None, **args):
         if cmd == "task_events":
@@ -398,6 +399,106 @@ def test_cli_question_replaced_while_thinking_old_answer_not_sent():
     assert agent.transcript[-1]["shown"] == 1
     repl.turn("放回去", shown=agent.q_shown)                         # the user saw question 2 and answers again
     assert [(s["cmd"], s["id"]) for s in srv.sent] == [("task_answer", 2)]
+
+
+# ---- PR #8 review 2: binding sampled when reading a line starts; every answer path checked --------------------
+def _shortage_state(qid):
+    return dict(ST, state="waiting", ledger=dict(ST["ledger"], revision=2, target={"red": 2, "blue": 1},
+                                                 delivered={"red": 1, "blue": 1}, need={"red": 1}),
+                question={"id": qid, "kind": "shortage", "options": ["substitute", "reduce", "wait"],
+                          "delivered": {"red": 1, "blue": 1}, "missing": {"red": 1}, "available": {"blue": 1}})
+
+
+def _idle_state(qid=None):
+    return dict(_held_state(1), question=None)
+
+
+def _lines(*steps):
+    """read_line for Repl.run: each step is a text, or (callback run while the user types, text)."""
+    it = iter(steps)
+
+    def read_line(prompt):
+        step = next(it, None)
+        if step is None:
+            raise EOFError
+        if isinstance(step, tuple):
+            step[0]()
+            return step[1]
+        return step
+    return read_line
+
+
+def _answers(srv):
+    return [(s["id"], s["choice"], s.get("xy"), s.get("color")) for s in srv.sent if s["cmd"] == "task_answer"]
+
+
+def test_case_a_question_changes_while_typing():
+    srv = EventServer(_held_state(1))
+    srv.ask(1)
+    repl, agent, screen = _repl(srv, ReplayLLM([I("answer", question_id=2, choice="return")] * 2))
+    repl.connect()                                                      # question 1 on screen
+
+    def q2_while_typing():                  # question 2 (also accepts return) is reported before Enter
+        srv.ask(2)
+        repl.pump()
+
+    repl.run(_lines((q2_while_typing, "放回去"), "放回去"))
+    assert _answers(srv) == [(2, "return", None, None)]                   # only the second line, to question 2
+    assert "問題 1" in screen[0] and "問題 2" in screen[1]                 # connect, report while typing
+    assert "問題已經換了" in screen[2] and "手上的紅色積木" in screen[2] and "問題 2" in screen[2]
+    assert screen[3].startswith("好的")
+    assert agent.transcript[-2]["shown"] == 1 and agent.transcript[-1]["shown"] == 2
+
+
+def test_case_b_follow_up_for_coordinates_needs_the_question_shown_first():
+    srv = EventServer(_idle_state())
+    repl, agent, screen = _repl(srv, ReplayLLM([I("answer", question_id=2, choice="place_at")] * 2 +
+                                               [I("answer", question_id=2, choice="place_at", xy=[0.30, 0.05])]))
+    repl.connect()
+    assert screen == []
+    srv.ask(2)                                                          # opened, report not printed yet
+    repl.run(_lines("放到別處"))
+    assert srv.sent == [] and len(screen) == 1
+    assert "沒有送出" in screen[0] and "手上的紅色積木" in screen[0]
+    assert "放回原位、放到其他位置，還是照樣送出" in screen[0] and "問題 2" in screen[0]
+    repl.run(_lines("放到別處", "0.30 0.05"))
+    assert "要放到哪裡" in screen[1]
+    assert _answers(srv) == [(2, "place_at", [0.30, 0.05], None)]
+
+
+def test_case_c_follow_up_for_a_substitute_colour_needs_the_question_shown_first():
+    srv = EventServer(_idle_state())
+    repl, agent, screen = _repl(srv, ReplayLLM([I("answer", question_id=2, choice="substitute")] * 2 +
+                                               [I("answer", question_id=2, choice="substitute",
+                                                  substitute_color="blue")]))
+    repl.connect()
+    srv.ask(2, _shortage_state)
+    repl.run(_lines("換一個顏色"))
+    assert srv.sent == [] and "還缺 紅色 1" in screen[0] and "要換成其他顏色、減少數量，還是等補料" in screen[0]
+    repl.run(_lines("換一個顏色", "藍色"))
+    assert "要換成哪個顏色" in screen[1]
+    assert _answers(srv) == [(2, "substitute", None, "blue")]
+
+
+def test_case_d_question_changes_while_typing_the_coordinates():
+    srv = EventServer(_held_state(1))
+    srv.ask(1)
+    repl, agent, screen = _repl(srv, ReplayLLM([I("answer", question_id=1, choice="place_at"),
+                                               I("answer", question_id=2, choice="place_at", xy=[0.30, 0.05]),
+                                               I("answer", question_id=2, choice="place_at"),
+                                               I("answer", question_id=2, choice="place_at", xy=[0.25, 0.0])]))
+    repl.connect()
+
+    def q2_while_typing():
+        srv.ask(2)
+        repl.pump()
+
+    repl.run(_lines("放到別處", (q2_while_typing, "0.30 0.05")))
+    assert srv.sent == []                                               # neither question 1 nor question 2
+    assert "要放到哪裡" in screen[1] and "問題已經換了" in screen[-1] and "問題 2" in screen[-1]
+    assert agent.history == [] and agent.transcript[-1]["history_dropped"] == 1   # old follow-up forgotten
+    repl.run(_lines("放到別處", "0.25 0"))
+    assert _answers(srv) == [(2, "place_at", [0.25, 0.0], None)]
 
 
 def test_set_keeps_an_order_that_arrives_first():
