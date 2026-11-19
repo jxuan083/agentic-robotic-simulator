@@ -94,6 +94,7 @@ class Action:
     intent: str = ""
     reply: str = ""                    # for say: ask (asks back, waits for more) / reject (cannot do it) / info
                                        # (status, stop, no open question) / error (could not understand the model)
+    followup: str = ""                 # ask for a missing parameter of a chosen disposal: "xy" (place_at) / "color"
 
 
 def _items(intent: dict) -> dict:
@@ -190,14 +191,15 @@ def plan(intent: dict, st: dict, words, max_count: int, text: str = "") -> Actio
         if choice == "substitute":
             c = intent.get("substitute_color")
             if not c:
-                return ask("要換成哪個顏色？")
+                return Action("say", "要換成哪個顏色？", intent=k, reply="ask", followup="color")
             if c not in scene:
                 return rej(f"場景中沒有{words.color(c)}積木，請換別的顏色。")
             args["color"] = c
         if choice == "place_at":
             xy = intent.get("xy")
             if not xy or len(xy) != 2:
-                return ask("要放到哪裡？請給桌面座標（公尺），例如 0.30 0.05。")
+                return Action("say", "要放到哪裡？請給桌面座標（公尺），例如 0.30 0.05。", intent=k, reply="ask",
+                              followup="xy")
             args["xy"] = [float(xy[0]), float(xy[1])]
         return Action("send", f"好的，{words.choice(q, choice, args.get('color'))}。", "task_answer", args, k)
     if k == "status":

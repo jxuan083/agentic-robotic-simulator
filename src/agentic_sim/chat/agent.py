@@ -14,7 +14,13 @@ checked: if no question had been shown (None, e.g. a CLI that just connected) or
 (it changed before the line was read or while the model was thinking), nothing is sent, the full open question is
 shown, and the conversation history is dropped so a follow-up for the old question cannot complete the new one.
 q_shown only moves when a full question text is returned (or printed as a report). The executor checks the id again
-when it applies the answer. Every command carries a request_id unique to the
+when it applies the answer.
+
+Follow-ups (asking for the coordinates / colour of a chosen disposal) are bound to the question that asked them
+(`followup`). Before a follow-up is shown the task state is read again; if the question changed, the follow-up is
+dropped and the full new question is shown instead. After any dropped answer the user must choose a disposal for the
+new question again (`need_choice`): an answer that only completes parameters (place_at with coordinates, substitute
+with a colour) is not sent until a disposal was chosen for that question in this chat. Every command carries a request_id unique to the
 turn, so a transport retry is applied once; saying the same thing again is a new turn with a new id.
 
 Each turn's record says what happened: sent, or a reply (ask / reject / info / error), or a failure
@@ -45,6 +51,8 @@ class ChatAgent:
         self.session = uuid.uuid4().hex[:8]
         self.turn = 0
         self.q_shown = None        # id of the last question shown to the user (None: none shown yet)
+        self.followup = None       # {"qid", "need"}: a follow-up for this question is on screen
+        self.need_choice = None    # question id whose disposal must be chosen again before parameters are accepted
         self.log = log or (lambda m: None)
         self.clock = clock
 
@@ -92,8 +100,9 @@ class ChatAgent:
     # ---- one user turn ---------------------------------------------------------------------------
     def _new_question(self, st: dict, shown) -> list:
         q = st.get("question")
+        self.followup = None
         if q:
-            self.q_shown = q["id"]
+            self.q_shown = self.need_choice = q["id"]
             head = "這句沒有送出，請看目前的問題再回答。" if shown is None else "問題已經換了，剛才那句沒有送出。"
             return [f"{head}{self.words.question(q)}"]
         return ["剛才的問題已經不需要回答了，這句沒有送出。"]
@@ -143,7 +152,29 @@ class ChatAgent:
                 out = self._new_question(st, shown)
                 drop_context = True
                 break
+            if act.intent == "answer" and q and act.cmd == "task_answer" and ("xy" in act.args or "color" in act.args):
+                if self.followup and self.followup["qid"] != q["id"]:        # completes an old question's follow-up
+                    a["action"], a["reply"], a["stale_followup"] = "say", "ask", dict(self.followup, open=q["id"])
+                    out = self._new_question(st, -1)
+                    drop_context = True
+                    break
+                if self.need_choice == q["id"]:                               # parameters before a new choice
+                    a["action"], a["reply"], a["choice_needed"] = "say", "ask", q["id"]
+                    out = [f"這句沒有送出。請先選擇這一題要怎麼處理：{self.words.question(q)}"]
+                    break
             if act.kind != "send":
+                if act.followup and q:
+                    st2 = self.state()                     # the question may have changed while the model thought
+                    q2 = st2.get("question")
+                    if not q2 or q2["id"] != q["id"]:
+                        a["action"], a["stale"] = "say", {"was": self._key(st), "now": self._key(st2)}
+                        a["followup_dropped"] = act.followup
+                        out = self._new_question(st2, -1)
+                        drop_context = True
+                        break
+                    self.followup, self.need_choice = {"qid": q["id"], "need": act.followup}, None
+                elif act.intent == "answer" and q and act.reply == "ask":
+                    self.followup = None
                 out = [act.text]
                 break
             st2 = self.state()
@@ -173,6 +204,8 @@ class ChatAgent:
                 out = [f"系統沒有接受這個命令，帳本沒有改變（{e}）。"]
                 break
             a["sent"] = {"cmd": act.cmd, "args": act.args, "request_id": rid, "response": res}
+            if act.cmd == "task_answer":
+                self.followup = self.need_choice = None
             out = [act.text]
             break
         rec["replies"] = out

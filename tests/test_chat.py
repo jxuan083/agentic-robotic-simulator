@@ -501,6 +501,111 @@ def test_case_d_question_changes_while_typing_the_coordinates():
     assert _answers(srv) == [(2, "place_at", [0.25, 0.0], None)]
 
 
+# ---- PR #8 review 3: a follow-up is bound to the question that asked it ------------------------------------
+def _held_yellow(qid):
+    return dict(_held_state(qid), holding={"block": 4, "color": "yellow"},
+                question=dict(HELD, id=qid, block=4, color="yellow"))
+
+
+def _short(color):
+    def st(qid):
+        return dict(_shortage_state(qid), question=dict(_shortage_state(qid)["question"], missing={color: 1},
+                                                         available={"blue": 1}))
+    return st
+
+
+class Hooked(ReplayLLM):
+    """Fixed replies; hook[n]() runs while the model is answering call n (before it returns)."""
+    def __init__(self, replies, hooks):
+        super().__init__(replies)
+        self.hooks, self.n = hooks, 0
+
+    def complete(self, messages, schema=None):
+        h = self.hooks.get(self.n)
+        self.n += 1
+        if h:
+            h()
+        return super().complete(messages, schema)
+
+
+def _check_sends(srv, n):
+    """read_line step that checks how many answers were sent before the user types the next line."""
+    def chk():
+        assert len(_answers(srv)) == n, _answers(srv)
+    return chk
+
+
+def _followup_switch(state1, state2, first, stale, choose, final, texts):
+    srv = EventServer(state1(1))
+    srv.ask(1, state1)
+    repl, agent, screen = _repl(srv, None)
+
+    def q2_while_thinking():
+        srv.ask(2, state2)
+        repl.pump()                                    # the full question 2 is printed before the model returns
+
+    agent.llm = Hooked([first, stale, choose, final], {0: q2_while_thinking})
+    repl.connect()
+    repl.run(_lines(texts[0], (_check_sends(srv, 0), texts[1]), (_check_sends(srv, 0), texts[2]),
+                    (_check_sends(srv, 0), texts[3])))
+    return srv, agent, screen
+
+
+def test_case_e_followup_for_coordinates_dropped_when_the_question_changes():
+    srv, agent, screen = _followup_switch(
+        _held_state, _held_yellow,
+        I("answer", question_id=1, choice="place_at"),
+        I("answer", question_id=2, choice="place_at", xy=[0.30, 0.05]),       # old coordinates, bound to question 2
+        I("answer", question_id=2, choice="place_at"),
+        I("answer", question_id=2, choice="place_at", xy=[0.25, 0.0]),
+        ["放到別處", "0.30 0.05", "放到別處", "0.25 0.00"])
+    assert _answers(srv) == [(2, "place_at", [0.25, 0.0], None)]
+    i2 = next(i for i, l in enumerate(screen) if "黃色" in l and "問題 2" in l)   # question 2 reported
+    first_turn = screen[i2 + 1]
+    assert "要放到哪裡" not in first_turn and "黃色" in first_turn and "問題 2" in first_turn
+    assert "請先選擇" in screen[i2 + 2] and "黃色" in screen[i2 + 2]               # old coordinates: 0 sent
+    assert "要放到哪裡" in screen[i2 + 3] and screen[i2 + 4].startswith("好的")
+    assert sum("要放到哪裡" in l for l in screen) == 1                              # only question 2's follow-up
+
+
+def test_case_f_followup_for_a_colour_dropped_when_the_question_changes():
+    srv, agent, screen = _followup_switch(
+        _short("red"), _short("yellow"),
+        I("answer", question_id=1, choice="substitute"),
+        I("answer", question_id=2, choice="substitute", substitute_color="blue"),
+        I("answer", question_id=2, choice="substitute"),
+        I("answer", question_id=2, choice="substitute", substitute_color="blue"),
+        ["換一個顏色", "藍色", "換一個顏色", "藍色"])
+    assert _answers(srv) == [(2, "substitute", None, "blue")]
+    i2 = next(i for i, l in enumerate(screen) if "還缺 黃色 1" in l and l.startswith("[系統]"))
+    assert "要換成哪個顏色" not in screen[i2 + 1] and "還缺 黃色 1" in screen[i2 + 1]
+    assert "請先選擇" in screen[i2 + 2]
+    assert "要換成哪個顏色" in screen[i2 + 3] and screen[i2 + 4].startswith("好的")
+    assert sum("要換成哪個顏色" in l for l in screen) == 1
+
+
+def test_followup_shown_then_question_changes_before_the_next_line():
+    srv = EventServer(_held_state(1))
+    srv.ask(1)
+    repl, agent, screen = _repl(srv, ReplayLLM([I("answer", question_id=1, choice="place_at"),
+                                               I("answer", question_id=2, choice="place_at", xy=[0.30, 0.05]),
+                                               I("answer", question_id=2, choice="place_at"),
+                                               I("answer", question_id=2, choice="place_at", xy=[0.25, 0.0])]))
+    repl.connect()
+
+    def q2_before_reading():                 # question 1's follow-up is on screen, then question 2 is reported
+        srv.ask(2, _held_yellow)
+        repl.pump()
+
+    repl.run(_lines("放到別處"))
+    assert "要放到哪裡" in screen[-1]
+    q2_before_reading()
+    repl.run(_lines("0.30 0.05"))                                   # shown is already 2 when this line starts
+    assert srv.sent == [] and "問題已經換了" in screen[-1] and "黃色" in screen[-1]
+    repl.run(_lines("放到別處", "0.25 0.00"))
+    assert _answers(srv) == [(2, "place_at", [0.25, 0.0], None)]
+
+
 def test_set_keeps_an_order_that_arrives_first():
     """Order red 1 + blue 1. The chat reads it, then another source adds one red before "藍色改成兩顆" is applied:
     both changes are kept (red 2, blue 2)."""
