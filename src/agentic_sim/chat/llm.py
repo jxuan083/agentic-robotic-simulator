@@ -19,7 +19,11 @@ from dataclasses import dataclass
 
 
 class LLMError(Exception):
-    pass
+    """The model's reply could not be used (no JSON object, unexpected response shape)."""
+
+
+class ServiceError(LLMError):
+    """The model service failed: not reachable, timed out, or answered with an HTTP error."""
 
 
 @dataclass
@@ -82,9 +86,9 @@ class OpenAICompatLLM:
             with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
-            raise LLMError(f"HTTP {e.code}: {e.read()[:300]!r}") from None
+            raise ServiceError(f"HTTP {e.code}: {e.read()[:300]!r}") from None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise LLMError(f"model service not reachable at {self.base_url}: {e}") from None
+            raise ServiceError(f"model service not reachable at {self.base_url}: {e}") from None
 
     def models(self) -> list:
         req = urllib.request.Request(self.base_url + "/models")
@@ -92,7 +96,7 @@ class OpenAICompatLLM:
             with urllib.request.urlopen(req, timeout=5) as r:
                 return [m["id"] for m in json.loads(r.read())["data"]]
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as e:
-            raise LLMError(f"model service not reachable at {self.base_url}: {e}") from None
+            raise ServiceError(f"model service not reachable at {self.base_url}: {e}") from None
 
     def complete(self, messages: list, schema: dict | None = None) -> LLMReply:
         body = {"model": self.model, "messages": messages, "temperature": self.temperature,

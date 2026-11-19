@@ -55,7 +55,7 @@
 | 托盤尺寸 | 到貨後量測內底、壁厚、盤緣高度、圓角 |
 | Controller | 型號與映射 |
 | Control Flow | 預留擴充，不是 ACT 基線的必要條件；接入時再取得對應程式與權重 |
-| Agent 模型服務 | 聊天層的開發候選已定：Qwen3.5-9B，本機 vLLM（`docker/vllm/serve.sh`），可替換。比賽現場用哪個模型、部署在哪台電腦，待確認 |
+| Agent 模型服務 | 聊天層的開發候選：Qwen3.5-9B，BF16（vLLM，`docker/vllm/serve.sh`）與 Q4_K_M（llama.cpp，`docker/llamacpp/serve.sh`）都可用，已在模擬端比較（見 [chat-layer.md](chat-layer.md)）。Q4 記憶體約 6 GiB；實機執行端與比賽平台待實測，語意比較還要補新語句 |
 | Leader adapter 通訊方式 | 同程序直接讀取或本機程序間通訊，於實作議題決定 |
 | 關節增益與重力下垂 | Isaac（Workshop 增益）靜止下垂 3–12 mm，MuJoCo（Menagerie 增益）< 0.5 mm，兩者都不是實機值。待實機量測各姿態的下垂與夾爪閉合角後再選定或調整，見 [cross-engine-comparison.md](cross-engine-comparison.md) |
 | 傾斜切換處的命令平滑度 | 共用控制器在開始／結束傾斜時關節命令會抖動（硬增益下 EE 最多約 9 mm）；等實機數據回來後一起處理，見 [cross-engine-comparison.md](cross-engine-comparison.md#觀察) |

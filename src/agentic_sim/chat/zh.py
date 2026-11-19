@@ -54,6 +54,8 @@ class Words:
         if k == "task_done":
             return (f"完成：放置盤有 {self.counts(e.get('placement'))}，帳本核對過的交付是 "
                     f"{self.counts(e['ledger']['delivered'])}。")
+        if k == "order_rejected":
+            return f"異常：需求沒有套用，帳本維持原樣（{e.get('reason', '')}）。"
         if k == "answer_rejected":
             return f"異常：回答沒有被接受（{e.get('reason', '')}）。"
         if k == "uncertain":

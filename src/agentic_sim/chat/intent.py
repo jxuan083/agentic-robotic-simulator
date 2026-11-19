@@ -92,6 +92,8 @@ class Action:
     cmd: str | None = None
     args: dict = field(default_factory=dict)
     intent: str = ""
+    reply: str = ""                    # for say: ask (asks back, waits for more) / reject (cannot do it) / info
+                                       # (status, stop, no open question) / error (could not understand the model)
 
 
 def _items(intent: dict) -> dict:
@@ -127,68 +129,82 @@ def ambiguity(text: str, intent: dict, st: dict, words) -> str | None:
 
 
 def plan(intent: dict, st: dict, words, max_count: int, text: str = "") -> Action:
+    from agentic_sim.task.ledger import Ledger
     k = intent.get("intent")
     reply = (intent.get("reply") or "").strip()[:200]
     led = st.get("ledger") or {}
     target = dict(led.get("target") or {})
     scene = set(st.get("colors_in_scene") or [])
     q = st.get("question")
+    ask = lambda t, i=k: Action("say", t, intent=i, reply="ask")          # noqa: E731
+    rej = lambda t, i=k: Action("say", t, intent=i, reply="reject")       # noqa: E731
+    info = lambda t, i=k: Action("say", t, intent=i, reply="info")        # noqa: E731
     if k not in INTENTS:
-        return Action("say", "抱歉，我沒有理解，請換個說法。", intent=str(k))
+        return Action("say", "抱歉，我沒有理解，請換個說法。", intent=str(k), reply="error")
     if k in ("order_total", "order_add", "order_set"):
-        ask = ambiguity(text, intent, st, words)
-        if ask:
-            return Action("say", ask, intent="clarify(guard)")
+        guard = ambiguity(text, intent, st, words)
+        if guard:
+            return ask(guard, "clarify(guard)")
         items = _items(intent)
         if not items:
-            return Action("say", reply or "要哪些顏色、各幾顆？", intent=k)
+            return ask(reply or "要哪些顏色、各幾顆？")
         if any(n < 0 or n > max_count for n in items.values()):
-            return Action("say", f"一個顏色最多 {max_count} 顆。", intent=k)
+            return rej(f"一個顏色最多 {max_count} 顆。")
         if k == "order_add":
             items = {c: n for c, n in items.items() if n > 0}
             if not items:
-                return Action("say", "要追加哪個顏色、幾顆？", intent=k)
-            args, text = {"counts": items, "mode": "add"}, f"好的，追加 {words.counts(items)}。"
-        elif k == "order_set":
-            new = dict(target)
-            new.update(items)
-            new = {c: n for c, n in new.items() if n > 0}
-            args, text = {"counts": new, "mode": "total"}, f"好的，需求改為 {words.counts(new)}。"
+                return ask("要追加哪個顏色、幾顆？")
+            mode, confirm = "add", f"好的，追加 {words.counts(items)}。"
+        elif k == "order_set":   # only the named colours: sent as mode set, so an order arriving first is kept
+            mode = "set"
         else:
-            new = {c: n for c, n in items.items() if n > 0}
-            args, text = {"counts": new, "mode": "total"}, f"好的，需求改為 {words.counts(new)}。"
-        missing = [c for c, n in args["counts"].items() if n > 0 and c not in scene]
+            items = {c: n for c, n in items.items() if n > 0}
+            mode = "total"
+        new = Ledger.compose(target, items, mode)
+        over = {c: n for c, n in new.items() if n > max_count}
+        if over:
+            c = next(iter(over))
+            return rej(f"一個顏色最多 {max_count} 顆：{words.color(c)}目前要 {target.get(c, 0)} 顆，"
+                       f"這樣會變成 {over[c]} 顆，需求沒有改。")
+        if mode != "add" and not new:
+            return ask("這樣需求就是空的了。要哪些顏色、各幾顆？")
+        if mode == "total":
+            confirm = f"好的，需求改為 {words.counts(new)}。"
+        elif mode == "set":   # only the change: the order it applies to may differ from what was read (reported later)
+            parts = [f"{words.color(c)}改為 {n} 顆" if n else f"不要{words.color(c)}" for c, n in items.items()]
+            confirm = f"好的，{'、'.join(parts)}，其他顏色不變。"
+        missing = [c for c, n in items.items() if n > 0 and c not in scene]
         if missing:
-            text += f"（場景中沒有{'、'.join(words.color(c) for c in missing)}積木，系統會回報缺料。）"
-        return Action("send", text, "task_order", args, k)
+            confirm += f"（場景中沒有{'、'.join(words.color(c) for c in missing)}積木，系統會回報缺料。）"
+        return Action("send", confirm, "task_order", {"counts": items, "mode": mode}, k)
     if k == "answer":
         if not q:
-            return Action("say", "目前沒有待回答的問題。", intent=k)
+            return info("目前沒有待回答的問題。")
         qid = intent.get("question_id")
         if qid is not None and int(qid) != int(q["id"]):
-            return Action("say", f"問題 {qid} 已經過期，目前的問題是：{words.question(q)}", intent=k)
+            return ask(f"問題 {qid} 已經過期，目前的問題是：{words.question(q)}")
         choice = intent.get("choice")
         if choice not in q["options"]:
-            return Action("say", "沒有這個選項。" + words.question(q), intent=k)
+            return ask("沒有這個選項。" + words.question(q))
         args = {"id": int(q["id"]), "choice": choice}
         if choice == "substitute":
             c = intent.get("substitute_color")
             if not c:
-                return Action("say", "要換成哪個顏色？", intent=k)
+                return ask("要換成哪個顏色？")
             if c not in scene:
-                return Action("say", f"場景中沒有{words.color(c)}積木，請換別的顏色。", intent=k)
+                return rej(f"場景中沒有{words.color(c)}積木，請換別的顏色。")
             args["color"] = c
         if choice == "place_at":
             xy = intent.get("xy")
             if not xy or len(xy) != 2:
-                return Action("say", "要放到哪裡？請給桌面座標（公尺），例如 0.30 0.05。", intent=k)
+                return ask("要放到哪裡？請給桌面座標（公尺），例如 0.30 0.05。")
             args["xy"] = [float(xy[0]), float(xy[1])]
         return Action("send", f"好的，{words.choice(q, choice, args.get('color'))}。", "task_answer", args, k)
     if k == "status":
-        return Action("say", words.status(st), intent=k)
+        return info(words.status(st))
     if k == "stop":
-        return Action("say", "聊天不負責停止手臂。要立刻停下請按模擬器面板的 Pause（或 P 鍵），"
-                             "要結束任務請執行 tools/task.py stop。", intent=k)
+        return info("聊天不負責停止手臂。要立刻停下請按模擬器面板的 Pause（或 P 鍵），"
+                    "要結束任務請執行 tools/task.py stop。")
     if k == "clarify":
-        return Action("say", reply or "可以再說清楚一點嗎？", intent=k)
-    return Action("say", reply or "這個要求我做不到。", intent=k)
+        return ask(reply or "可以再說清楚一點嗎？")
+    return rej(reply or "這個要求我做不到。")

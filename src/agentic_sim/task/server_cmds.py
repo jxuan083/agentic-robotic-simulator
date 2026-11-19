@@ -1,6 +1,9 @@
 """task_* protocol commands, shared by the Isaac and MuJoCo servers (mixed into their command handlers).
 
-  task_order  {counts: {red: 1, blue: 2}, mode: total|add, request_id?}   the first order hands the arm to the executor
+  task_order  {counts: {red: 1, blue: 2}, mode: total|add|set, request_id?}   the first order hands the arm to the
+              executor. total = the new complete order, add = added to it, set = only the named colours change
+              (others kept, also when another order arrives first). Refused (error, ledger unchanged) above
+              order.max_per_color blocks of one colour, counting orders still queued.
   task_answer {id, choice, color?, xy?, request_id?}                       reply to the open question
   task_state  {}                                              ledger, holding, skill / phase, question
   task_events {since?}                                        important executor events from index `since` on
@@ -18,7 +21,7 @@ from agentic_sim.task.ledger import MODES
 
 
 # events a client (chat layer) needs; phase / skill_start events stay on the simulator panel
-REPORT_EVENTS = ("order", "question", "question_dropped", "answer", "answer_rejected", "over_delivery", "verified",
+REPORT_EVENTS = ("order", "order_rejected", "question", "question_dropped", "answer", "answer_rejected", "over_delivery", "verified",
                  "uncertain", "dropped", "block_skipped", "task_done", "skill_done")
 
 
@@ -51,11 +54,17 @@ class TaskCommands:
         bad = {c: n for c, n in counts.items() if not isinstance(n, int) or isinstance(n, bool) or n < 0}
         if bad:
             raise ValueError(f"counts must be non-negative integers: {bad}")
-        if s.task is None:
+        started = s.task is None
+        if started:
             s.start_task()
         known = set(s.task.ex.world.colors)
         unknown = [c for c, n in counts.items() if n > 0 and c not in known]
-        s.task.ex.order(counts, mode)
+        try:
+            s.task.ex.order(counts, mode)
+        except ValueError:
+            if started:          # a refused first order does not take the arm away from the operator
+                s.stop_task()
+            raise
         out = {"queued": True, "mode": mode, "counts": counts, "colors_in_scene": sorted(known)}
         if unknown:
             out["note"] = f"no block of colour {unknown} in this scene: the executor will report a shortage"

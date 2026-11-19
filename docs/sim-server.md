@@ -139,7 +139,7 @@ uv run tools/sim.py --server up --backend mujoco
 | `get_state` | | EE、目標、關節、夾爪傾角、積木（`block` 是積木 0，`blocks` 是全部）、目前的場景設定 |
 | `run_acceptance` | `scenario` | 立即回應，進度從 `status` 查詢 |
 | `shutdown` | | 停止伺服器 |
-| `task_order` | `counts`（例如 `{"red": 1, "blue": 2}`）、`mode`（`total`／`add`，預設 `total`）、選填 `request_id` | 下需求或改單；第一次下單時任務執行器接手手臂。見 [task-executor.md](task-executor.md) |
+| `task_order` | `counts`（例如 `{"red": 1, "blue": 2}`）、`mode`（`total`／`add`／`set`，預設 `total`）、選填 `request_id` | 下需求或改單；第一次下單時任務執行器接手手臂。`set` 只改列出的顏色。套用後任一顏色超過 8 顆就回錯誤，帳本不變（第一次下單被拒時不接手手臂）。見 [task-executor.md](task-executor.md) |
 | `task_answer` | `id`、`choice`，選填 `color`、`xy`、`request_id` | 回答執行器提出的問題 |
 | `task_state` | | 帳本、手上物件、目前技能與階段、待回答的問題、來源盤與放置盤的顏色數量、停止延遲紀錄；還沒下單時回傳場景中的顏色 |
 | `task_events` | 選填 `since`（事件序號） | 從 `since` 起的重要事件（改單、問題、多交、核對、完成、異常），回傳下一個序號 `next`；聊天層用來主動回報 |

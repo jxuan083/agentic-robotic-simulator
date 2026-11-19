@@ -1,13 +1,14 @@
 # Fixed Traditional Chinese utterance table for the chat layer (run with the real model: tools/chat_eval.py).
 # Each case: a task state preset, what the user types, and what must happen:
 #   expect: send       a command must be sent, equal to `command` (cmd + args)
-#   expect: clarify    nothing is sent; the system asks back (ambiguous colour / count / place)
+#   expect: clarify    nothing is sent; the system asks back (ambiguous colour / count / place). `about` is what the
+#                      question must be about (count / keep / color / place), checked on the reply text
 #   expect: reject     nothing is sent; not a task the system can do
 #   expect: status     progress answered from the ledger (nothing sent)
 #   expect: stop       pointed to the stop controls (nothing sent)
 #   expect: no_send    any reply without a command (e.g. no open question, colour not on the table)
-# Scoring: correct command / correct ask-back / correct no-command / missed (should have sent) / mis-executed
-# (sent when it should not have, or sent a different command).
+# Scoring: agentic_sim/chat/scoring.py (correct, mis-sent, missed, wrong ask-back, wrong kind of reply, and service /
+# format / transport failures). "Change one colour" cases are sent as mode set (only the named colours change).
 presets:
   empty:          # no order yet
     active: false
@@ -58,25 +59,25 @@ cases:
   - {group: add, preset: red1_blue2, text: 多一顆紅的, expect: send, command: {cmd: task_order, mode: add, counts: {red: 1}}}
   - {group: add, preset: red1_blue2, text: 再來2個藍色, expect: send, command: {cmd: task_order, mode: add, counts: {blue: 2}}}
   # ---- change one colour (others kept) -----------------------------------------------------------------
-  - {group: set, preset: red1_blue2, text: 藍色改成三顆, expect: send, command: {cmd: task_order, mode: total, counts: {red: 1, blue: 3}}}
-  - {group: set, preset: red1_blue2, text: 紅的不要了, expect: send, command: {cmd: task_order, mode: total, counts: {blue: 2}}}
-  - {group: set, preset: red3_d1, text: 紅色只要兩顆就好, expect: send, command: {cmd: task_order, mode: total, counts: {red: 2}}}
-  - {group: set, preset: red1_blue2, text: 藍色改成一顆, expect: send, command: {cmd: task_order, mode: total, counts: {red: 1, blue: 1}}}
+  - {group: set, preset: red1_blue2, text: 藍色改成三顆, expect: send, command: {cmd: task_order, mode: set, counts: {blue: 3}}}
+  - {group: set, preset: red1_blue2, text: 紅的不要了, expect: send, command: {cmd: task_order, mode: set, counts: {red: 0}}}
+  - {group: set, preset: red3_d1, text: 紅色只要兩顆就好, expect: send, command: {cmd: task_order, mode: set, counts: {red: 2}}}
+  - {group: set, preset: red1_blue2, text: 藍色改成一顆, expect: send, command: {cmd: task_order, mode: set, counts: {blue: 1}}}
   # ---- colour words and numbers ------------------------------------------------------------------------
   - {group: words, preset: empty, text: 要三個紅的, expect: send, command: {cmd: task_order, mode: total, counts: {red: 3}}}
   - {group: words, preset: empty, text: 來一顆青色的, expect: send, command: {cmd: task_order, mode: total, counts: {cyan: 1}}}
-  - {group: ambiguous, preset: empty, text: 來一顆水藍色, expect: clarify}
+  - {group: ambiguous, preset: empty, text: 來一顆水藍色, expect: clarify, about: color}
   - {group: words, preset: empty, text: 我要二顆橙色, expect: send, command: {cmd: task_order, mode: total, counts: {orange: 2}}}
   - {group: words, preset: empty, text: 要一顆墨綠的, expect: send, command: {cmd: task_order, mode: total, counts: {dark_green: 1}}}
   - {group: words, preset: empty, text: 拿兩個藍色積木給我, expect: send, command: {cmd: task_order, mode: total, counts: {blue: 2}}}
   - {group: words, preset: empty, text: 我要 3 顆黃色, expect: send, command: {cmd: task_order, mode: total, counts: {yellow: 3}}}
   # ---- ambiguous: ask back -----------------------------------------------------------------------------
-  - {group: ambiguous, preset: red3_d1, text: 改成兩藍, expect: clarify}
-  - {group: ambiguous, preset: red1_blue2, text: 改成三黃, expect: clarify}
-  - {group: ambiguous, preset: empty, text: 我要綠色的, expect: clarify}
-  - {group: ambiguous, preset: red3_d1, text: 再來幾顆藍色, expect: clarify}
-  - {group: ambiguous, preset: empty, text: 幫我拿一些積木, expect: clarify}
-  - {group: ambiguous, preset: held_q, text: 放到旁邊, expect: clarify}
+  - {group: ambiguous, preset: red3_d1, text: 改成兩藍, expect: clarify, about: keep}
+  - {group: ambiguous, preset: red1_blue2, text: 改成三黃, expect: clarify, about: keep}
+  - {group: ambiguous, preset: empty, text: 我要綠色的, expect: clarify, about: color}
+  - {group: ambiguous, preset: red3_d1, text: 再來幾顆藍色, expect: clarify, about: count}
+  - {group: ambiguous, preset: empty, text: 幫我拿一些積木, expect: clarify, about: [color, count]}
+  - {group: ambiguous, preset: held_q, text: 放到旁邊, expect: clarify, about: place}
   # ---- not a task / not possible -----------------------------------------------------------------------
   - {group: invalid, preset: red3_d1, text: 手臂往左移五公分, expect: reject}
   - {group: invalid, preset: empty, text: 我要三顆粉紅色, expect: reject}

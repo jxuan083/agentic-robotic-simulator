@@ -80,7 +80,13 @@ def versions(llm, call) -> dict:
         with urllib.request.urlopen(root + "/version", timeout=3) as r:
             out["model_server"] = "vllm " + json.loads(r.read()).get("version", "?")
     except Exception:  # noqa: BLE001
-        out["model_server"] = "unknown"
+        try:   # llama.cpp server
+            with urllib.request.urlopen(root + "/props", timeout=3) as r:
+                p = json.loads(r.read())
+            out["model_server"] = f"llama.cpp {p.get('build_info', '?')}"
+            out["model_file"] = os.path.basename(p.get("model_path", ""))
+        except Exception:  # noqa: BLE001
+            out["model_server"] = "unknown"
     st = call("status")
     out["engine"] = st.get("backend")
     out["experiment"] = st.get("experiment")
@@ -135,6 +141,9 @@ def run_script(agent: ChatAgent, call, spec: dict, out_dir: str, say) -> dict:
     if "target" in exp:
         checks.append({"name": "final_target", "ok": led.get("target") == exp["target"], "expected": exp["target"],
                        "observed": led.get("target")})
+    if "revision" in exp:
+        checks.append({"name": "final_revision", "ok": led.get("revision") == exp["revision"],
+                       "expected": exp["revision"], "observed": led.get("revision")})
     if exp.get("done"):
         checks.append({"name": "done", "ok": final.get("state") == "done" and bool(led.get("done")),
                        "state": final.get("state")})
@@ -157,8 +166,14 @@ def main(argv=None) -> int:
     ap.add_argument("--block-colors", default=None, help="with --load: colour name per block, comma-separated")
     ap.add_argument("--script", default=None, help="dialogue YAML (configs/chat/dialogues/*.yaml)")
     ap.add_argument("--out", default=None, help="script mode: output directory (transcript, result)")
+    ap.add_argument("--base-url", default=None, help="model service URL (default: configs/chat.yaml llm.base_url)")
+    ap.add_argument("--model", default=None, help="served model name (default: configs/chat.yaml llm.model)")
     a = ap.parse_args(argv)
     cfg = load(a.config)
+    if a.base_url:
+        cfg["llm"]["base_url"] = a.base_url
+    if a.model:
+        cfg["llm"]["model"] = a.model
     llm = OpenAICompatLLM.from_cfg(cfg["llm"])
     try:
         llm.models()
@@ -208,6 +223,8 @@ def main(argv=None) -> int:
                 try:
                     for line in reporter.poll_reports():
                         say(f"[系統] {line}")
+                    if reporter.q_shown is not None:
+                        agent.q_shown = reporter.q_shown      # the question the user has seen
                 except (RemoteError, ConnectionError, OSError):
                     pass
                 stop.wait(float(cfg.get("poll_s", 0.25)))

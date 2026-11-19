@@ -3,6 +3,7 @@
 # and simulator server, recording only the simulator window.
 #   docker/vllm/serve.sh up; tools/mujoco_server.sh up        (or docker/isaac/server.sh up)
 #   tools/run_chat_dialogue.sh mujoco|isaac hold_return [run_id] [--no-video]
+#   CHAT_ARGS="--base-url http://127.0.0.1:8001/v1 --model Qwen3.5-9B-Q4_K_M" tools/run_chat_dialogue.sh ...  # other model
 # Outputs: outputs/chat/<name>/<engine>_<run_id>/{transcript.jsonl,result.json,chat.log,video.mp4}
 set -uo pipefail
 ENGINE=${1:?isaac|mujoco}
@@ -25,7 +26,7 @@ if [ "$VIDEO" = 1 ]; then
   REC=$!
   sleep 2
 fi
-uv run --quiet tools/chat.py --backend "$ENGINE" --script "configs/chat/dialogues/$NAME.yaml" --out "$OUT" 2>&1 | tee "$OUT/chat.log"
+uv run --quiet tools/chat.py --backend "$ENGINE" --script "configs/chat/dialogues/$NAME.yaml" --out "$OUT" ${CHAT_ARGS:-} 2>&1 | tee "$OUT/chat.log"
 RC=${PIPESTATUS[0]}
 if [ "$VIDEO" = 1 ]; then
   kill -INT -- "-$REC" 2>/dev/null   # SIGINT to the recorder's group: ffmpeg finalizes the file
