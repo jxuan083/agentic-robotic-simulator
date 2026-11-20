@@ -7,8 +7,9 @@ question, the open question shown again on reconnect); only the input / output i
 
 Window: status line (simulator, model, connection), the question the task is waiting on, the conversation, an input
 box (Enter sends). Closing the window ends only the chat; the simulator keeps running. tools/lab.py starts it.
-The question an answer is bound to is the one on screen when typing of that line started (as the CLI samples it
-before reading a line), so a question that appears while typing does not receive the half-typed answer.
+The question an answer is bound to is the one the window displayed when the input box went from empty to non-empty
+(typing, an input-method commit or a paste; clearing the box starts over). Questions that arrive in the background
+count as seen only once the window draws them (agentic_sim.chat.display_binding).
 """
 
 from __future__ import annotations
@@ -31,27 +32,34 @@ from agentic_sim.chat.agent import ChatAgent  # noqa: E402
 from agentic_sim.chat.llm import LLMError, OpenAICompatLLM  # noqa: E402
 from agentic_sim.config import load  # noqa: E402
 from agentic_sim.server.client import RemoteError  # noqa: E402
-from chat import Link, Repl, versions  # noqa: E402
+from chat import Link, versions  # noqa: E402
+from agentic_sim.chat.display_binding import DisplayBinding  # noqa: E402
 
 TITLE = "SO-101 聊天"
+_SAME = object()   # queued lines that do not show a (new) question
 COLORS = {"bg": "#1e2127", "panel": "#2a2e36", "text": "#e6e6e6", "muted": "#9aa3b2", "user": "#8ec7ff",
           "system": "#f2c879", "agent": "#e6e6e6", "error": "#ff8a80", "question_bg": "#3b3420",
           "question_fg": "#ffd77a", "ok": "#7fd18b"}
 
 
 class ChatWindow:
-    def __init__(self, root: tk.Tk, a, cfg: dict):
+    """UI thread: everything drawn and every input-box change. Background threads (start-up, report polling, one
+    agent turn at a time) only put messages on a queue; a question id travels with the message that shows it, and
+    the binding learns it when the UI draws it (agentic_sim.chat.display_binding)."""
+
+    def __init__(self, root: tk.Tk, a, cfg: dict, start: bool = True):
         self.root, self.a, self.cfg = root, a, cfg
-        self.q: queue.Queue = queue.Queue()      # (kind, payload) from the worker / poll threads to the UI
+        self.q: queue.Queue = queue.Queue()      # (kind, payload) from the background threads to the UI
         self.stop = threading.Event()
         self.busy = False
-        self.shown_at_typing = ...             # question id on screen when typing of the current line started
-        self.agent = self.repl = self.reporter = None
-        self._build()
-        self.typing = list(getattr(a, "type", None) or [])   # acceptance: lines typed into the box like a user
+        self.binding = DisplayBinding()
+        self.agent = self.reporter = None
         self.question_open = False
-        threading.Thread(target=self._start, daemon=True).start()
-        self.root.after(80, self._drain)
+        self.typing = list(getattr(a, "type", None) or [])   # acceptance: lines typed into the box like a user
+        self._build()
+        if start:
+            threading.Thread(target=self._start, daemon=True).start()
+            self.root.after(80, self._drain)
 
     # ---- layout -----------------------------------------------------------------------------------
     def _build(self):
@@ -74,15 +82,17 @@ class ChatWindow:
                                              font=self.f, relief="flat", padx=8, pady=6, insertbackground="white")
         self.log.pack(fill="both", expand=True)
         for tag in ("user", "system", "agent", "error", "ok", "muted"):
-            self.log.tag_configure(tag, foreground=COLORS[tag if tag != "muted" else "muted"])
+            self.log.tag_configure(tag, foreground=COLORS[tag])
         bar = tk.Frame(r, bg=COLORS["panel"], padx=6, pady=6)
         bar.pack(fill="x")
-        self.entry = tk.Entry(bar, font=self.f, bg="#11141a", fg=COLORS["text"], insertbackground="white",
-                              relief="flat")
+        self.text = tk.StringVar(r)
+        # every content change (keys, input-method commits, paste, programmatic insert) goes through this trace
+        self.text.trace_add("write", lambda *_: self.binding.text_changed(self.text.get()))
+        self.entry = tk.Entry(bar, textvariable=self.text, font=self.f, bg="#11141a", fg=COLORS["text"],
+                              insertbackground="white", relief="flat")
         self.entry.pack(side="left", fill="x", expand=True, ipady=5)
         self.entry.bind("<Return>", lambda e: self.send())
         self.entry.bind("<KP_Enter>", lambda e: self.send())
-        self.entry.bind("<Key>", self._on_key, add="+")
         self.btn = tk.Button(bar, text="送出", command=self.send, font=self.f, relief="flat", padx=12)
         self.btn.pack(side="left", padx=(6, 0))
         self.entry.configure(state="disabled")
@@ -95,10 +105,14 @@ class ChatWindow:
         self.log.configure(state="disabled")
         self.log.see("end")
 
-    # ---- threads ----------------------------------------------------------------------------------
-    def _say(self, line: str):
-        tag = "system" if line.startswith("[系統]") else "error" if line.startswith("錯誤") else "agent"
-        self.q.put(("line", (line, tag)))
+    # ---- background threads -----------------------------------------------------------------------------
+    @staticmethod
+    def _tag(line: str) -> str:
+        return "system" if line.startswith("[系統]") else "error" if line.startswith("錯誤") else "agent"
+
+    def _lines(self, lines, qid=_SAME):
+        """Queue lines for the UI; qid: the question they show (bound once drawn), or _SAME (no change)."""
+        self.q.put(("lines", (list(lines), qid)))
 
     def _start(self):
         a, cfg = self.a, self.cfg
@@ -114,15 +128,14 @@ class ChatWindow:
                 colors = a.block_colors.split(",") if a.block_colors else None
                 opts = {"block_colors": colors, "blocks": len(colors)} if colors else {}
                 call("load_experiment", name=a.experiment, options=opts)
-                self._say(f"[系統] 已載入 {a.experiment}：{', '.join(colors) if colors else '預設積木'}")
+                self._lines([f"[系統] 已載入 {a.experiment}：{', '.join(colors) if colors else '預設積木'}"])
             self.agent = ChatAgent(call, llm, cfg)
             self.q.put(("status", "準備模型中…"))
             dt = self.agent.warmup()
             info = versions(llm, call)
             poll = Link(a.backend, "chat-window-reports")
             self.reporter = ChatAgent(poll, llm, cfg)
-            self.repl = Repl(self.agent, self.reporter, poll, self._say)
-            self.repl.connect()
+            self.connect()
             self.q.put(("status", f"模擬器 {info['engine']}｜模型 {info['model']}（{info['model_server']}，暖機 {dt:.0f} 秒）"))
             self.q.put(("ready", None))
         except (RemoteError, ConnectionError, OSError, TimeoutError) as e:
@@ -130,93 +143,116 @@ class ChatWindow:
             return
         while not self.stop.is_set():
             try:
-                self.repl.pump()
-                st = self.reporter.state()
-                qn = st.get("question")
-                self.q.put(("question", self.reporter.words.question(qn) if qn else None))
+                self.pump()
                 self.q.put(("conn", True))
             except (RemoteError, ConnectionError, OSError, TimeoutError):
                 self.q.put(("conn", False))
             self.stop.wait(float(self.cfg.get("poll_s", 0.25)))
 
+    def connect(self):
+        """Report cursor first, then the question the task already waits on (its event is before the cursor)."""
+        self.reporter.events_seen = self.reporter.call("task_events").get("next", 0)
+        lines = [f"[系統] {x}" for x in self.agent.show_open_question()]
+        self.reporter.q_shown = self.agent.q_shown
+        self._lines(lines, self.agent.q_shown if lines else _SAME)
+
+    def pump(self):
+        """New reports and the question bar. Nothing here changes what the user is taken to have seen: the ids are
+        handed to the UI with the text that shows them."""
+        before = self.reporter.q_shown
+        lines = [f"[系統] {x}" for x in self.reporter.poll_reports()]
+        after = self.reporter.q_shown
+        if lines:
+            self._lines(lines, after if after != before else _SAME)
+        qn = self.reporter.state().get("question")
+        self.q.put(("question", (self.reporter.words.question(qn) if qn else None, qn["id"] if qn else None)))
+
     def _turn(self, text: str, shown):
         try:
-            self.repl.turn(text, shown)
+            lines = self.agent.handle(text, shown=shown)
+            self._lines(lines, self.agent.q_shown)   # a reply that repeats a question shows it
         except (RemoteError, ConnectionError, OSError, TimeoutError) as e:
-            self._say(f"錯誤：{e}")
+            self._lines([f"錯誤：{e}"])
         finally:
             self.q.put(("idle", None))
 
-    # ---- UI events --------------------------------------------------------------------------------
-    def _on_key(self, event):
-        # the first character of a new line fixes the question this line answers (CLI: sampled before reading)
-        if self.agent is not None and not self.entry.get() and event.char and event.char.isprintable():
-            self.shown_at_typing = self.agent.q_shown
-
+    # ---- UI thread ----------------------------------------------------------------------------------------
     def send(self):
-        if self.busy or self.repl is None:
+        if self.busy or self.agent is None:
             return
-        text = self.entry.get().strip()
+        text = self.text.get().strip()
         if not text:
             return
-        shown = self.shown_at_typing if self.shown_at_typing is not ... else self.agent.q_shown
-        self.shown_at_typing = ...
-        self.entry.delete(0, "end")
+        shown = self.binding.take()
+        self.text.set("")
         self.write(f"你：{text}", "user")
         self.busy = True
         self.btn.configure(state="disabled", text="處理中…")
         threading.Thread(target=self._turn, args=(text, shown), daemon=True).start()
 
+    def show(self, kind, val):
+        """Draw one queued message (UI thread)."""
+        if kind == "lines":
+            lines, qid = val
+            for line in lines:
+                self.write(line, self._tag(line))
+            if qid is not _SAME:
+                self.binding.displayed(qid)
+                if self.agent is not None:
+                    self.agent.q_shown = qid
+        elif kind == "question":
+            text, qid = val
+            self.question_open = text is not None
+            self.question.configure(text=f"待回答：{text}" if text else "（沒有待回答的問題）")
+            self.binding.displayed(qid)          # the bar shows this question now (or none)
+            if qid is not None and self.agent is not None:
+                self.agent.q_shown = qid
+        elif kind == "status":
+            self.status.configure(text=val, fg=COLORS["muted"])
+        elif kind == "ready":
+            self.entry.configure(state="normal")
+            self.btn.configure(state="normal")
+            self.entry.focus_set()
+            self.write("可以開始下單，例如「我要兩顆紅色、一顆藍色」。", "muted")
+            if self.typing:
+                self.root.after(1500, self._type_next)
+        elif kind == "conn":
+            if not val:
+                self.status.configure(text="模擬器連線中斷，重試中…", fg=COLORS["error"])
+        elif kind == "idle":
+            self.busy = False
+            self.btn.configure(state="normal", text="送出")
+        elif kind == "fatal":
+            self.status.configure(text="無法啟動", fg=COLORS["error"])
+            self.write(val, "error")
+
     def _drain(self):
+        delay = float(os.environ.get("ARS_CHAT_UI_DELAY_S", "0") or 0)   # tests: draw messages this much later
         try:
             while True:
                 kind, val = self.q.get_nowait()
-                if kind == "line":
-                    self.write(*val)
-                elif kind == "status":
-                    self.status.configure(text=val, fg=COLORS["muted"])
-                elif kind == "ready":
-                    self.entry.configure(state="normal")
-                    self.btn.configure(state="normal")
-                    self.entry.focus_set()
-                    self.write("可以開始下單，例如「我要兩顆紅色、一顆藍色」。", "muted")
-                    if self.typing:
-                        self.root.after(1500, self._type_next)
-                elif kind == "question":
-                    self.question_open = bool(val)
-                    self.question.configure(text=f"待回答：{val}" if val else "（沒有待回答的問題）")
-                elif kind == "conn":
-                    if not val:
-                        self.status.configure(text="模擬器連線中斷，重試中…", fg=COLORS["error"])
-                elif kind == "idle":
-                    self.busy = False
-                    self.btn.configure(state="normal", text="送出")
-                elif kind == "fatal":
-                    self.status.configure(text="無法啟動", fg=COLORS["error"])
-                    self.write(val, "error")
+                if delay > 0:
+                    self.root.after(int(1000 * delay), self.show, kind, val)
+                else:
+                    self.show(kind, val)
         except queue.Empty:
             pass
         if not self.stop.is_set():
             self.root.after(80, self._drain)
 
     def _type_next(self):
-        """Acceptance input: type the next line character by character through the same key path, then send it.
-        Each line waits until the previous turn is answered (and `--type-gap` seconds); a line starting with "?" also
-        waits until the task shows a question (answers to shortage / held-item questions)."""
+        """Acceptance input: type the next line character by character into the box (the same content-change path
+        as a user), then send it. Each line waits until the previous turn is answered (and `--type-gap` seconds); a
+        line starting with "?" also waits until the window shows a question."""
         if not self.typing or self.stop.is_set():
             return
-        if self.busy:
+        if self.busy or (self.typing[0].startswith("?") and not self.question_open):
             self.root.after(300, self._type_next)
-            return
-        if self.typing[0].startswith("?") and not self.question_open:
-            self.root.after(300, self._type_next)   # "?answer": typed once the task asks a question
             return
         line = self.typing.pop(0).lstrip("?")
 
         def put(i=0):
             if i < len(line):
-                ev = type("E", (), {"char": line[i]})()
-                self._on_key(ev)
                 self.entry.insert("end", line[i])
                 self.root.after(60, put, i + 1)
             else:

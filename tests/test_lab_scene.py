@@ -165,3 +165,30 @@ def test_lab_experiment_and_wrist_lens_run_option():
     e = load_experiment("lab_20261120")
     assert e.scene == "configs/scenes/lab_20261120.yaml" and set(e.backends) == {"isaac", "mujoco"}
     assert "wrist_lens" in RUN_OPTIONS and RunOptions(wrist_lens="pinhole").wrist_lens == "pinhole"
+
+
+def test_undistort_tool_straightens_a_distorted_line(tmp_path):
+    """Raw frame of a straight vertical line (rendered through the lens model) -> tools/undistort_wrist.py -> the
+    line is straight again at its ideal column; a frame of another size is refused."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import undistort_wrist as uw
+    from render_sensor_cameras import write_png
+    lens = WristLens.from_scene(LAB)
+    col = 520.0                                              # ideal column (off centre: clearly bent when raw)
+    uu, vv = np.meshgrid(np.arange(640), np.arange(480))
+    x, _ = lens.undistort(uu, vv)
+    raw = np.full((480, 640, 3), 230, np.uint8)
+    raw[np.abs(x * lens.fx + lens.cx - col) < 1.5] = 20     # a dark 3 px line in the ideal image, seen raw
+    rows = range(40, 440, 40)
+    raw_cols = [np.nonzero(raw[r, :, 0] < 128)[0].mean() for r in rows]
+    assert np.ptp(raw_cols) > 6                              # bent in the raw frame
+    flat = uw.undistort(raw, uw.flat_maps(lens))
+    flat_cols = [np.nonzero(flat[r, :, 0] < 128)[0].mean() for r in rows]
+    assert np.ptp(flat_cols) < 1.5 and abs(np.mean(flat_cols) - col) < 1.0
+    src = tmp_path / "raw.png"
+    write_png(str(src), raw)
+    assert uw.main([str(src), "--out-dir", str(tmp_path / "out")]) == 0
+    assert (tmp_path / "out" / "raw_flat.png").exists() and src.exists()
+    small = tmp_path / "small.png"
+    write_png(str(small), raw[:240, :320])
+    assert uw.main([str(small)]) == 1 and not (tmp_path / "small_flat.png").exists()

@@ -263,4 +263,4 @@ CHAT_ARGS="--base-url http://127.0.0.1:8001/v1 --model Qwen3.5-9B-Q4_K_M" tools/
 
 ## 聊天視窗（#11）
 
-命令列之外，另有獨立的 Tk 聊天視窗 `tools/chat_window.py`，規則相同（同一個 `ChatAgent`：回答綁定開始打字時的題號、追問綁定題號、重開時顯示待答問題）。一鍵入口 `tools/lab.py` 會一起開好模型服務、模擬器與聊天視窗，見 [lab-entry.md](lab-entry.md)。
+命令列之外，另有獨立的 Tk 聊天視窗 `tools/chat_window.py`，規則相同（同一個 `ChatAgent`：追問綁定題號、重開時顯示待答問題）；回答綁定視窗實際顯示的題號（輸入框從空白變有內容時記下，打字、輸入法、貼上都算）。一鍵入口 `tools/lab.py` 會一起開好模型服務、模擬器與聊天視窗，見 [lab-entry.md](lab-entry.md)。
