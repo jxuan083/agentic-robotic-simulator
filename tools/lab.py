@@ -12,8 +12,11 @@ Steps (each waits until the previous one answers; a failure stops here, names th
   2. simulator       persistent server (tools/mujoco_server.sh / docker/isaac/server.sh); the experiment is
                      (re)loaded with the options given here
   3. chat window     tools/chat_window.py
-A service that already exists (even if it is still warming up) is reused and never stopped here; one this command
-creates is recorded as its own before it is started, so it is stopped on exit even when it failed to become ready.
+Ownership: each control script's `up` creates the service only when none exists (atomic: the container name, or a
+lock for the simulator) and writes the identity of what it created (container ID / process ID) to ARS_CREATED_FILE.
+Only that identity is stopped on exit (`down <id>`), also when it never became ready; a service that already existed
+(even one still warming up, or started by another lab.py in between) is reused and left running. Names, ports and the
+served model come from the scripts themselves (`serve.sh info`), so LLM_CONTAINER_NAME / LLM_PORT apply everywhere.
 Closing the chat window keeps everything running: press Enter here to open it again (it shows the open question
 first and continues the same task), or run tools/chat_window.py yourself. Ctrl+C (or the simulator window closing)
 ends the session.
@@ -27,6 +30,7 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -35,9 +39,9 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from agentic_sim.server.client import SimClient, probe  # noqa: E402
 
-MODELS = {   # model service: control script, container, base URL, served model name, ready timeout (s)
-    "q4": (["docker/llamacpp/serve.sh"], "ars-llm-q4", "http://127.0.0.1:8001/v1", "Qwen3.5-9B-Q4_K_M", 300),
-    "bf16": (["docker/vllm/serve.sh"], "ars-llm", "http://127.0.0.1:8000/v1", "Qwen/Qwen3.5-9B", 900),
+MODELS = {   # model service: control script, ready timeout (s); container name, URL and model name: `<script> info`
+    "q4": (["docker/llamacpp/serve.sh"], 300),
+    "bf16": (["docker/vllm/serve.sh"], 900),
 }
 SERVERS = {  # simulator server: control script, experiment env var, ready timeout (s)
     "mujoco": (["tools/mujoco_server.sh"], "MUJOCO_SERVER_EXPERIMENT", 90),
@@ -57,18 +61,10 @@ def model_up(base_url: str) -> bool:
         return False
 
 
-def container_exists(name: str) -> bool:
-    r = subprocess.run(["docker", "ps", "--filter", f"name=^{name}$", "--format", "{{.Names}}"],
-                       capture_output=True, text=True)
-    return name in r.stdout.split()
-
-
-def sim_exists(backend: str) -> bool:
-    """A server process / container exists (it may still be starting)."""
-    if backend == "isaac":
-        return container_exists("ars-isaac-server")
-    r = subprocess.run(["pgrep", "-f", "scripts/mujoco_sim_server.py"], capture_output=True, text=True)
-    return bool(r.stdout.strip())
+def script_info(script: list, env: dict) -> dict:
+    """`<script> info`: name=, url=, model= lines (the script's own settings, environment included)."""
+    r = subprocess.run(script + ["info"], cwd=ROOT, env=env, capture_output=True, text=True, check=True)
+    return dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
 
 
 def wait(cond, timeout: float, what: str, every: float = 2.0) -> None:
@@ -88,32 +84,57 @@ class Lab:
         self.env.setdefault("DISPLAY", ":1")
         self.env.setdefault("XAUTHORITY", f"/run/user/{os.getuid()}/gdm/Xauthority")
 
-    def run(self, cmd, timeout=None):
-        return subprocess.run(cmd, cwd=ROOT, env=self.env, timeout=timeout)
+    def run(self, cmd, timeout=None, env=None):
+        return subprocess.run(cmd, cwd=ROOT, env=env or self.env, timeout=timeout)
 
-    def _start(self, what: str, script: list, timeout: float, ready):
-        """Create a service: recorded as ours first, then `script up` (bounded by timeout), then ready()."""
-        self.owned.append((what, script + ["down"]))
-        t0 = time.monotonic()
+    def _up(self, what: str, script: list, timeout: float, ready) -> None:
+        """`script up` (bounded by timeout), then ready(). The script writes the identity of an instance it created to
+        ARS_CREATED_FILE; only that one is recorded as ours (and stopped by `script down <id>`), also when `up` failed
+        or timed out. Nothing written: the service already existed and is only reused."""
+        fd, created = tempfile.mkstemp(prefix="ars-created-")
+        os.close(fd)
+        os.unlink(created)                           # docker --cidfile wants a path that does not exist yet
+        t0, err = time.monotonic(), None
         try:
-            r = self.run(script + ["up"], timeout=timeout)
+            r = self.run(script + ["up"], timeout=timeout, env=dict(self.env, ARS_CREATED_FILE=created))
+            if r.returncode != 0:
+                err = RuntimeError(f"{what}: {' '.join(script)} up failed (exit {r.returncode})")
         except subprocess.TimeoutExpired:
-            raise TimeoutError(f"{what} did not become ready within {timeout:.0f} s") from None
-        if r.returncode != 0:
-            raise RuntimeError(f"{what}: {' '.join(script)} up failed (exit {r.returncode})")
-        wait(ready, max(timeout - (time.monotonic() - t0), 5.0), what)
+            err = TimeoutError(f"{what} did not become ready within {timeout:.0f} s")
+        ident = ""
+        for _ in range(10 if err else 1):            # a killed `up` may leave docker writing the ID for a moment
+            if os.path.exists(created):
+                with open(created) as f:
+                    ident = f.read().strip()
+                if ident:
+                    break
+            if err:
+                time.sleep(0.2)
+        if os.path.exists(created):
+            os.unlink(created)
+        if ident:
+            self.owned.append((what, script + ["down", ident]))
+            say(f"{what}由這裡建立（{ident[:12]}），結束時關閉")
+        elif err:
+            say(f"{what}沒有建立任何實例，不必清理")
+        else:
+            say(f"{what}已存在，沿用（不會由這裡關閉）")
+        if err:
+            raise err
+        wait(ready, max(timeout - (time.monotonic() - t0), min(timeout, 5.0)), what)
 
     # ---- steps -----------------------------------------------------------------------------------------
     def model(self):
-        script, name_c, url, name, timeout = MODELS[self.a.model]
+        script, timeout = MODELS[self.a.model]
         timeout = self.a.start_timeout or timeout
         what = f"模型服務 {self.a.model}"
-        if container_exists(name_c) or model_up(url):
-            say(f"{what}已存在，沿用（不會由這裡關閉）")
-            wait(lambda: model_up(url), timeout, what)
+        info = script_info(script, self.env)
+        url, name = info["url"], info["model"]
+        if model_up(url):
+            say(f"{what}已在回應（{url}），沿用（不會由這裡關閉）")
         else:
-            say(f"啟動{what}（第一次可能要幾分鐘）")
-            self._start(what, script, timeout, lambda: model_up(url))
+            say(f"啟動{what}（容器 {info['name']}；第一次可能要幾分鐘）")
+            self._up(what, script, timeout, lambda: model_up(url))
         say(f"{what}就緒")
         return url, name
 
@@ -122,13 +143,12 @@ class Lab:
         timeout = self.a.start_timeout or timeout
         what = f"{self.a.backend} 模擬伺服器"
         ready = lambda: probe(self.a.backend, timeout=1.0) is not None  # noqa: E731
-        if sim_exists(self.a.backend) or ready():
-            say(f"{what}已存在，沿用（不會由這裡關閉），重新載入 {self.a.experiment}")
-            wait(ready, timeout, what)
+        if ready():
+            say(f"{what}已在回應，沿用（不會由這裡關閉）")
         else:
             say(f"啟動{what}（{self.a.experiment}）")
             self.env[env_key] = self.a.experiment
-            self._start(what, script, timeout, ready)
+            self._up(what, script, timeout, ready)
         opts = {}
         if self.a.block_colors:
             colors = self.a.block_colors.split(",")

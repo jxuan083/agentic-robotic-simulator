@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 
 os.environ.setdefault("MUJOCO_GL", "egl")
@@ -25,25 +24,11 @@ import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 
 from agentic_sim.config import load  # noqa: E402
+from agentic_sim.image_io import read_png, write_png  # noqa: E402
 from agentic_sim.mujoco_backend.model import build, sensor_camera_names  # noqa: E402
 from agentic_sim.real_joints import lerobot_to_shared  # noqa: E402
 from agentic_sim.scene_layout import sensor_cameras  # noqa: E402
 from agentic_sim.wrist_lens import apply_wrist_lens  # noqa: E402
-
-
-def read_png(path):
-    w, h = (int(x) for x in subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0",
-         path], capture_output=True, text=True, check=True).stdout.strip().split(","))
-    raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
-                         capture_output=True, check=True).stdout
-    return np.frombuffer(raw, np.uint8).reshape(h, w, 3)
-
-
-def write_png(path, img):
-    h, w, _ = img.shape
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
-                    "-i", "-", path], input=np.ascontiguousarray(img).tobytes(), check=True)
 
 
 def render(scene_cfg, arm, jaw):

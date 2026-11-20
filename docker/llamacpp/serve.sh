@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Quantized model service for the chat layer: Qwen3.5-9B Q4_K_M (GGUF) behind llama.cpp's OpenAI-compatible server,
 # localhost only. Same API as docker/vllm/serve.sh, so the chat layer only needs base_url / model changed.
-#   docker/llamacpp/serve.sh fetch | up | down | status | logs
+#   docker/llamacpp/serve.sh fetch | up | down [ID] | status | logs | info
 # Pinned: image ghcr.io/ggml-org/llama.cpp:server-cuda12-b12033 (CUDA 12 build, also for Turing GPUs), model file
 # unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf at revision 3885219 (Apache-2.0, sha256 03b74727...).
 # The file is kept in ~/docker/llamacpp/models (5.7 GB). All layers on the GPU, one request at a time, text only.
 # Thinking is turned off per request by the chat layer (chat_template_kwargs, needs --jinja).
+# up creates the container only when none with this name runs (a lost name race counts as already running) and, with
+# ARS_CREATED_FILE set, docker writes the ID of the container it created there; down <ID> stops exactly that container.
+# info prints name=, url=, model= (tools/lab.py reads them, so LLM_CONTAINER_NAME / LLM_PORT / LLM_MODEL apply there).
 set -euo pipefail
 IMAGE=${LLAMACPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda12-b12033}
 REPO=unsloth/Qwen3.5-9B-GGUF
@@ -25,14 +28,19 @@ fetch() {
   fi
   echo "$SHA256  $DIR/$FILE" | sha256sum -c --quiet || { echo "checksum mismatch: $DIR/$FILE" >&2; exit 1; }
 }
+running() { docker ps --format '{{.Names}}' | grep -qx "$NAME"; }
 case "${1:-status}" in
   fetch) fetch ;;
   up)
-    if docker ps --format '{{.Names}}' | grep -qx "$NAME"; then echo "already running"; exit 0; fi
+    if running; then echo "already running"; exit 0; fi
     fetch
-    docker run -d --rm --name "$NAME" --gpus all -p 127.0.0.1:$PORT:8080 -v "$DIR:/models:ro" \
+    CIDFILE=(); [ -z "${ARS_CREATED_FILE:-}" ] || CIDFILE=(--cidfile "$ARS_CREATED_FILE")  # ID of what we create
+    if ! OUT=$(docker run -d --rm --name "$NAME" "${CIDFILE[@]}" --gpus all -p 127.0.0.1:$PORT:8080 -v "$DIR:/models:ro" \
       "$IMAGE" -m "/models/$FILE" --alias "$ALIAS" --host 0.0.0.0 --port 8080 \
-      -ngl 999 -c "$CTX" -np 1 --jinja > /dev/null
+      -ngl 999 -c "$CTX" -np 1 --jinja 2>&1); then
+      if running; then echo "already running (started by another command)"; exit 0; fi  # lost the name race
+      echo "$OUT" >&2; exit 1
+    fi
     echo -n "waiting for the model service"
     for _ in $(seq 1 300); do
       if curl -sf "http://127.0.0.1:$PORT/v1/models" > /dev/null && curl -sf "http://127.0.0.1:$PORT/health" > /dev/null; then
@@ -41,8 +49,9 @@ case "${1:-status}" in
       echo -n "."; sleep 2
     done
     echo; echo "not ready after 10 min; docker logs $NAME"; exit 1 ;;
-  down) docker stop "$NAME" > /dev/null 2>&1 && echo stopped || echo "not running" ;;
+  down) docker stop "${2:-$NAME}" > /dev/null 2>&1 && echo stopped || echo "not running" ;;   # down [container ID]
+  info) echo "name=$NAME"; echo "url=http://127.0.0.1:$PORT/v1"; echo "model=$ALIAS" ;;
   status) curl -sf "http://127.0.0.1:$PORT/v1/models" && echo || echo "not answering" ;;
   logs) docker logs --tail 80 "$NAME" ;;
-  *) echo "usage: $0 fetch|up|down|status|logs" >&2; exit 2 ;;
+  *) echo "usage: $0 fetch|up|down|status|logs|info" >&2; exit 2 ;;
 esac

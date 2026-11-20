@@ -5,6 +5,7 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -172,7 +173,7 @@ def test_undistort_tool_straightens_a_distorted_line(tmp_path):
     line is straight again at its ideal column; a frame of another size is refused."""
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     import undistort_wrist as uw
-    from render_sensor_cameras import write_png
+    from agentic_sim.image_io import write_png
     lens = WristLens.from_scene(LAB)
     col = 520.0                                              # ideal column (off centre: clearly bent when raw)
     uu, vv = np.meshgrid(np.arange(640), np.arange(480))
@@ -192,3 +193,47 @@ def test_undistort_tool_straightens_a_distorted_line(tmp_path):
     small = tmp_path / "small.png"
     write_png(str(small), raw[:240, :320])
     assert uw.main([str(small)]) == 1 and not (tmp_path / "small_flat.png").exists()
+
+
+def _sha(p):
+    import hashlib
+    return hashlib.sha256(open(p, "rb").read()).hexdigest()
+
+
+@pytest.mark.parametrize("order", [0, 1])
+def test_undistort_batch_refuses_an_output_that_is_another_input(tmp_path, order):
+    """PR #12 review 2-2: frame.png's output is frame_flat.png, given as an input too -> refused before writing."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import undistort_wrist as uw
+    from agentic_sim.image_io import write_png
+    rng = np.random.default_rng(0)
+    a, b = tmp_path / "frame.png", tmp_path / "frame_flat.png"
+    write_png(str(a), rng.integers(0, 255, (480, 640, 3), dtype=np.uint8))
+    write_png(str(b), rng.integers(0, 255, (480, 640, 3), dtype=np.uint8))
+    before = {p: _sha(p) for p in (a, b)}
+    args = [str(a), str(b)] if order == 0 else [str(b), str(a)]
+    assert uw.main(args) == 1
+    assert {p: _sha(p) for p in (a, b)} == before
+    assert sorted(os.listdir(tmp_path)) == ["frame.png", "frame_flat.png"]      # no partial output
+
+
+def test_undistort_batch_same_output_name_and_normal_batch(tmp_path):
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import undistort_wrist as uw
+    from agentic_sim.image_io import image_size, write_png
+    rng = np.random.default_rng(1)
+    for d in ("a", "b"):
+        (tmp_path / d).mkdir()
+        write_png(str(tmp_path / d / "frame.png"), rng.integers(0, 255, (480, 640, 3), dtype=np.uint8))
+    ins = [str(tmp_path / d / "frame.png") for d in ("a", "b")]
+    before = [_sha(p) for p in ins]
+    out = tmp_path / "out"
+    assert uw.main(ins + ["--out-dir", str(out)]) == 1 and not out.exists()   # both would be out/frame_flat.png
+    assert [_sha(p) for p in ins] == before
+    write_png(str(tmp_path / "b" / "other.png"), rng.integers(0, 255, (480, 640, 3), dtype=np.uint8))
+    ok = [ins[0], str(tmp_path / "b" / "other.png")]
+    before = [_sha(p) for p in ok]
+    assert uw.main(ok + ["--out-dir", str(out)]) == 0
+    assert sorted(os.listdir(out)) == ["frame_flat.png", "other_flat.png"]
+    assert all(image_size(str(out / f)) == (640, 480) for f in os.listdir(out))
+    assert [_sha(p) for p in ok] == before
