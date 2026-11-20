@@ -16,6 +16,15 @@ robot:
   # The lab arm carries the official SO-101 wrist camera mount (photos IMG_0541, IMG_0554). Isaac: Workshop USD with
   # the camera mount; MuJoCo: the Menagerie camera_mount body is kept. lab_current_minimal keeps the no-camera arm.
   wrist_camera_mount: true
+  # Neutral finger direction: tangential to the pan circle (as lab_current_minimal; wrist roll about 90 deg at home).
+  # The lab operators keep the wrist roll near 0 (radial fingers), but in simulation the radial grasp drops the
+  # blocks that need a tilted gripper (fingers in the tilt plane: one jaw lower); tangential holds them
+  # (handoff lens_check / radial sweep, 2026-11-21). The wrist camera is still on the real mount; only its side
+  # relative to the scene differs at home.
+  grasp_heading_deg: {value: 90.0, source: provisional, note: "tangential; radial (lab habit) drops tilted grasps in sim"}
+  # Arm joints at reset: the lab rest pose (folded, gripper up); the arm then moves to the teleop home in about 2 s.
+  start_pose_lerobot: {value: [-6.04, -97.27, 99.0, 71.48, 1.29, 17.0], source: measured,
+                       note: "LeRobot readings of the right follower at rest (right_follower_idle_150345)"}
 
 table:
   # The base is clamped at the front edge of a cubicle desk; the back partition is about 0.64 m ahead (D455 image).
@@ -92,6 +101,16 @@ sensor_cameras:
     fovy_deg: {value: 61.0, source: provisional, note: "Menagerie wrist_cam fovy; Workshop gripper_cam 13.5 mm focal length (vertical 60 deg at 4:3)"}
     # Camera frame in the gripper link frame (same frame in the Workshop USD and the Menagerie MJCF), USD / MuJoCo
     # camera axes: looks along -Z, +Y up. Values of the Menagerie wrist_cam.
+    # Lens (raw image): fitted on the 2026-11-20 wrist frames. With the mount pose below, f 400 / k1 -0.15 makes straight
+    # scene edges straight (plumb-line residual 6.8 -> 4.3) and matches the jaws (IoU 0.73 vs 0.72 for the pinhole).
+    # The public U20CAM 640 x 480 profile (so101_ros2: f 550.8, k1 -0.448, k2 0.215) straightens the edges as well
+    # (4.2) but puts the jaws too small and low (IoU 0.33), so it is kept only as a reference.
+    lens:
+      intrinsics: {value: {fx: 400.0, fy: 400.0, cx: 320.0, cy: 240.0}, source: estimated,
+                   note: "jaw overlap + plumb line on 38 raw wrist frames (2026-11-20); no checkerboard yet"}
+      distortion: {value: [-0.15, 0.0, 0.0, 0.0, 0.0], source: estimated, note: "OpenCV k1 k2 p1 p2 k3; k1 only"}
+    # real: the simulated wrist image is resampled to look like the raw camera; pinhole: ideal image with fovy_deg
+    lens_mode: real
     pose_in_gripper:
       pos: {value: [-0.00296, 0.05436, -0.05310], source: provisional, note: Menagerie camera_mount wrist_cam}
       quat_wxyz: {value: [0.958280, -0.285792, -0.001556, 0.004547], source: provisional, note: Menagerie camera_mount wrist_cam}

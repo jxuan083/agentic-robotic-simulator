@@ -24,6 +24,7 @@ import numpy as np
 
 from agentic_sim.color_dr import ColorSampler, Palette
 from agentic_sim.config import REPO_ROOT, load, provisional_fields, v
+from agentic_sim.wrist_lens import apply_wrist_lens
 from agentic_sim.kinematics import ARM_JOINTS, So101Chain
 from agentic_sim.mujoco_backend.model import ROBOT_CONFIG, build
 from agentic_sim.scene_layout import block_count_range, block_in_tray
@@ -57,6 +58,7 @@ class SessionConfig:
     block_colors: list | None = None   # colour name per block (task scenes); sets the block count
     task: str | None = None            # task scenario (configs/tasks/*.yaml): the executor drives the arm
     task_log: str | None = None        # executor event log (JSONL)
+    wrist_lens: str | None = None      # wrist camera image mode ("real" | "pinhole"); None = scene default
 
 
 class MjColorRandomizer:
@@ -159,7 +161,7 @@ class MjSession:
         self._focused = focused or (lambda: True)
         self._requests: list[str] = []
         self._finished = None
-        self.scene_cfg = load(cfg.scene)
+        self.scene_cfg = apply_wrist_lens(load(cfg.scene), cfg.wrist_lens)
         teleop_cfg = load(cfg.teleop)
         from agentic_sim.task.runner import scenario_colors
         self.block_color_names = cfg.block_colors or scenario_colors(cfg.task)
@@ -170,7 +172,8 @@ class MjSession:
         self.control_dt = float(rc["control_dt"])
         self.substeps = max(1, int(round(self.control_dt / self.m.opt.timestep)))
         self.chain = So101Chain.from_dict(load("configs/so101_chain.yaml"))
-        self.ctrl = load_controller(self.chain, teleop_cfg, base_pos=v(self.scene_cfg["robot"]["base_pos"]))
+        self.ctrl = load_controller(self.chain, teleop_cfg, base_pos=v(self.scene_cfg["robot"]["base_pos"]),
+                                    scene=self.scene_cfg)
         self.color_dr = MjColorRandomizer(cfg.color_dr_config, self.m, self.sc.block_geoms, self.sc.shell_materials,
                                           enabled=True if cfg.color_dr else None, seed=cfg.color_dr_seed,
                                           log_path=cfg.color_dr_log, log=log)

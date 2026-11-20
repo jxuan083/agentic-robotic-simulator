@@ -10,6 +10,7 @@
 - 本 repo：需求帳本與可取消的技能執行器（issue #5）：改單、持物詢問、多交取回、缺料詢問在 Isaac 與 MuJoCo 的 GUI 驗收都通過。只用模擬真值，抓取為腳本化技能，尚未接 LLM、感知與 ACT。見 [task-executor.md](task-executor.md)。
 - 本 repo：繁中命令列聊天層（issue #7）：自然語言下單、改單、回答問題與查詢進度，轉成任務執行器的結構化命令；模型 Qwen3.5-9B（本機 vLLM，可替換）。見 [chat-layer.md](chat-layer.md)。
 - 本 repo：實驗室場景與相機視角（2026-11-20 配置，單臂）。依實驗室 RGB-D 錄影、關節讀值與照片重建托盤擺位與桌面，加入 D455 global 與腕部相機視角（Isaac、MuJoCo 共用場景檔），相機位姿由深度點與手臂網格的 ICP 推算。見 [lab-scene-cameras.md](lab-scene-cameras.md)。
+- 本 repo：實驗室環境一鍵入口（#11）。`tools/lab.py` 依序開好模型服務、模擬伺服器（相機畫面固定在主畫面）與獨立的聊天視窗；腕部畫面預設套用由實拍推算的鏡頭變形。兩個引擎都完成「聊天下單 → 缺料詢問 → 聊天回答 → 完成」的競賽流程。見 [lab-entry.md](lab-entry.md)。
 - 既有實機工作區（尚未移入本 repo）：雙臂 SO-101 實機遙操作、相機串流、馬達校正、影像／狀態記錄、DAgger 接管與資料保存程式可運作。
 
 ## 可沿用與待補介面
@@ -50,7 +51,7 @@
 | 軟體版本 | NVIDIA SO-101 Workshop 文件列 Isaac Sim 5.1.0／Isaac Lab 2.3.0／LeRobot 0.4.3；SimReady 文章採另一版本；既有實機工作區的不同環境分別使用 LeRobot 0.4.3 與 0.4.4。先維持各角色環境分開，選定共用資料格式與介面後再處理相容性。模擬端已實測鎖定 `nvcr.io/nvidia/isaac-lab:2.3.2`（Isaac Sim 5.1.0、`isaaclab` 0.54.2），見 [isaac-ee-teleop.md](isaac-ee-teleop.md#測試環境與版本) |
 | 單臂選用 | 使用既有雙臂中的哪一支 follower／leader，或另配單臂 |
 | RealSense 規格 | 已記錄：D455（韌體 5.12.6、USB 2.1），彩色 1280×720／15 FPS（全程錄影）或 640×480／30 FPS（RGB-D），深度 Z16、1 mm，內參與 depth-to-color 轉換由 SDK 讀出 |
-| 相機配置 | Global：D455 位姿已由深度與關節讀值推算（`estimated`，殘差中位數 4.6 mm），未做標定板校正。腕部：Innomaker U20CAM-1080p-S1（640×480／30 FPS），內參與安裝位姿未量，模擬沿用官方相機座模型。見 [lab-scene-cameras.md](lab-scene-cameras.md#限制與待補) |
+| 相機配置 | Global：D455 位姿已由深度與關節讀值推算（`estimated`，殘差中位數 4.6 mm），未做標定板校正。腕部：Innomaker U20CAM-1080p-S1（640×480／30 FPS），鏡頭由實拍推算（fx 400、k1 −0.15，`estimated`），安裝位姿沿用官方相機座模型；待用棋盤格校正。見 [lab-scene-cameras.md](lab-scene-cameras.md#限制與待補) |
 | EE 可行姿態與範圍 | 已定案：基座座標、兩指間抓取中心、向下抓取方向。模型驗證後的偏移、工作區與可達範圍已記錄於 [isaac-ee-teleop.md](isaac-ee-teleop.md#座標系ee-與限制)（provisional，待實機對照） |
 | 比賽場地 | 桌面高度與擺法 |
 | 托盤尺寸 | 外形與擺位已由 D455 投影核對（與商品標示相差 1–3%）；盤緣高度、壁厚、盤底只有約略值，內底與圓角待量 |

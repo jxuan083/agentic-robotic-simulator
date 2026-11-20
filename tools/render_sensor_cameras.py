@@ -28,6 +28,7 @@ from agentic_sim.config import load  # noqa: E402
 from agentic_sim.mujoco_backend.model import build, sensor_camera_names  # noqa: E402
 from agentic_sim.real_joints import lerobot_to_shared  # noqa: E402
 from agentic_sim.scene_layout import sensor_cameras  # noqa: E402
+from agentic_sim.wrist_lens import apply_wrist_lens  # noqa: E402
 
 
 def read_png(path):
@@ -54,11 +55,15 @@ def render(scene_cfg, arm, jaw):
     mujoco.mj_forward(m, d)
     ids, specs, out = sensor_camera_names(m), sensor_cameras(scene_cfg), {}
     for key, cid in ids.items():
-        w, h = specs[key]["width"], specs[key]["height"]
+        w, h = specs[key].get("render_size", (specs[key]["width"], specs[key]["height"]))
         m.vis.global_.offwidth, m.vis.global_.offheight = max(m.vis.global_.offwidth, w), max(m.vis.global_.offheight, h)
         with mujoco.Renderer(m, h, w) as r:
             r.update_scene(d, camera=cid)
-            out[key] = r.render().copy()
+            img = r.render().copy()
+        lens = specs[key].get("lens")
+        if lens is not None:   # wrist camera, "real" lens mode: resample the wide pinhole to the raw sensor
+            img = lens.apply(img, lens.maps(w, h, specs[key]["render_fovy_deg"]))
+        out[key] = img
     return out
 
 
@@ -70,10 +75,12 @@ def main():
     ap.add_argument("--real-wrist")
     ap.add_argument("--global-k", type=float, nargs=6, metavar=("W", "H", "FX", "FY", "CX", "CY"),
                     help="render the global camera with these intrinsics (e.g. the 640 x 480 RGB-D recordings)")
+    ap.add_argument("--wrist-lens", choices=["real", "pinhole"], default=None,
+                    help="wrist image: raw-looking (distorted) or ideal pinhole (default: the scene's lens_mode)")
     ap.add_argument("--out", default="outputs/lab_cameras/view")
     a = ap.parse_args()
     os.chdir(ROOT)
-    scene_cfg = load(a.scene)
+    scene_cfg = apply_wrist_lens(load(a.scene), a.wrist_lens)
     if a.global_k:
         w, h, fx, fy, cx, cy = a.global_k
         g = scene_cfg["sensor_cameras"]["global"]

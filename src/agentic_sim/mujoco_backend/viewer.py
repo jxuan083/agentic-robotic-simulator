@@ -146,6 +146,9 @@ class Viewer:
         self.model = session.m
         self.scene = mujoco.MjvScene(self.model, maxgeom=4000)
         self.scene_top = mujoco.MjvScene(self.model, maxgeom=4000)
+        # offscreen buffer for the wrist lens resampling (the window is multisampled and cannot be read back)
+        self.model.vis.global_.offwidth = max(int(self.model.vis.global_.offwidth), 1600)
+        self.model.vis.global_.offheight = max(int(self.model.vis.global_.offheight), 1200)
         self.con = mujoco.MjrContext(self.model, mujoco.mjtFontScale.mjFONTSCALE_100)
         mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_WINDOW, self.con)
         self.cam_top.type = mujoco.mjtCamera.mjCAMERA_FIXED
@@ -157,7 +160,9 @@ class Viewer:
             cam = mujoco.MjvCamera()
             cam.type, cam.fixedcamid = mujoco.mjtCamera.mjCAMERA_FIXED, cid
             self._sensor[key] = (cam, mujoco.MjvScene(self.model, maxgeom=4000),
-                                 specs[key]["width"] / specs[key]["height"])
+                                 specs[key]["width"] / specs[key]["height"], specs[key].get("lens"),
+                                 specs[key].get("render_fovy_deg"))
+        self._lens_cache = {}
         session.handle.projector = self.proj
         session.camera_position = self.camera_position
         if reset_camera or not self._cam_set:
@@ -369,6 +374,8 @@ class Viewer:
         cv = Canvas(self.con, win_w, win_h, fb_w, fb_h)
         view_w = max(100, win_w - P.WIDTH)
         self.view_rect = (0, 0, view_w, win_h)
+        layout = self._inset_layout(view_w)
+        lens_images = self._prerender_lens(cv, s, layout)
         # 3D view
         mujoco.mjv_updateScene(self.model, s.d, self.opt, self.pert, self.cam, mujoco.mjtCatBit.mjCAT_ALL, self.scene)
         self.proj.set(self.scene.camera, self.view_rect)
@@ -381,7 +388,7 @@ class Viewer:
         if banner:
             mujoco.mjr_overlay(mujoco.mjtFont.mjFONT_NORMAL, mujoco.mjtGridPos.mjGRID_TOPLEFT,
                                cv.mjrect(*self.view_rect), banner, "", self.con)
-        self._draw_sensor_insets(cv, s, view_w)
+        self._draw_sensor_insets(cv, s, layout, lens_images)
         # panel + top view
         s.panel.draw(cv, view_w, 0, win_h)
         mr = s.panel.map_rect
@@ -397,26 +404,64 @@ class Viewer:
         glfw.swap_buffers(self.window)
         glfw.poll_events()
 
-    def _draw_sensor_insets(self, cv, s, view_w):
-        """Sensor cameras (global D455, wrist) rendered from the scene's camera models, top-right of the 3D view."""
-        self._inset_rects = []
-        if not self.show_sensor_cameras or not self._sensor:
-            return
-        y = INSET_MARGIN
+    def _inset_layout(self, view_w) -> list:
+        """(key, label, x, y, w, h) of the sensor camera insets, top-right of the 3D view (window units)."""
+        out, y = [], INSET_MARGIN
+        if not self.show_sensor_cameras:
+            return out
         for key, label, h in SENSOR_INSETS:
             if key not in self._sensor:
                 continue
-            cam, scn, aspect = self._sensor[key]
-            w = h * aspect
+            w = h * self._sensor[key][2]
             x = view_w - w - INSET_MARGIN
             if x < view_w * 0.4 or y + h > self.view_rect[3]:
                 break
+            out.append((key, label, x, y, w, h))
+            y += h + INSET_MARGIN
+        return out
+
+    def _prerender_lens(self, cv, s, layout) -> dict:
+        """Wrist camera in "real" lens mode: render the wider pinhole offscreen at 1.5x the inset's framebuffer size,
+        read it back and resample it to the raw sensor (agentic_sim.wrist_lens). Returns key -> bottom-up RGB image
+        for mjr_drawPixels."""
+        out = {}
+        for key, _, x, y, w, h in layout:
+            cam, scn, _, lens, rfovy = self._sensor[key]
+            if lens is None:
+                continue
+            r = cv.mjrect(x, y, w, h)
+            rw = min(int(r.width * 1.5), int(self.model.vis.global_.offwidth))
+            rh = min(int(r.height * 1.5), int(self.model.vis.global_.offheight))
+            ck = (key, r.width, r.height, rw, rh)
+            maps = self._lens_cache.get(ck)
+            if maps is None:
+                iy, ix = lens.maps(rw, rh, rfovy, r.width, r.height)
+                maps = self._lens_cache[ck] = ((rh - 1 - iy)[::-1], ix[::-1])   # GL rows run bottom-up
             mujoco.mjv_updateScene(self.model, s.d, self.opt, self.pert, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
+            src = mujoco.MjrRect(0, 0, rw, rh)
+            mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self.con)
+            try:
+                mujoco.mjr_render(src, scn, self.con)
+                buf = np.zeros((rh, rw, 3), np.uint8)
+                mujoco.mjr_readPixels(buf, None, src, self.con)
+            finally:
+                mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_WINDOW, self.con)
+            out[key] = np.ascontiguousarray(buf[maps[0], maps[1]])
+        return out
+
+    def _draw_sensor_insets(self, cv, s, layout, lens_images):
+        """Sensor cameras (global D455, wrist) rendered from the scene's camera models, top-right of the 3D view."""
+        self._inset_rects = []
+        for key, label, x, y, w, h in layout:
+            cam, scn, _, _, _ = self._sensor[key]
             cv.rect(x - 2, y - 2, w + 4, h + 4, (0.1, 0.1, 0.12, 1.0))
-            mujoco.mjr_render(cv.mjrect(x, y, w, h), scn, self.con)
+            if key in lens_images:
+                mujoco.mjr_drawPixels(lens_images[key].ravel(), None, cv.mjrect(x, y, w, h), self.con)
+            else:
+                mujoco.mjv_updateScene(self.model, s.d, self.opt, self.pert, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
+                mujoco.mjr_render(cv.mjrect(x, y, w, h), scn, self.con)
             cv.label(x, y, cv.text_width(label) + 12, cv.line_h + 4, label, (0.1, 0.1, 0.12, 0.8))
             self._inset_rects.append((x - 2, y - 2, w + 4, h + 4))
-            y += h + INSET_MARGIN
 
     def render_idle(self):
         """No session loaded (server waiting for load_experiment): keep the window responsive."""

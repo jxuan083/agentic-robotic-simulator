@@ -32,6 +32,7 @@ import omni.usd
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 
 from agentic_sim.config import load, provisional_fields, v
+from agentic_sim.wrist_lens import apply_wrist_lens
 from agentic_sim.isaac.chain import chain_from_usd
 from agentic_sim.isaac.color_randomizer import ColorRandomizer
 from agentic_sim.isaac.focus_mode import FocusMode
@@ -76,6 +77,7 @@ class SessionConfig:
     task_log: str | None = None        # executor event log (JSONL)
     log: str | None = None             # per-frame CSV
     result: str | None = None          # result JSON (script runs)
+    wrist_lens: str | None = None      # wrist camera image mode ("real" | "pinhole"); None = scene default
     profile: bool = False
     device: str = "cpu"
 
@@ -95,7 +97,7 @@ class TeleopSession:
         self.closed = False
         self._finished = None
         self._requests: list[str] = []
-        scene_cfg = self.scene_cfg = load(cfg.scene)
+        scene_cfg = self.scene_cfg = apply_wrist_lens(load(cfg.scene), cfg.wrist_lens)
         teleop_cfg = load(cfg.teleop)
 
         sim = self.sim = sim_utils.SimulationContext(
@@ -117,8 +119,9 @@ class TeleopSession:
 
         sim.reset()
         sim.set_camera_view(cam["eye"], cam["target"])
-        from agentic_sim.isaac.sensor_views import SensorViews
-        self.sensor_views = SensorViews(h.sensor_cameras, log)
+        from agentic_sim.isaac.sensor_views import sensor_views
+        self.sensor_views = sensor_views(log)      # resident across sessions, docked below the viewport
+        self.sensor_views.bind(h.sensor_cameras)
         # operation UI: scene prims are not pickable in the viewport, so a drag can never select (and then show a
         # transform gizmo for) the robot or the table. The Stage panel can still select prims.
         self.usd_ctx = omni.usd.get_context()
@@ -128,7 +131,8 @@ class TeleopSession:
                                         seed=cfg.color_dr_seed, log_path=cfg.color_dr_log, log=log,
                                         block_prims=h.block_prims)
         self.chain = chain_from_usd(sim.stage, "/World/Robot", ee_offset=(0, 0, 0))
-        self.ctrl = load_controller(self.chain, teleop_cfg, base_pos=v(scene_cfg["robot"]["base_pos"]))
+        self.ctrl = load_controller(self.chain, teleop_cfg, base_pos=v(scene_cfg["robot"]["base_pos"]),
+                                    scene=scene_cfg)
         self.arm_ids = [self.robot.joint_names.index(n) for n in ARM_JOINTS]
         self.jaw_id = self.robot.joint_names.index(GRIPPER_JOINT)
         self.edge = v(scene_cfg["block"]["edge"])
@@ -435,6 +439,7 @@ class TeleopSession:
                                marker_indices=torch.tensor([0]))
         handle.update(s.pos, kind_of(s.status))
         self.focus_mode.update()
+        self.sensor_views.update()
         if self.focus_at_frame >= 0:
             self.focus_at_frame -= 1
             if self.focus_at_frame < 0:
@@ -604,7 +609,7 @@ class TeleopSession:
         self.finish()
         self.kb.close()
         self.handle.destroy()
-        self.sensor_views.destroy()
+        self.sensor_views.unbind()
         if not keep_layout:
             self.focus_mode.exit()
         self.focus_mode.set_panel(None)

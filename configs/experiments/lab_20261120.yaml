@@ -1,0 +1,12 @@
+# Experiment: lab layout of 2026-11-20 (single right arm) with the D455 global and wrist sensor cameras.
+# The cameras come from the scene (configs/scenes/lab_20261120.yaml, sensor_cameras); `cameras` below stays empty.
+name: lab_20261120
+description: "實驗室單臂配置（2026-11-20）：粉色儲存盤、米色放置盤、D455 global 與腕部相機視角（tools/lab.py 的預設）"
+backends: [isaac, mujoco]
+scene: configs/scenes/lab_20261120.yaml
+robots:
+  - {id: arm0, model: so101}
+teleop: configs/teleop.yaml
+color_dr: configs/color_randomization.yaml
+cameras: []
+acceptance: []

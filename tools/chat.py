@@ -220,7 +220,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--backend", choices=["isaac", "mujoco"], required=True)
     ap.add_argument("--config", default="configs/chat.yaml")
-    ap.add_argument("--load", action="store_true", help="(re)load minimal_pick_place first (fresh scene, no task)")
+    ap.add_argument("--load", action="store_true", help="(re)load the experiment first (fresh scene, no task)")
+    ap.add_argument("--experiment", default="minimal_pick_place", help="experiment loaded by --load / --script")
     ap.add_argument("--block-colors", default=None, help="with --load: colour name per block, comma-separated")
     ap.add_argument("--script", default=None, help="dialogue YAML (configs/chat/dialogues/*.yaml)")
     ap.add_argument("--out", default=None, help="script mode: output directory (transcript, result)")
@@ -250,7 +251,7 @@ def main(argv=None) -> int:
     try:
         if a.load or spec:
             opts = {"block_colors": colors, "blocks": len(colors)} if colors else {}
-            call("load_experiment", name="minimal_pick_place", options=opts)
+            call("load_experiment", name=(spec or {}).get("experiment", a.experiment), options=opts)
             say(f"已載入場景：{', '.join(colors) if colors else '預設積木'}")
         agent = ChatAgent(call, llm, cfg, log=lambda m: say(f"[chat] {m}"))
         say("準備模型中…")

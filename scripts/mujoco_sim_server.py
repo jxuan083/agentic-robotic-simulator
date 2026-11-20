@@ -71,7 +71,7 @@ class MujocoServer(TaskCommands):
         cfg = SessionConfig(scene=exp.scene, teleop=exp.teleop,
                             color_dr_config=exp.color_dr or "configs/color_randomization.yaml",
                             color_dr=opts.color_dr, color_dr_seed=opts.color_dr_seed, blocks=opts.blocks,
-                            block_colors=opts.block_colors)
+                            block_colors=opts.block_colors, wrist_lens=opts.wrist_lens)
         if script:
             cfg.script = f"configs/acceptance/{script}.yaml"
             cfg.log = os.path.join(out_dir, f"{script}.csv")

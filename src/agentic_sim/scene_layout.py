@@ -149,7 +149,9 @@ def sensor_cameras(scene: dict) -> dict:
     global: fixed in the mount frame. pos, rot_cv (3x3, columns = OpenCV camera x right / y down / z forward in the
             mount frame), width, height, fx, fy, cx, cy, fovy_deg (vertical, from fy).
     wrist:  attached to the gripper link through the camera mount; width, height, fovy_deg, fx, fy, cx, cy,
-            pos_in_gripper / quat_in_gripper (wxyz; camera looks along -Z with +Y up, USD and MuJoCo convention).
+            pos_in_gripper / quat_in_gripper (wxyz; camera looks along -Z with +Y up, USD and MuJoCo convention),
+            lens_mode ("real" | "pinhole"), render_fovy_deg / render_size (the pinhole the engine renders; wider
+            than fovy_deg in "real" mode) and lens (agentic_sim.wrist_lens.WristLens, "real" mode only).
     Scenes without the section have no sensor cameras."""
     out = {}
     sc = scene.get("sensor_cameras") or {}
@@ -170,5 +172,11 @@ def sensor_cameras(scene: dict) -> dict:
         pose = wr.get("pose_in_gripper") or {}
         out["wrist"] = {"width": w, "height": h, "fovy_deg": fovy, "fx": f, "fy": f, "cx": w / 2, "cy": h / 2,
                         "pos_in_gripper": tuple(float(x) for x in v(pose["pos"])) if pose else None,
-                        "quat_in_gripper": tuple(float(x) for x in v(pose["quat_wxyz"])) if pose else None}
+                        "quat_in_gripper": tuple(float(x) for x in v(pose["quat_wxyz"])) if pose else None,
+                        "lens_mode": "pinhole", "render_fovy_deg": fovy, "render_size": (w, h)}
+        from agentic_sim.wrist_lens import WristLens, lens_mode
+        lens = WristLens.from_scene(scene)
+        if lens is not None and lens_mode(scene) == "real":
+            rw, rh, rfovy = lens.render_size()
+            out["wrist"].update(lens_mode="real", render_fovy_deg=rfovy, render_size=(rw, rh), lens=lens)
     return out
