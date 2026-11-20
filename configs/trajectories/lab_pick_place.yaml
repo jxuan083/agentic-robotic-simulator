@@ -1,0 +1,21 @@
+# Lab scene (configs/scenes/lab_20261120.yaml): pick block 0 (red, slot of the 2026-11-20 recording) from the pink
+# tray and place it in the beige tray. Same pattern as pick_place.yaml: 5 mm short on the fixed-finger side, yaw
+# offset = -(heading from the pan axis) so the fingers face the cube sides. The pick point is outside the vertical
+# grasp region, so the controller tilts the gripper (about 7 deg).
+name: lab_pick_place
+scene: configs/scenes/lab_20261120.yaml
+start: {pos: [0.150, 0.000, 0.090], yaw: 0.0, gripper: 0.52}
+segments:
+  - {t: 1.0, label: settle}
+  - {t: 2.0, pos: [0.290, 0.155, 0.095], yaw: -0.47, label: approach}
+  - {t: 1.4, pos: [0.290, 0.155, 0.029], label: descend}
+  - {t: 0.8, label: descend}
+  - {t: 1.2, gripper: -0.1745, label: grasp}
+  - {t: 0.8, label: grasp}
+  - {t: 1.5, pos: [0.290, 0.155, 0.105], label: lift}
+  - {t: 3.0, pos: [0.230, -0.130, 0.105], label: carry}
+  - {t: 0.5, label: carry}
+  - {t: 1.2, pos: [0.230, -0.130, 0.045], label: lower}
+  - {t: 0.8, gripper: 0.52, label: release}
+  - {t: 1.2, pos: [0.230, -0.130, 0.105], label: retreat}
+  - {t: 1.5, label: retreat}

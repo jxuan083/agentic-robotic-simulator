@@ -117,6 +117,8 @@ class TeleopSession:
 
         sim.reset()
         sim.set_camera_view(cam["eye"], cam["target"])
+        from agentic_sim.isaac.sensor_views import SensorViews
+        self.sensor_views = SensorViews(h.sensor_cameras, log)
         # operation UI: scene prims are not pickable in the viewport, so a drag can never select (and then show a
         # transform gizmo for) the robot or the table. The Stage panel can still select prims.
         self.usd_ctx = omni.usd.get_context()
@@ -602,6 +604,7 @@ class TeleopSession:
         self.finish()
         self.kb.close()
         self.handle.destroy()
+        self.sensor_views.destroy()
         if not keep_layout:
             self.focus_mode.exit()
         self.focus_mode.set_panel(None)

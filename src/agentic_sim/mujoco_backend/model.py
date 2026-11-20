@@ -16,7 +16,7 @@ import numpy as np
 
 from agentic_sim.config import load, v
 from agentic_sim.kinematics import ARM_JOINTS, GRIPPER_JOINT
-from agentic_sim.scene_layout import TRAYS, block_layout, table_box, tray_parts, yaw_quat
+from agentic_sim.scene_layout import TRAYS, block_layout, global_camera_quat, sensor_cameras, table_box, tray_parts, wrist_camera_mount, yaw_quat
 
 ROBOT_CONFIG = "configs/mujoco_so101.yaml"
 SHELL_EXCLUDE = ("sts3215",)  # motor materials keep their colour (as in the Isaac colour DR)
@@ -77,8 +77,10 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
     spec = mujoco.MjSpec.from_file(model_path(rc))
     phys = rc["physics"]
     spec.option.timestep = float(phys["timestep"])
+    keep = {"camera_mount"} if wrist_camera_mount(scene_cfg) else set()
     for name in rc["model"].get("remove_bodies", []):
-        spec.delete(spec.body(name))
+        if name not in keep:
+            spec.delete(spec.body(name))
     al = rc["alignment"]
     base = spec.body("base")
     # MJCF base origin = the scene's robot base position (shared base link frame) + the MJCF / USD base offset
@@ -130,6 +132,8 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
     top.proj = mujoco.mjtProjection.mjPROJ_ORTHOGRAPHIC
     top.fovy = MAP_X[1] - MAP_X[0]
 
+    add_sensor_cameras(spec, scene_cfg)
+
     lay = block_layout(scene_cfg, n_blocks, colors)
     for i, (pos, rgb) in enumerate(zip(lay.init_pos, lay.display_rgb)):
         b = wb.add_body()
@@ -158,6 +162,39 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
         block_qvel=[int(m.jnt_dofadr[m.joint(f"block_{i}_free").id]) for i in range(len(lay.init_pos))],
         block_init_pos=list(lay.init_pos), block_init_rot=lay.init_rot, block_colors=list(lay.display_rgb),
         shell_materials=shell, edge=lay.edge, trays=trays)
+
+
+WRIST_CAMERA = "wrist_cam"     # Menagerie camera inside the camera_mount body
+GLOBAL_CAMERA = "global_cam"
+
+
+def add_sensor_cameras(spec, scene_cfg: dict):
+    """Global camera fixed in the world (scene pose, vertical FOV from fy) and the wrist camera's FOV."""
+    cams = sensor_cameras(scene_cfg)
+    g = cams.get("global")
+    if g:
+        c = spec.worldbody.add_camera()
+        c.name = GLOBAL_CAMERA
+        c.pos = list(g["pos"])
+        c.quat = list(global_camera_quat(g))
+        c.fovy = g["fovy_deg"]
+    w = cams.get("wrist")
+    if w and wrist_camera_mount(scene_cfg):
+        c = spec.camera(WRIST_CAMERA)
+        c.fovy = w["fovy_deg"]
+        if w["pos_in_gripper"] is not None:  # the camera_mount body sits at the gripper body origin
+            c.pos, c.quat = list(w["pos_in_gripper"]), list(w["quat_in_gripper"])
+
+
+def sensor_camera_names(m: mujoco.MjModel) -> dict:
+    """Scene camera name -> MuJoCo camera id, for the sensor cameras present in the model."""
+    out = {}
+    for key, name in (("global", GLOBAL_CAMERA), ("wrist", WRIST_CAMERA)):
+        try:
+            out[key] = m.camera(name).id
+        except KeyError:
+            pass
+    return out
 
 
 def free_camera(scene_cfg: dict) -> dict:
