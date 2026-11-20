@@ -22,9 +22,12 @@ import numpy as np
 from agentic_sim.mujoco_backend import panel as P
 from agentic_sim.mujoco_backend.draw2d import Canvas
 from agentic_sim.mujoco_backend.handle import HIT_RADIUS_PX, RING_RADIUS_PX
-from agentic_sim.mujoco_backend.model import free_camera
+from agentic_sim.mujoco_backend.model import free_camera, sensor_camera_names
 from agentic_sim.teleop.keys import KeyState
 
+# sensor camera insets in the top-right corner of the 3D view: (key, label, inset height in window units)
+SENSOR_INSETS = (("global", "D455 global", 200), ("wrist", "wrist camera", 180))
+INSET_MARGIN = 8
 RING_RGBA = {"ok": (0.25, 0.82, 0.25, 1.0), "limit": (1.0, 0.63, 0.13, 1.0), "blocked": (1.0, 0.25, 0.25, 1.0)}
 EXTRA_KEYS = {glfw.KEY_BACKSPACE: "BACKSPACE", glfw.KEY_ENTER: "ENTER", glfw.KEY_KP_ENTER: "KP_ENTER",
               glfw.KEY_ESCAPE: "ESCAPE", glfw.KEY_TAB: "TAB", glfw.KEY_LEFT_SHIFT: "LEFT_SHIFT",
@@ -122,6 +125,9 @@ class Viewer:
         self._cam_set = False
         self.view_rect = (0, 0, 1, 1)
         self.capture_path = None
+        self.show_sensor_cameras = True   # scenes with sensor cameras show them as insets in the 3D view
+        self._sensor = {}                 # key -> (MjvCamera, MjvScene, aspect)
+        self._inset_rects = []
         glfw.set_key_callback(self.window, self._on_key)
         glfw.set_char_callback(self.window, self._on_char)
         glfw.set_window_focus_callback(self.window, self._on_focus)
@@ -144,6 +150,14 @@ class Viewer:
         mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_WINDOW, self.con)
         self.cam_top.type = mujoco.mjtCamera.mjCAMERA_FIXED
         self.cam_top.fixedcamid = self.model.camera("topview").id
+        self._sensor = {}
+        from agentic_sim.scene_layout import sensor_cameras
+        specs = sensor_cameras(session.scene_cfg)
+        for key, cid in sensor_camera_names(self.model).items():
+            cam = mujoco.MjvCamera()
+            cam.type, cam.fixedcamid = mujoco.mjtCamera.mjCAMERA_FIXED, cid
+            self._sensor[key] = (cam, mujoco.MjvScene(self.model, maxgeom=4000),
+                                 specs[key]["width"] / specs[key]["height"])
         session.handle.projector = self.proj
         session.camera_position = self.camera_position
         if reset_camera or not self._cam_set:
@@ -207,7 +221,10 @@ class Viewer:
         self.inject_scroll(yoff)
 
     def in_view(self, x, y) -> bool:
+        """3D view, without the sensor camera insets (they take no input)."""
         vx, vy, vw, vh = self.view_rect
+        if any(rx <= x < rx + rw and ry <= y < ry + rh for rx, ry, rw, rh in self._inset_rects):
+            return False
         return vx <= x < vx + vw and vy <= y < vy + vh
 
     def inject_button(self, button: str, down: bool, alt: bool = False):
@@ -364,6 +381,7 @@ class Viewer:
         if banner:
             mujoco.mjr_overlay(mujoco.mjtFont.mjFONT_NORMAL, mujoco.mjtGridPos.mjGRID_TOPLEFT,
                                cv.mjrect(*self.view_rect), banner, "", self.con)
+        self._draw_sensor_insets(cv, s, view_w)
         # panel + top view
         s.panel.draw(cv, view_w, 0, win_h)
         mr = s.panel.map_rect
@@ -378,6 +396,27 @@ class Viewer:
             self._write_frame(path)
         glfw.swap_buffers(self.window)
         glfw.poll_events()
+
+    def _draw_sensor_insets(self, cv, s, view_w):
+        """Sensor cameras (global D455, wrist) rendered from the scene's camera models, top-right of the 3D view."""
+        self._inset_rects = []
+        if not self.show_sensor_cameras or not self._sensor:
+            return
+        y = INSET_MARGIN
+        for key, label, h in SENSOR_INSETS:
+            if key not in self._sensor:
+                continue
+            cam, scn, aspect = self._sensor[key]
+            w = h * aspect
+            x = view_w - w - INSET_MARGIN
+            if x < view_w * 0.4 or y + h > self.view_rect[3]:
+                break
+            mujoco.mjv_updateScene(self.model, s.d, self.opt, self.pert, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
+            cv.rect(x - 2, y - 2, w + 4, h + 4, (0.1, 0.1, 0.12, 1.0))
+            mujoco.mjr_render(cv.mjrect(x, y, w, h), scn, self.con)
+            cv.label(x, y, cv.text_width(label) + 12, cv.line_h + 4, label, (0.1, 0.1, 0.12, 0.8))
+            self._inset_rects.append((x - 2, y - 2, w + 4, h + 4))
+            y += h + INSET_MARGIN
 
     def render_idle(self):
         """No session loaded (server waiting for load_experiment): keep the window responsive."""

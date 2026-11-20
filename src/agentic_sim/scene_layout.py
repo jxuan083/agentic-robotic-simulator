@@ -5,6 +5,7 @@ Every backend builds the same table, trays and blocks from these numbers, so the
   tray_parts(spec)          five boxes per open-top tray (floor + four walls) and the tray's interior
   block_layout(scene, n)    initial positions and colours of n blocks (or named colours, one per block)
   block_in_tray(pos, tray)  block resting inside a tray (acceptance checks, panel counts)
+  sensor_cameras(scene)     global (fixed) and wrist (gripper) sensor cameras of lab scenes
 """
 
 from __future__ import annotations
@@ -127,3 +128,47 @@ def block_in_tray(pos, tray: dict, edge: float) -> bool:
     ly = s * (pos[0] - cx) + c * (pos[1] - cy)
     hx, hy = tray["inner_half"]
     return abs(lx) <= hx - edge / 2 and abs(ly) <= hy - edge / 2 and pos[2] < tray["floor_top"] + edge
+
+
+def wrist_camera_mount(scene: dict) -> bool:
+    """The arm carries the SO-101 wrist camera mount (lab scenes); lab_current_minimal keeps the no-camera arm."""
+    return bool(scene.get("robot", {}).get("wrist_camera_mount", False))
+
+
+def global_camera_quat(cam: dict) -> tuple:
+    """wxyz of the global camera in the USD / MuJoCo camera convention (-Z forward, +Y up) from its OpenCV axes."""
+    from agentic_sim.kinematics import mat_to_quat_wxyz
+    import numpy as np
+    m = np.array(cam["rot_cv"], float) @ np.diag([1.0, -1.0, -1.0])
+    return tuple(float(x) for x in mat_to_quat_wxyz(m))
+
+
+def sensor_cameras(scene: dict) -> dict:
+    """Sensor cameras of the scene (scene['sensor_cameras']), engine independent.
+
+    global: fixed in the mount frame. pos, rot_cv (3x3, columns = OpenCV camera x right / y down / z forward in the
+            mount frame), width, height, fx, fy, cx, cy, fovy_deg (vertical, from fy).
+    wrist:  attached to the gripper link through the camera mount; width, height, fovy_deg, fx, fy, cx, cy,
+            pos_in_gripper / quat_in_gripper (wxyz; camera looks along -Z with +Y up, USD and MuJoCo convention).
+    Scenes without the section have no sensor cameras."""
+    out = {}
+    sc = scene.get("sensor_cameras") or {}
+    g = sc.get("global")
+    if g:
+        w, h = (int(x) for x in v(g["resolution"]))
+        k = v(g["intrinsics"])
+        out["global"] = {"pos": tuple(float(x) for x in v(g["pos"])),
+                         "rot_cv": [[float(x) for x in row] for row in v(g["rot"])],
+                         "width": w, "height": h, "fx": float(k["fx"]), "fy": float(k["fy"]),
+                         "cx": float(k["cx"]), "cy": float(k["cy"]),
+                         "fovy_deg": math.degrees(2 * math.atan(h / 2 / float(k["fy"])))}
+    wr = sc.get("wrist")
+    if wr:
+        w, h = (int(x) for x in v(wr["resolution"]))
+        fovy = float(v(wr["fovy_deg"]))
+        f = h / 2 / math.tan(math.radians(fovy) / 2)
+        pose = wr.get("pose_in_gripper") or {}
+        out["wrist"] = {"width": w, "height": h, "fovy_deg": fovy, "fx": f, "fy": f, "cx": w / 2, "cy": h / 2,
+                        "pos_in_gripper": tuple(float(x) for x in v(pose["pos"])) if pose else None,
+                        "quat_in_gripper": tuple(float(x) for x in v(pose["quat_wxyz"])) if pose else None}
+    return out

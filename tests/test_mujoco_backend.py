@@ -132,3 +132,28 @@ def test_viewer_camera_moves_without_window():
     v.move_camera(mujoco.mjtMouse.mjMOUSE_MOVE_V, 0.05, 0.05)
     assert not errors and v.cam.azimuth != 10.0 and v.cam.distance != 1.0
 
+
+
+@needs_model
+def test_lab_scene_sensor_cameras():
+    """Lab scene: global camera at the scene pose, wrist camera on the kept camera mount (moves with the gripper)."""
+    from agentic_sim.scene_layout import sensor_cameras
+    lab = load("configs/scenes/lab_20261120.yaml")
+    sc = mjm.build(lab, 1)
+    m, d = sc.model, mujoco.MjData(sc.model)
+    ids = mjm.sensor_camera_names(m)
+    assert set(ids) == {"global", "wrist"} and m.body("camera_mount").id > 0
+    mujoco.mj_forward(m, d)
+    g = sensor_cameras(lab)["global"]
+    assert np.allclose(d.cam_xpos[ids["global"]], g["pos"], atol=1e-9)
+    assert abs(m.cam_fovy[ids["global"]] - g["fovy_deg"]) < 1e-9
+    # MuJoCo camera -Z = OpenCV +Z (optical axis)
+    assert np.allclose(-d.cam_xmat[ids["global"]].reshape(3, 3)[:, 2], np.array(g["rot_cv"])[:, 2], atol=1e-6)
+    p0 = d.cam_xpos[ids["wrist"]].copy()
+    d.qpos[sc.arm_qpos[0]] += 0.5
+    mujoco.mj_forward(m, d)
+    assert np.linalg.norm(d.cam_xpos[ids["wrist"]] - p0) > 0.02
+    # the minimal scene keeps the no-camera arm
+    m0 = mjm.build(SCENE, 1).model
+    assert mjm.sensor_camera_names(m0) == {}
+    assert "camera_mount" not in [m0.body(i).name for i in range(m0.nbody)]

@@ -1,0 +1,97 @@
+# SceneSpec: lab layout of 2026-11-20 (single right arm), rebuilt from the lab capture (RGB-D, joint readback, photos).
+# Every value carries its source:
+#   measured   read from a device or an SDK, or measured with a ruler
+#   estimated  derived from the captures (D455 depth + joint readback, image projection); method in `note`
+#   provisional  product label, operator approximation or a choice for the simulation; not measured
+# Frame: mount frame of the right follower (the only arm here), +X forward, +Y left, +Z up, metres. Origin on the
+# table top below the robot base link (same frame as lab_current_minimal). The left arm of the dual layout is not
+# modelled (single-arm environment until after the competition).
+name: lab_20261120
+version: 0.1.0
+
+robot:
+  asset: Sim-to-Real-SO-101-Workshop@ce807d9 SO-ARM101-USD.usd (with the wrist camera mount)
+  base_pos: {value: [0.0, 0.0, -0.0301], source: estimated,
+             note: "base bottom on the table top; the D455 plane fit puts the table 1.6 mm below the base bottom"}
+  # The lab arm carries the official SO-101 wrist camera mount (photos IMG_0541, IMG_0554). Isaac: Workshop USD with
+  # the camera mount; MuJoCo: the Menagerie camera_mount body is kept. lab_current_minimal keeps the no-camera arm.
+  wrist_camera_mount: true
+
+table:
+  # The base is clamped at the front edge of a cubicle desk; the back partition is about 0.64 m ahead (D455 image).
+  size: {value: [0.69, 1.40, 0.75], source: provisional,
+         note: "x: front edge about 5 cm behind the base centre (photos) to the partition at x = 0.64 (D455 image); y and height not measured"}
+  center_xy: {value: [0.295, 0.15], source: provisional}
+  color: [0.72, 0.72, 0.74]   # light grey desk (D455 frame mean about 0.69 0.67 0.70)
+  friction: {value: [0.6, 0.5], source: provisional, note: static/dynamic}
+
+trays:
+  # Centre and yaw: tray outline segmented in the D455 colour frame (single_right_stock_03 and dual_stock_01 agree
+  # within 2 mm), rays intersected with the plane at rim height (camera pose below). Outer size: product label; the
+  # projection gives pink 308 x 230 mm and beige 355 x 253 mm (beige edge contrast is weaker).
+  storage_pink:
+    outer_size: {value: [0.305, 0.23], source: provisional, note: "product label 30.5 x 23 cm; D455 projection 30.8 x 23.0 cm"}
+    depth: {value: 0.013, source: provisional, note: "operator: total height about 17 mm (table to rim top) minus the floor"}
+    wall_thickness: {value: 0.005, source: provisional, note: "operator: outer minus inner about 10 mm"}
+    floor_thickness: {value: 0.004, source: provisional, note: "operator: inner floor at most 5 mm above the table"}
+    center_xy: {value: [0.294, 0.234], source: estimated, note: D455 outline projection}
+    yaw_deg: {value: 0.2, source: estimated, note: D455 outline projection (minimum-area rectangle)}
+    color: [0.95, 0.62, 0.68]
+  placement_beige:
+    outer_size: {value: [0.365, 0.265], source: provisional, note: "product label 36.5 x 26.5 cm; D455 projection 35.5 x 25.3 cm"}
+    depth: {value: 0.019, source: provisional, note: "operator: total height about 23 mm minus the floor"}
+    wall_thickness: {value: 0.005, source: provisional, note: "operator: outer minus inner about 10 mm"}
+    floor_thickness: {value: 0.004, source: provisional, note: "operator: inner floor at most 5 mm above the table"}
+    center_xy: {value: [0.278, -0.158], source: estimated, note: D455 outline projection}
+    yaw_deg: {value: -2.0, source: estimated, note: "D455 outline projection (-2.2 / -1.7 deg in the two layouts)"}
+    color: [0.80, 0.74, 0.66]
+  friction: {value: [0.6, 0.5], source: provisional}
+
+block:
+  edge: {value: 0.0295, source: provisional, note: approximation of 2.9-3.0 cm batch, not per-block measured}
+  mass: {value: 0.01669, source: measured, note: "batch of 64 blocks: mean 16.69 g, sample sd 1.18 g"}
+  friction: {value: [1.0, 0.9], source: provisional, note: chosen for sim grasp, not measured}
+  # Slot 0 / 1 are the red and yellow blocks of single_right_stock_03 (D455 projection: red 0.286, 0.152; yellow
+  # 0.226, 0.164), rounded onto a 6 cm grid in the near part of the pink tray (all slots reachable by the teleop IK).
+  init_xy: {value: [0.290, 0.160], source: estimated, note: red block of single_right_stock_03, rounded to the slot grid}
+  init_yaw_deg: {value: 0.0, source: provisional}
+  color: [0.85, 0.15, 0.15]
+  count: 1
+  max_count: 8
+  layout_xy:
+    value: [[0.290, 0.160], [0.230, 0.160], [0.170, 0.160], [0.350, 0.160],
+            [0.290, 0.235], [0.230, 0.235], [0.170, 0.235], [0.330, 0.235]]
+    source: provisional
+    note: "slots 0 / 1 follow the lab layout; the others are a 6 cm grid in the reachable part of the pink tray"
+  extra_palette: configs/palettes/block_colors.yaml
+
+camera:
+  # viewer camera only: operator standing behind the right arm
+  eye: [-0.32, -0.50, 0.62]
+  target: [0.26, 0.04, 0.02]
+
+# Sensor cameras (rendered views). Image axes follow OpenCV: x right, y down, z along the optical axis.
+sensor_cameras:
+  global:
+    model: Intel RealSense D455, colour stream (firmware 5.12.6, USB 2.1)
+    resolution: {value: [1280, 720], source: measured, note: full-video setting of the lab recordings (15 FPS)}
+    intrinsics: {value: {fx: 639.5267, fy: 639.0475, cx: 640.1006, cy: 369.2910}, source: measured,
+                 note: "librealsense colour intrinsics at 1280 x 720; inverse Brown-Conrady k1 -0.0552 k2 0.0636 not rendered"}
+    # Pose: rigid ICP between D455 depth points of the arm (8 frames of right_arm_sag_02) and the SO-101 meshes
+    # posed by the recorded joint readback; median residual 4.6 mm, 85 % of points within 10 mm. Camera stand
+    # about 18-19 cm left of the right arm (operator, tape) agrees with y = 0.181.
+    pos: {value: [0.3943, 0.1814, 0.5775], source: estimated, note: "optical centre of the colour camera, mount frame"}
+    rot: {value: [[-0.01853, -0.99499, -0.09823], [-0.99960, 0.01632, 0.02327], [-0.02155, 0.09862, -0.99489]],
+          source: estimated, note: "columns = camera x / y / z axes in the mount frame (5.8 deg off vertical)"}
+  wrist:
+    model: Innomaker U20CAM-1080p-S1 (MJPG)
+    resolution: {value: [640, 480], source: measured, note: lab recording setting (30 FPS, 29.5 measured)}
+    # Mounted on the official SO-101 wrist camera mount. Pose and field of view follow the Menagerie / Workshop
+    # models of that mount (MuJoCo wrist_cam, vertical FOV 61 deg); the module's own intrinsics are not calibrated
+    # (vendor: 103 deg horizontal; buyers report much less). Checked against the lab wrist frames, see docs.
+    fovy_deg: {value: 61.0, source: provisional, note: "Menagerie wrist_cam fovy; Workshop gripper_cam 13.5 mm focal length (vertical 60 deg at 4:3)"}
+    # Camera frame in the gripper link frame (same frame in the Workshop USD and the Menagerie MJCF), USD / MuJoCo
+    # camera axes: looks along -Z, +Y up. Values of the Menagerie wrist_cam.
+    pose_in_gripper:
+      pos: {value: [-0.00296, 0.05436, -0.05310], source: provisional, note: Menagerie camera_mount wrist_cam}
+      quat_wxyz: {value: [0.958280, -0.285792, -0.001556, 0.004547], source: provisional, note: Menagerie camera_mount wrist_cam}

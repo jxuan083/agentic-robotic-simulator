@@ -25,10 +25,14 @@ def _load_workshop_module():
     return mod
 
 
-def so101_cfg(prim_path: str, pos=(0.0, 0.0, 0.0), rot=(1.0, 0.0, 0.0, 0.0)):
-    """Workshop SO-101 (no-camera USD) placed with its base frame at pos/rot (w, x, y, z)."""
+def so101_cfg(prim_path: str, pos=(0.0, 0.0, 0.0), rot=(1.0, 0.0, 0.0, 0.0), camera_mount: bool = False):
+    """Workshop SO-101 placed with its base frame at pos/rot (w, x, y, z).
+
+    camera_mount: the USD with the wrist camera mount (lab scenes; same joints and links, plus the mount's visuals
+    and one collision box on the gripper link); otherwise the no-camera USD."""
     mod = _load_workshop_module()
     cfg = mod.SO101_CFG.replace(prim_path=prim_path)
-    cfg.spawn = cfg.spawn.replace(usd_path=os.path.join(workshop_dir(), _ASSET_REL, "usd/SO-ARM101-USD-NO-CAMERA.usd"))
+    usd = "usd/SO-ARM101-USD.usd" if camera_mount else "usd/SO-ARM101-USD-NO-CAMERA.usd"
+    cfg.spawn = cfg.spawn.replace(usd_path=os.path.join(workshop_dir(), _ASSET_REL, usd))
     cfg.init_state = cfg.init_state.replace(pos=tuple(pos), rot=tuple(rot))
     return cfg
