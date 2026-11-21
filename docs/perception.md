@@ -238,3 +238,48 @@ MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/locate_target_color.p
 - 限制同前：RGB-only、已知邊長、直立平放在粉紅托盤；只在 MuJoCo 渲染影像上評估，Isaac 尚未接上這個入口，實體相機尚未驗證。
 
 證據在 `outputs/target-localization/`（不進 repo）：`mujoco-seed{20261121,7,99}/`、`anywhere-seed{3,11}/` 各有 `evaluation.json`、`evaluation.csv`，每場目錄含 global 與每次 wrist 拍攝的原圖、疊圖、`target.json` 與事後評分；`video-seed99/` 是 3 場錄影。
+
+## 深度高度檢查：找出疊放、傾斜、相貼的積木
+
+定位之前，用 global D455 的深度（對齊到彩色影像）檢查每個色塊，找出需要先整理的積木：例如目標壓在別的積木下面、global 看不到。這是整理流程的第一步，只做判斷，還不動手臂。程式在 `agentic_sim.perception.height`，參數在 [`../configs/target_localization.yaml`](../configs/target_localization.yaml) 的 `height_check`。
+
+做法：色塊的 mask 腐蝕 2 px（去掉邊緣的飛點）後反投影成點雲，用 RANSAC 找出最主要的平面（容許帶寬隨量到的雜訊放寬，重複擬合 3 次），這個平面就是看得到的頂面。
+
+| 狀態 | 條件 | 意義 |
+|---|---|---|
+| `upright` | 頂面水平（≤ 5°）、高度 1 層、面積約一個面 | 正常 |
+| `stacked` | 頂面水平、高度 2 層以上 | 下面還有積木（可能就是目標） |
+| `tilted` | 頂面傾斜 > 5° | 傾斜，RGB 位姿不可信 |
+| `merged` | 一層高，但頂面面積 > 1.6 個面 | 同色積木相貼 |
+| `partial` | 頂面面積 < 0.5 個面 | 被部分遮住，或是疊放時露出的下層 |
+| `off_layer` | 水平，但高度不在整數層 | 架在不平的東西上 |
+| `side_face`、`no_depth` | 平面 > 70°（被色相切開的側面）、點太少 | 忽略，不算證據 |
+
+另外，兩個頂面在 xy 上的間距（每邊補回 2 mm 腐蝕損失）小於 15 mm 時標為「太近」。15 mm 是暫定的夾爪需求，手指寬度還沒量。global 的分割改用依色相切開（相貼的不同色積木才會分開）；切出的側面由 `side_face` 排除。
+
+```bash
+# 每場 8 顆隨機積木，再隨機做 1–3 次：疊上去、斜靠在旁邊、推到相貼，物理落定後評估
+MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/evaluate_height_check.py --episodes 40 --seed 5
+# 只做某一種：--kinds stack | lean | touch；深度雜訊：--depth-noise-mm-at-1m（預設 5，隨 z² 放大）
+```
+
+### 結果（MuJoCo，2026-11-21）
+
+4 組共 160 場（混合、只斜靠、只相貼、只疊放），深度雜訊 1 m 處 5 mm（D455 規格 4 m 處 ≤2% 換算，在托盤距離約 1.5 mm），邊緣加飛點。
+
+| 項目 | 結果 |
+|---|---|
+| 被壓在下面的積木，上面那顆被標出來 | **77/78** |
+| 有問題的色塊被標出（疊放、傾斜、被遮住、多顆相貼） | 135/136 |
+| 正常平放的色塊誤報 | 11/1058（1.0%） |
+| 傾斜角誤差（34 個傾斜色塊）中位數 | 0.5–1.0° |
+| 「太近」（< 15 mm）被標出 | 370/404（92%）；多報 56 次，其中 51 次真實間距 15–18 mm |
+
+- 雜訊：完美深度時誤報 3/259、傾斜誤差 0°；雜訊加到 8 mm 時，誤報 8/259（多是平放被判成傾斜），被壓住的積木 23/24。
+- 「太近」的漏報大多是間距 12–15 mm 的邊界情況；另有 9 對直接相貼的積木沒被標出，原因尚未分析。
+- 限制：
+  - 只在 MuJoCo 測試，深度雜訊是依規格估的模型；D455 在 1280×720 的最近量測距離約 0.52 m，疊兩層的頂面離相機約 0.51 m，可能量不到，要用實機確認。
+  - 斜靠的積木在物理落定時常常滑平（26 次只留下 7 次），所以傾斜的樣本較少。
+  - 只檢查 global 看得到的部分；完全被蓋住的積木，要從上面那顆的 `stacked` 推斷。
+
+證據在 `outputs/height-check/`（不進 repo）：`mix`、`lean`、`touch`、`stack`，以及雜訊比較 `mix-n0`、`mix-n8`。每場有 `global.png`（紅框是有問題的色塊，括號內是真值）和 `check.json`。

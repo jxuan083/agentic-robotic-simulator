@@ -22,3 +22,17 @@ color_only_min_area_fraction: 0.7
 # Colours that need a full wrist fit (whole cube, top and sides) to be confirmed: one face alone does not separate
 # them. A light green top face reads yellow from the wrist (3 wrong confirmations in 110 MuJoCo episodes before this).
 color_only_excluded: [yellow, light_green, dark_green]
+
+# Depth height check of each global colour segment (agentic_sim.perception.height): finds stacked, tilted, merged
+# and partly hidden blocks before localizing. Uses the global D455 depth aligned to the colour image.
+height_check:
+  erode_px: 2              # mask erosion before back-projection (drops flying edge pixels)
+  plane_tol_m: 0.0015      # RANSAC inlier distance for the top face (widened to 3 sigma of the measured noise)
+  min_points: 30
+  tilt_max_deg: 5.0        # top face tilted more than this: tilted
+  side_face_min_deg: 70.0  # steeper: a shaded side split off by hue, ignored (measured side faces 79-86 deg)
+  layer_tol: 0.15          # |height / edge - nearest whole layer| above this: off_layer
+  min_area_faces: 0.5      # top face smaller than this many faces: partial (hidden in part)
+  merged_area_faces: 1.6   # larger: touching blocks of one colour
+  close_gap_m: 0.015       # provisional gripper clearance between two tops (finger width not measured yet)
+  hull_margin_m: 0.002     # the depth top face misses about this much rim per side (erosion, plane band)
