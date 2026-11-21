@@ -107,6 +107,11 @@ class IsaacServer(TaskCommands):
         if self.layout is not None and self.layout.active and not opts.focus:
             self.layout.exit()
         cfg = SessionConfig(scene=exp.scene, teleop=exp.teleop,
+                            live_perception=opts.live_perception, perception_camera=opts.perception_camera,
+                            perception_hz=opts.perception_hz, perception_json=opts.perception_json,
+                            random_blocks=opts.random_blocks, random_seed=opts.random_seed,
+                            random_region=opts.random_region, random_config=opts.random_config,
+                            random_episode=opts.random_episode,
                             color_dr_config=exp.color_dr or "configs/color_randomization.yaml",
                             focus=opts.focus, color_dr=opts.color_dr, color_dr_seed=opts.color_dr_seed,
                             blocks=opts.blocks, block_colors=opts.block_colors, wrist_lens=opts.wrist_lens, profile=args.profile, device=args.device)
@@ -119,6 +124,9 @@ class IsaacServer(TaskCommands):
         t0 = time.monotonic()
         self.session = TeleopSession(cfg, log, focus_layout=self.layout, carry_script=carry_script)
         self.layout = self.session.focus_mode
+        if opts.random_blocks:
+            opts = replace(opts, random_seed=self.session.cfg.random_seed,
+                           random_episode=self.session.cfg.random_episode)
         self.experiment, self.options = exp, opts
         log(f"loaded {exp.name} in {time.monotonic() - t0:.1f}s (options {opts.__dict__}"
             f"{', scenario ' + script if script else ''}); rss {rss_mb():.0f} MB")

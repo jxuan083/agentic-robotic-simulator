@@ -1,0 +1,452 @@
+{
+  "provenance": "Copied unmodified record payloads/detection rows from saved MuJoCo rendered view.json files; only unrelated detections removed.",
+  "source_view_json_paths": [
+    "outputs/perception-exploration/mujoco-final/episode_000/views/final_single/view.json",
+    "outputs/perception-exploration/mujoco-final/episode_000/views/initial_baseline/view.json"
+  ],
+  "target_color": "blue",
+  "records": [
+    {
+      "frame_number": 7,
+      "captured_at_monotonic_s": 6498590.69285658,
+      "camera": "wrist",
+      "coordinate_frame": "mount",
+      "units": "m",
+      "pose_source": "same_render_frame_view_matrix",
+      "mount_from_cv": [
+        [
+          -0.9604095547386774,
+          0.12391086651801474,
+          0.24951870536176435,
+          0.07496504626290718
+        ],
+        [
+          0.27799902248744274,
+          0.4846614690621673,
+          0.8293490241765096,
+          0.16265479219893442
+        ],
+        [
+          -0.018166746067541498,
+          0.8658806832152206,
+          -0.4999206054685693,
+          0.18398030976799867
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "intrinsics": [
+        [
+          400.0,
+          0.0,
+          320.0
+        ],
+        [
+          0.0,
+          400.0,
+          240.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "distortion": [
+        -0.15,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "detections": [
+        {
+          "detection_id": 3,
+          "color": "blue",
+          "geometry": {
+            "status": "estimated",
+            "frame_id": "mount",
+            "units": "m",
+            "fit_iou": 0.9690501600853789,
+            "center_xyz_m": [
+              0.17858973796387118,
+              0.30638576219998886,
+              0.01875
+            ],
+            "yaw_rad_mod_pi_over_2": 1.2217304763960306,
+            "edge_m": 0.0295,
+            "support_z_m": 0.004,
+            "assumptions": [
+              "upright",
+              "known_edge",
+              "known_horizontal_support",
+              "unoccluded_silhouette"
+            ],
+            "visibility_scope": "self_occlusion_only",
+            "vertices": [
+              {
+                "id": 0,
+                "xyz_m": [
+                  0.1874054070064097,
+                  0.28748049892934313,
+                  0.004
+                ],
+                "uv_px": [
+                  198.0430329129187,
+                  98.19874879465526
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 1,
+                "xyz_m": [
+                  0.19749500123451694,
+                  0.3152014312425274,
+                  0.004
+                ],
+                "uv_px": [
+                  206.18900924812309,
+                  134.52907296803104
+                ],
+                "source": "geometry_inferred",
+                "self_visible": false,
+                "in_image": true
+              },
+              {
+                "id": 2,
+                "xyz_m": [
+                  0.16977406892133265,
+                  0.3252910254706346,
+                  0.004
+                ],
+                "uv_px": [
+                  252.48655843510394,
+                  136.49317912960007
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 3,
+                "xyz_m": [
+                  0.15968447469322541,
+                  0.2975700931574503,
+                  0.004
+                ],
+                "uv_px": [
+                  248.96175688417583,
+                  100.0642719211807
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 4,
+                "xyz_m": [
+                  0.1874054070064097,
+                  0.28748049892934313,
+                  0.0335
+                ],
+                "uv_px": [
+                  187.41418241139328,
+                  135.0132267592465
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 5,
+                "xyz_m": [
+                  0.19749500123451694,
+                  0.3152014312425274,
+                  0.0335
+                ],
+                "uv_px": [
+                  197.52082570043942,
+                  170.4647758666055
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 6,
+                "xyz_m": [
+                  0.16977406892133265,
+                  0.3252910254706346,
+                  0.0335
+                ],
+                "uv_px": [
+                  246.93171694431652,
+                  172.6648154333316
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 7,
+                "xyz_m": [
+                  0.15968447469322541,
+                  0.2975700931574503,
+                  0.0335
+                ],
+                "uv_px": [
+                  242.28214404409502,
+                  137.17298339833545
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              }
+            ]
+          }
+        }
+      ],
+      "id_scope": "current_frame_only",
+      "method": "classical_RGB_and_cube_geometry",
+      "exploration_view_id": "final_single",
+      "ee_target_xyz_m": [
+        0.08358989457599317,
+        0.22573355758184757,
+        0.18
+      ],
+      "ee_measured_xyz_m": [
+        0.08358932987120307,
+        0.22573184380440328,
+        0.17987162812781826
+      ],
+      "captured_at_unix_s": 1795251577.1412168
+    },
+    {
+      "frame_number": 0,
+      "captured_at_monotonic_s": 6498587.553359053,
+      "camera": "wrist",
+      "coordinate_frame": "mount",
+      "units": "m",
+      "pose_source": "same_render_frame_view_matrix",
+      "mount_from_cv": [
+        [
+          -0.7142260364065552,
+          0.24700028093669238,
+          0.654883218700995,
+          0.11271298238726586
+        ],
+        [
+          0.6994242753049614,
+          0.2869090591907,
+          0.6545906162392151,
+          0.09842336041905107
+        ],
+        [
+          -0.026207862047671227,
+          0.9255668819547839,
+          -0.37767591264917566,
+          0.19550403044966752
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "intrinsics": [
+        [
+          400.0,
+          0.0,
+          320.0
+        ],
+        [
+          0.0,
+          400.0,
+          240.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "distortion": [
+        -0.15,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "detections": [
+        {
+          "detection_id": 2,
+          "color": "blue",
+          "geometry": {
+            "status": "estimated",
+            "frame_id": "mount",
+            "units": "m",
+            "fit_iou": 0.9641344956413449,
+            "center_xyz_m": [
+              0.17797848812061304,
+              0.30593773475919467,
+              0.01875
+            ],
+            "yaw_rad_mod_pi_over_2": 1.2740903539558606,
+            "edge_m": 0.0295,
+            "support_z_m": 0.004,
+            "assumptions": [
+              "upright",
+              "known_edge",
+              "known_horizontal_support",
+              "unoccluded_silhouette"
+            ],
+            "visibility_scope": "self_occlusion_only",
+            "vertices": [
+              {
+                "id": 0,
+                "xyz_m": [
+                  0.18777150062640743,
+                  0.28751975696407955,
+                  0.004
+                ],
+                "uv_px": [
+                  450.36145923655937,
+                  77.24935756252152
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 1,
+                "xyz_m": [
+                  0.19639646591572818,
+                  0.31573074726498906,
+                  0.004
+                ],
+                "uv_px": [
+                  458.91988447041905,
+                  105.37680581751285
+                ],
+                "source": "geometry_inferred",
+                "self_visible": false,
+                "in_image": true
+              },
+              {
+                "id": 2,
+                "xyz_m": [
+                  0.16818547561481864,
+                  0.3243557125543098,
+                  0.004
+                ],
+                "uv_px": [
+                  501.47921327538467,
+                  94.833154894827
+                ],
+                "source": "geometry_inferred",
+                "self_visible": false,
+                "in_image": true
+              },
+              {
+                "id": 3,
+                "xyz_m": [
+                  0.1595605103254979,
+                  0.29614472225340027,
+                  0.004
+                ],
+                "uv_px": [
+                  496.4802968846165,
+                  64.9654741060804
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 4,
+                "xyz_m": [
+                  0.18777150062640743,
+                  0.28751975696407955,
+                  0.0335
+                ],
+                "uv_px": [
+                  456.6586743664116,
+                  112.80905569432883
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 5,
+                "xyz_m": [
+                  0.19639646591572818,
+                  0.31573074726498906,
+                  0.0335
+                ],
+                "uv_px": [
+                  464.79145454736823,
+                  139.5444157432499
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 6,
+                "xyz_m": [
+                  0.16818547561481864,
+                  0.3243557125543098,
+                  0.0335
+                ],
+                "uv_px": [
+                  509.8810168188255,
+                  129.42669230864547
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              },
+              {
+                "id": 7,
+                "xyz_m": [
+                  0.1595605103254979,
+                  0.29614472225340027,
+                  0.0335
+                ],
+                "uv_px": [
+                  505.9534678374712,
+                  100.81059508864584
+                ],
+                "source": "geometry_inferred",
+                "self_visible": true,
+                "in_image": true
+              }
+            ]
+          }
+        }
+      ],
+      "id_scope": "current_frame_only",
+      "method": "classical_RGB_and_cube_geometry",
+      "exploration_view_id": "initial_baseline",
+      "ee_target_xyz_m": [
+        0.15,
+        0.15,
+        0.2
+      ],
+      "ee_measured_xyz_m": [
+        0.15000063573527858,
+        0.15000059987809225,
+        0.1999056347175704
+      ],
+      "captured_at_unix_s": 1795251574.6688578
+    }
+  ]
+}

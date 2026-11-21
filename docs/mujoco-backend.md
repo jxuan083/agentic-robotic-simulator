@@ -1,5 +1,47 @@
 # MuJoCo backend
 
+## Live perception and browser desktop
+
+MuJoCo can run the same image-only global and wrist perception preview as Isaac. Each stream renders RGB at its native sensor resolution and uses its synchronized camera pose; global calibration uses the centered intrinsics derived from the renderer's vertical FOV. Wrist distortion follows the configured rendered lens path. The UI shows per-camera age plus XYZ centers and rejected candidates; a periodic full state file is available with `--perception-json`.
+
+For a host GUI inside the VS Code Remote browser desktop, use [the remote desktop guide](remote-desktop.md) and `tools/mujoco_remote.sh`. It expects a separate `.venv-mujoco` built from `requirements-mujoco.txt` and pinned Menagerie assets; it does not run MuJoCo in the Isaac container.
+
+### Active wrist-view exploration
+
+To run one interactive, controller-driven wrist sweep in the browser desktop:
+
+```bash
+tools/mujoco_remote.sh --full-scan --seed 20261121
+```
+
+The sweep visits six fixed observation points derived from configured pink-tray geometry, uses raised transit routes, and steps through the normal IK/controller path. It does not move blocks or use block poses to choose views or associate predictions. Press **R** to reset/cancel and clear the accumulated map, or close the viewer to cancel. Each reached view writes its RGB image, overlay, and JSON; `latest.json` separates estimates visible in the latest view from historical records.
+
+For a reproducible paired evaluation (initial single wrist frame, accumulated multi-view estimates, and separate final single frame on the same 10 seeded episodes):
+
+```bash
+MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/evaluate_perception_exploration.py \
+  --episodes 10 --seed 20261121 --output outputs/perception-exploration/mujoco-final
+```
+
+Evaluation uses settled simulator poses only after predictions are saved. The sweep uses a 25 mm spatial-only association gate; close objects can merge and view-dependent duplicate clusters can remain. Reachability and observed contact/motion are logged, but routes are not certified collision-free. See the run report under `outputs/perception-exploration/mujoco-final/`.
+
+### Random target-color search
+
+The default wrist exploration command now chooses one unique color actually present in the generated block set and searches for it:
+
+```bash
+tools/mujoco_remote.sh --explore-wrist
+```
+
+For a reproducible 10-episode headless run:
+
+```bash
+MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/search_target_color.py \
+  --episodes 10 --seed 20261121 --output outputs/perception-target-search/mujoco-final
+```
+
+The target chooser sees only the generated color-name list; the image-only search receives only the selected color and rendered perception records. It captures an initial frame, visits up to six primary and four higher alternate wrist views, and stops at the first same-color candidate accepted in two physical camera poses at least 10 mm apart whose predicted centers differ by at most 5 mm and whose eight corners agree within 5 mm RMSE under cube quarter-turn symmetry. A bounded search ends as `confirmed`, `exhausted`, `unreachable`, or `cancelled`; color presence does not guarantee visibility. The GUI and `latest-target.json` show status, target, and the confirmed predicted XYZ/eight corners with source-frame/time/pose provenance. Press **R** to reset and clear the current target and map. Full tray-sweep evaluation remains available with `tools/mujoco_remote.sh --full-scan` or `tools/evaluate_perception_exploration.py`.
+
 對應 issue [#3](https://github.com/jxuan083/agentic-robotic-simulator/issues/3) 的 P3。與 Isaac 版共用同一份場景設定、teleop 設定、按鍵、EE 控制器（IK、限制、拒絕原因、限速）與控制協定，在不能跑 Isaac Sim 的電腦上做物理驗證與流程驗證。
 
 - 不需要 Docker 或 NVIDIA GPU，只要 Python 3.11 與 OpenGL（GLFW 視窗）。實測環境為 Linux；macOS、Windows 未測。

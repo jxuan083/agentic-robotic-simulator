@@ -16,7 +16,7 @@ EXPERIMENT_DIR = "configs/experiments"
 ACCEPTANCE_DIR = "configs/acceptance"
 BACKENDS = ("isaac", "mujoco")
 ROBOT_MODELS = ("so101",)
-RUN_OPTIONS = ("focus", "color_dr", "color_dr_seed", "blocks", "block_colors", "wrist_lens")
+RUN_OPTIONS = ("live_perception", "perception_camera", "perception_hz", "perception_json", "focus", "color_dr", "color_dr_seed", "blocks", "block_colors", "wrist_lens", "random_blocks", "random_seed", "random_region", "random_config", "random_episode")
 
 _REQUIRED = ("name", "description", "backends", "scene", "robots", "teleop")
 _OPTIONAL = ("color_dr", "cameras", "acceptance")

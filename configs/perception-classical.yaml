@@ -1,0 +1,31 @@
+# RGB-only foreground baseline. Tune against the intended camera/background.
+min_saturation: 100
+min_value: 35
+max_value: 255
+min_area_px: 120
+max_area_fraction: 0.25
+min_side_px: 5
+max_aspect_ratio: 4.0
+min_solidity: 0.42
+close_kernel: 3
+open_kernel: 3
+# Optional normalized x1,y1,x2,y2 crop; null means full frame.
+roi_xyxy_normalized: null
+track_max_distance_px: 90.0
+track_max_missed_frames: 3
+color:
+  min_saturation: 55
+  min_value: 35
+  max_value: 255
+  center_crop_fraction: 0.72
+  min_valid_fraction: 0.15
+  min_dominance: 0.28
+  hue_ranges:
+    red: [[0.0, 10.5], [170.0, 180.0]]
+    orange: [[10.5, 24.5]]
+    yellow: [[24.5, 36.5]]
+    light_green: [[36.5, 85.0]]
+    dark_green: [[36.5, 85.0]]
+    cyan: [[85.0, 99.5]]
+    blue: [[99.5, 132.5]]
+    purple: [[132.5, 170.0]]

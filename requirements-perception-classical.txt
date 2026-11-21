@@ -1,0 +1,4 @@
+# Minimal dependencies for --backend classical; does not install Ultralytics or torch.
+numpy>=1.26
+PyYAML>=6.0
+opencv-python-headless>=4.9

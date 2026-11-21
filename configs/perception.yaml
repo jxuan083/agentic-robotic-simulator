@@ -1,0 +1,28 @@
+# Supply a project-trained instance-segmentation checkpoint here. Generic COCO
+# weights are not trained to recognize these blocks.
+model_path: weights/block-seg.pt
+device: ""                 # empty lets Ultralytics select a device
+confidence: 0.35
+iou: 0.7
+image_size: 640
+target_class_id: 0
+class_name: block
+tracker: bytetrack.yaml
+color:
+  min_saturation: 55
+  min_value: 35
+  max_value: 245
+  center_crop_fraction: 0.72
+  min_valid_fraction: 0.15
+  min_dominance: 0.28
+  # OpenCV HSV float hue units [0,180); bounds are lower-inclusive, upper-exclusive.
+  # Green brightness selects light_green vs dark_green.
+  hue_ranges:
+    red: [[0.0, 10.5], [170.0, 180.0]]
+    orange: [[10.5, 24.5]]
+    yellow: [[24.5, 36.5]]
+    light_green: [[36.5, 85.0]]
+    dark_green: [[36.5, 85.0]]
+    cyan: [[85.0, 99.5]]
+    blue: [[99.5, 132.5]]
+    purple: [[132.5, 170.0]]

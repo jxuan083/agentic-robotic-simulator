@@ -45,6 +45,7 @@ class SceneHandles:
     block_prims: list
     block_init_pos: list    # (x, y, z) per block
     block_init_rot: tuple
+    block_init_rots: list
     block_colors: list      # baseline display colour (sRGB-ish) per block, for the panel
     trays: dict
     sensor_cameras: dict    # key -> (camera prim path, width, height)
@@ -90,7 +91,7 @@ def build_scene(scene: dict, n_blocks: int | None = None, colors: list | None = 
                     ),
                     visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=tuple(colors[i]), roughness=0.5),
                 ),
-                init_state=RigidObjectCfg.InitialStateCfg(pos=init_pos, rot=init_rot),
+                init_state=RigidObjectCfg.InitialStateCfg(pos=init_pos, rot=lay.init_rots[i]),
             )
         ))
         prims.append(block_prim(i))
@@ -111,7 +112,7 @@ def build_scene(scene: dict, n_blocks: int | None = None, colors: list | None = 
     _box("/World/Axes/y", (t, L, t), (o[0], o[1] + L / 2, t / 2), (0.1, 0.8, 0.1), collide=False)
     _box("/World/Axes/z", (t, t, L), (o[0], o[1], L / 2), (0.1, 0.2, 0.9), collide=False)
 
-    return SceneHandles(robot, blocks, prims, inits, init_rot, display, trays, cams)
+    return SceneHandles(robot, blocks, prims, inits, init_rot, list(lay.init_rots), display, trays, cams)
 
 
 GLOBAL_CAMERA_PRIM = "/World/Cameras/global"

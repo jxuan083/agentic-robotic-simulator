@@ -1,0 +1,15 @@
+# Mount frame, metres. Uniform total count, then independent palette draws (duplicates allowed).
+count_range: [1, 8]
+colors: [red, orange, yellow, light_green, dark_green, blue, cyan, purple]
+boundary_margin_m: 0.008
+# Bounding circles ensure upright cubes cannot overlap, even at any yaw.
+gap_m: 0.006
+base_clearance_m: 0.11
+max_radius_m: 0.43
+workspace_xy: [[0.08, 0.43], [-0.40, 0.38]]
+max_attempts_per_layout: 1000
+layout_retries: 16
+# Each upright block receives an independent yaw; roll and pitch remain zero.
+yaw_range_deg: [-180.0, 180.0]
+# Check approach and grasp IK, not collision-free trajectories.
+check_ik: true
