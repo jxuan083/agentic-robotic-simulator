@@ -18,7 +18,7 @@ mkdir -p "$CACHE_DIR"/{kit,ov,pip,glcache,computecache,logs,data,documents} "$RE
 
 X11_ARGS=()
 if [[ -n "${DISPLAY:-}" ]]; then
-  X11_ARGS=(-e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix:rw)
+  X11_ARGS=(-e DISPLAY -v "${ISAAC_X11_DIR:-/tmp/.X11-unix}:/tmp/.X11-unix:rw")
   [[ -n "${XAUTHORITY:-}" && -f "${XAUTHORITY}" ]] && X11_ARGS+=(-e XAUTHORITY=/root/.Xauthority -v "$XAUTHORITY:/root/.Xauthority:ro")
 fi
 

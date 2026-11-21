@@ -1,10 +1,8 @@
-"""Resident sensor camera views (global D455, wrist camera) docked in the Isaac main window.
+"""Sensor camera viewports for the current Isaac stage.
 
-One viewport window per camera, created once per Kit app and docked below the 3D viewport (global left, wrist
-right). The windows stay across sessions (persistent server, Reset, block-count rebuilds): each new session only
-points them at its camera prims (`bind`); scenes without sensor cameras hide them. They have no close button and take
-no teleop input. The wrist camera prim carries the scene's lens distortion in "real" lens mode (RTX OpenCV pinhole
-lens model), so the view shows the raw-looking image directly.
+Destroy these windows during unbind: a viewport render product can remain attached to a cleared old stage after
+SimulationContext rebuild. The next session creates new viewports for its camera prims. Wrist lens distortion is
+rendered by the camera prim in real-lens mode.
 """
 
 from __future__ import annotations
@@ -60,7 +58,13 @@ class SensorViews:
                 else:
                     win.viewport_api.camera_path = path
                     win.visible = True
-                win.viewport_api.resolution = (int(w), int(h))
+                # The widget otherwise overwrites API resolution when docked or
+                # resized. Sensor intrinsics refer to native pixels, not UI size.
+                win.viewport_widget.fill_frame = False
+                win.viewport_widget.expand_viewport = False
+                win.viewport_api.fill_frame = False
+                win.viewport_api.resolution_scale = 1.0
+                win.viewport_widget.set_resolution((int(w), int(h)))
                 self.log(f"sensor view {key}: {path} {w}x{h}")
             except Exception as e:  # noqa: BLE001  (the teleop session must not fail on an extra view)
                 self.log(f"sensor view {key} not available: {e}")
@@ -87,5 +91,14 @@ class SensorViews:
             self.log(f"sensor views: could not dock ({e}); they stay floating")
 
     def unbind(self):
-        """Session closing: the camera prims go away with the stage; keep the windows for the next session."""
+        """Destroy viewports before this session's stage is cleared/replaced."""
         self.bound = {}
+        for window in self.windows.values():
+            try:
+                window.visible = False
+                window.destroy()
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"sensor view teardown warning: {exc}")
+        self.windows.clear()
+        self._dock_in = -1
+        self._docked = False

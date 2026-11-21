@@ -172,6 +172,8 @@ def run_on_server(backend, exp, mode, opts, scenario) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    from agentic_sim.perception_cli import add_arguments as add_perception_arguments
+    add_perception_arguments(ap)
     ap.add_argument("--list", action="store_true", help="list experiments and server status")
     ap.add_argument("--server", choices=["up", "down", "status"], help="manage the backend's persistent server")
     ap.add_argument("--backend", choices=BACKENDS)
@@ -200,7 +202,9 @@ def main(argv=None) -> int:
                 ap.error("non-interactive use needs --backend, --experiment and --mode")
             backend, exp, mode, scenario = a.backend, load_experiment(a.experiment), a.mode, a.scenario
             colors = a.block_colors.split(",") if a.block_colors else None
-            opts = RunOptions(focus=a.focus and backend == "isaac", color_dr=a.color_dr, color_dr_seed=a.seed,
+            opts = RunOptions(live_perception=a.live_perception, perception_camera=a.perception_camera,
+                              perception_hz=a.perception_hz, perception_json=a.perception_json,
+                              focus=a.focus and backend == "isaac", color_dr=a.color_dr, color_dr_seed=a.seed,
                               blocks=len(colors) if colors else a.blocks, block_colors=colors, video=not a.no_video)
             use_server = not (a.direct or a.dry_run) and backend in SERVER_SCRIPTS and probe(backend) is not None
         else:

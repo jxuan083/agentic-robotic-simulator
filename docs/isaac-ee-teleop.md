@@ -443,3 +443,11 @@ vsync 和 60 Hz 限速會讓每幀固定等到約 17 ms。關掉後渲染降到�
 | `docker/isaac/` | 容器啟動、資產取得 |
 | `tools/` | 資產檢查、夾爪幾何量測、FK 驗證、可達範圍（`reach_map.py`／`plot_reach.py`）、驗收執行、視窗錄影 |
 | `tests/` | 純邏輯測試 |
+
+## 積木位置與八點預覽
+
+啟動時加 `--live-perception`，可在鍵盤操作時顯示腕部相機推算的積木中心與八個頂點。使用含 sensor cameras 的場景，例如 `--scene configs/scenes/lab_20261120.yaml`。更新頻率預設上限 2 Hz；設定、座標定義與限制見 [即時感知預覽](perception.md#鍵盤操作時即時預覽isaac)。
+
+## VS Code Remote／SSH 操作
+
+沒有遠端桌面時執行 `docker/isaac/remote.sh run`，然後在 VS Code 轉發 **6080**，使用瀏覽器操作。詳見 [瀏覽器遠端桌面](remote-desktop.md)。

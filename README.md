@@ -74,7 +74,14 @@ flowchart LR
 | [docs/chat-layer.md](docs/chat-layer.md) | 繁中聊天層：模型服務、意圖規則、語句表與完整對話驗收（#7） |
 | [docs/lab-scene-cameras.md](docs/lab-scene-cameras.md) | 實驗室單臂場景（2026-11-20 配置）、D455／腕部相機視角、相機位姿推算與實機對照 |
 | [docs/lab-entry.md](docs/lab-entry.md) | 一鍵入口 `tools/lab.py`、聊天視窗、常駐相機畫面、腕部鏡頭變形、競賽流程驗收（#11） |
+| [docs/perception.md](docs/perception.md) | RGB 積木實例分割、顏色估計、追蹤 ID、CLI 與微調說明 |
+| [docs/random-blocks.md](docs/random-blocks.md) | 隨機積木數量、顏色與合法初始位置；啟動／Reset 抽樣與 seed 重現 |
+| [docs/remote-desktop.md](docs/remote-desktop.md) | 瀏覽器桌面啟動 Isaac 與 host 隔離環境 MuJoCo |
 | [docs/demo-capture.md](docs/demo-capture.md) | 模擬示範採集：錄製指令、資料格式與單位、讀回與三個時刻、人工示範驗收（#13） |
 | [docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md) | Isaac Sim 最小場景與 keyboard／mouse EE 操作：環境、啟動、操作、驗收、已知問題 |
 | [docs/sim-server.md](docs/sim-server.md) | 實驗設定檔、選單、主機端 uv 環境、模擬伺服器控制協定 |
 | [docs/status.md](docs/status.md) | 已完成／預計實作／待確認、可沿用資產與參考來源 |
+
+### VS Code Remote：瀏覽器操作
+
+執行 `docker/isaac/remote.sh run`，在 VS Code **Ports** 轉發 **6080**，開啟 `http://localhost:6080/vnc.html?autoconnect=1&resize=scale`。預設顯示隨機積木場景與即時八頂點預覽；詳見 [遠端桌面](docs/remote-desktop.md)。

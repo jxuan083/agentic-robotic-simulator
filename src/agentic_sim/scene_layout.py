@@ -74,6 +74,17 @@ class BlockLayout:
     init_rot: tuple         # wxyz, shared
     display_rgb: list       # sRGB-ish design colour per block (panels, MuJoCo rgba)
     linear_rgb: list        # linear colour per block (renderer materials that expect linear values)
+    init_rots: list | None = None  # optional per-block wxyz; init_rot remains the legacy shared value
+
+
+def block_support_top(scene: dict) -> float:
+    """Height (m, mount frame) of the surface the blocks of this scene stand on: the support chosen when the layout
+    was sampled (random blocks: storage tray floor or table top 0), else the pink storage tray floor. The spawn and
+    the live perception (cube centre = support + edge / 2) both use it."""
+    bl = scene["block"]
+    if "_spawn_floor_top" in bl:
+        return float(bl["_spawn_floor_top"])
+    return float(tray_parts(scene["trays"]["storage_pink"])[1]["floor_top"])
 
 
 def block_layout(scene: dict, n_blocks: int | None = None, colors: list | None = None) -> BlockLayout:
@@ -89,7 +100,7 @@ def block_layout(scene: dict, n_blocks: int | None = None, colors: list | None =
     if not lo <= n <= hi:
         raise ValueError(f"block count {n} outside {lo}..{hi}")
     e = v(bl["edge"])
-    floor_top = tray_parts(scene["trays"]["storage_pink"])[1]["floor_top"]
+    floor_top = block_support_top(scene)
     layout = [tuple(v(bl["init_xy"]))] + [tuple(xy) for xy in (v(bl["layout_xy"])[1:] if "layout_xy" in bl else [])]
     if len(layout) < n:
         raise ValueError(f"scene block.layout_xy has {len(layout)} positions, {n} blocks requested")
@@ -110,8 +121,16 @@ def block_layout(scene: dict, n_blocks: int | None = None, colors: list | None =
             linear.append(tuple(srgb_to_linear(rgb)))
             display.append(tuple(rgb))
     inits = [(x, y, floor_top + e / 2 + 0.0005) for x, y in layout[:n]]
-    return BlockLayout(e, v(bl["mass"]), tuple(v(bl["friction"])), inits, yaw_quat(v(bl["init_yaw_deg"])),
-                       display, linear)
+    yaw_degs = bl.get("init_yaw_degs")
+    if yaw_degs is None:
+        rots = [yaw_quat(v(bl["init_yaw_deg"])) for _ in inits]
+    else:
+        if len(yaw_degs) != len(inits):
+            raise ValueError("block.init_yaw_degs must have one yaw per block")
+        rots = [yaw_quat(float(deg)) for deg in yaw_degs]
+    shared = yaw_quat(v(bl["init_yaw_deg"]))
+    return BlockLayout(e, v(bl["mass"]), tuple(v(bl["friction"])), inits, shared,
+                       display, linear, rots)
 
 
 def palette_by_name(path: str) -> dict:
