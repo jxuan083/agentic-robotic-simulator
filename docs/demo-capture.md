@@ -17,6 +17,9 @@ uv run tools/sim.py        # 選「錄示範」或「檢查上一筆示範」
   - 預設設定：Isaac、`lab_20261120`、keyboard／mouse、積木配置 `red,yellow,blue`（依槽位）、目標 `yellow`、20 Hz、場景預設的腕部鏡頭（`real`）、輸出到 `outputs/demos`。
   - 開始前顯示實際設定、輸出位置和採集命令。只需確認目標顏色；輸入 `layout` 可以改積木配置。
   - 目標顏色不在配置裡、或顏色名稱不認得時，留在選單提示修正，不會啟動 Isaac。
+  - **輸出目錄**必須在 repo 裡，因為 Isaac 容器只掛載 repo。repo 內的絕對路徑會換成相對路徑，repo 外的路徑一律拒絕。錄製腳本本身在 Kit 啟動前也會檢查。
+  - **錄製頻率**必須大於 0、最多 60 Hz。錄製器每 `round(60 / Hz)` 個控制步存一幀，設定畫面會顯示實際頻率，例如要求 25 Hz 時實際是 30 Hz。
+  - **即時感知**預設關閉，因為錄鍵鼠示範不需要，而且開了操作畫面約慢一半。要開時選單會問；非互動用法加 `--live-perception`，相機、頻率、JSON 路徑都會明確寫進採集命令。
   - **錄製中**，終端機的狀態列依序顯示：
     - 等待相機；
     - 開始錄製，並顯示目標顏色與已錄幀數；
@@ -33,7 +36,7 @@ uv run tools/sim.py        # 選「錄示範」或「檢查上一筆示範」
 
   ```bash
   uv run tools/sim.py --mode record [--target-color yellow] [--block-colors red,yellow,blue] [--record-hz 20] \
-      [--record-dir outputs/demos] [--wrist-lens real|pinhole] [--dry-run]
+      [--record-dir outputs/demos] [--wrist-lens real|pinhole] [--live-perception ...] [--dry-run]
   uv run tools/sim.py --mode readback --episode outputs/demos/<episode> [--figures] [--dry-run]
   ```
 
@@ -44,7 +47,9 @@ uv run tools/sim.py        # 選「錄示範」或「檢查上一筆示範」
   - `saved`：存檔，含結果、幀數、時長；
   - `closed`：錄製結束。
 
-  入口只讀這次啟動後、同一個錄製程式寫的事件。單獨執行採集命令時，也會寫這個檔。
+  - 入口每次啟動錄製都產生一個 run id，以 `--record_run_id` 傳給錄製端，並寫進每個事件和 manifest（`capture_run_id`）。
+  - 入口只讀帶有這個 run id 的事件。所以同一個目錄裡的舊紀錄、或同時在寫的其他錄製，都不會被當成這一次。
+  - 單獨執行採集命令時沒有給 run id，錄製端會自己產生一個。
 - **episode 名稱的時間**：資料夾名稱與 `started` 用的是 Isaac 容器的時鐘（UTC），入口 log 檔名用的是主機時間。
 
 ## 採集

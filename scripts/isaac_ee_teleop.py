@@ -46,12 +46,23 @@ parser.add_argument("--wrist_lens", choices=["real", "pinhole"], default=None,
 parser.add_argument("--record", default=None, metavar="DIR",
                     help="demonstration capture (issue #13): write episodes under DIR (e.g. outputs/demos)")
 parser.add_argument("--target_color", default=None, help="capture: colour of the block to pick (default: first block)")
-parser.add_argument("--record_hz", type=float, default=20.0, help="capture: recorded rate of images and rows")
+parser.add_argument("--record_hz", type=float, default=20.0, help="capture: recorded rate of images and rows "
+                    "(every round(60 / hz)-th control step; the actual rate is in the manifest)")
+parser.add_argument("--record_run_id", default=None, help="capture: id written into every recorder event and the "
+                    "manifest (tools/sim.py passes its own to follow this run)")
 AppLauncher.add_app_launcher_args(parser)
 # One small articulation: CPU PhysX steps faster than the GPU pipeline here, and the viewport should not wait for
 # vsync / the 60 Hz main-loop limiter (measured: 16 -> 40 fps on the tested machine, see docs/isaac-ee-teleop.md).
 parser.set_defaults(device="cpu", kit_args="--/app/vsync=false --/app/runLoops/main/rateLimitEnabled=false")
 args = parser.parse_args()
+if args.record:  # checked before Kit starts: the container mounts only the repo, and 0 Hz records nothing
+    _rec = os.path.realpath(args.record)
+    _repo = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    if os.path.commonpath([_rec, _repo]) != _repo or _rec == _repo:
+        parser.error(f"--record {args.record}: must be a directory inside the repo ({_repo}); the Isaac container "
+                     "mounts only the repo, anything else would be lost with the container")
+    if not (args.record_hz == args.record_hz and 0 < args.record_hz <= 60):
+        parser.error(f"--record_hz {args.record_hz}: must be > 0 and at most 60 (the control rate)")
 if args.record and (args.trajectory or args.task):  # checked before Kit starts; the session refuses it as well
     parser.error(f"--record captures operator demonstrations; it cannot be combined with "
                  f"--{'trajectory' if args.trajectory else 'task'} (the arm would be driven by code, not the operator)")
@@ -78,7 +89,8 @@ def main():
         script=args.script, log=args.log, result=args.result, profile=args.profile, device=args.device,
         trajectory=args.trajectory, task=args.task, task_log=args.task_log,
         block_colors=args.block_colors.split(",") if args.block_colors else None,
-        record=args.record, target_color=args.target_color, record_hz=args.record_hz), log)
+        record=args.record, target_color=args.target_color, record_hz=args.record_hz,
+        record_run_id=args.record_run_id), log)
     t_start = time.monotonic()
     while app.is_running():
         now = time.monotonic()

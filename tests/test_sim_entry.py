@@ -45,11 +45,13 @@ def test_record_setup_problems_are_reported_before_isaac_starts():
 
 FAKE_RECORDER = textwrap.dedent("""
     import json, os, sys, time
-    out = sys.argv[1]
+    out, run_id = sys.argv[1], sys.argv[2]
     path = os.path.join(out, "recorder_events.jsonl")
-    def ev(**k):
+    def ev(rid=run_id, **k):
         with open(path, "a") as f:
-            f.write(json.dumps(dict(k, pid=os.getpid())) + "\\n")
+            f.write(json.dumps(dict(k, run_id=rid, pid=55)) + "\\n")
+    # another recorder writing to the same directory meanwhile (same container pid 55): not this run
+    ev(rid="other", event="saved", episode=os.path.join(out, "other_run"), success=True, reason="placed", frames=7)
     ep = os.path.join(out, "new_yellow")
     ev(event="episode", episode=ep, target_color="yellow", state="waiting_cameras")
     ev(event="recording", episode=ep, frames=1)
@@ -66,16 +68,18 @@ def test_recording_reports_only_the_episodes_of_this_run(tmp_path):
     out.mkdir()
     # an older run in the same directory: must not be taken for the new one
     (out / "recorder_events.jsonl").write_text(json.dumps({"event": "saved", "episode": str(out / "old"),
-                                                           "success": True, "frames": 99, "pid": 1}) + "\n")
+                                                           "success": True, "frames": 99, "pid": 55,
+                                                           "run_id": "abc"}) + "\n")
     script = tmp_path / "fake.py"
     script.write_text(FAKE_RECORDER)
     buf = io.StringIO()
-    res = demo_entry.run_recording(Command([sys.executable, str(script), str(out)]), str(tmp_path), "demos",
-                                   "yellow", dict(os.environ), "logs", out=buf, poll_s=0.05)
+    res = demo_entry.run_recording(Command([sys.executable, str(script), str(out), "abc"]), str(tmp_path), "demos",
+                                   "yellow", dict(os.environ), "logs", "abc", out=buf, poll_s=0.05)
     assert res["exit_code"] == 0 and not res["interrupted"]
     assert [e["episode"] for e in res["saved"]] == [str(out / "new_yellow"), str(out / "next_yellow")]
     text = buf.getvalue()
-    assert "兩台相機就緒" in text and "已存檔（成功：放進米色盤）：31 幀" in text and "old" not in text
+    assert "兩台相機就緒" in text and "已存檔（成功：放進米色盤）：31 幀" in text
+    assert "old" not in text and "other_run" not in text
     assert os.path.exists(tmp_path / res["log"])
 
 
@@ -141,7 +145,7 @@ def test_readback_without_a_recording_never_guesses(tmp_path, monkeypatch, capsy
 
 def test_interactive_record_stays_in_the_menu_until_the_target_is_in_the_layout(monkeypatch, capsys):
     import sim
-    answers = iter(["purple", "layout", "red,purple", "", "n"])
+    answers = iter(["purple", "layout", "red,purple", "", "n", "n"])   # ..., perception off, do not start
     monkeypatch.setattr("builtins.input", lambda *_: next(answers))
     rec = RecordOptions()
     assert sim.record_flow(EXP, rec, False, True) == 0          # "n": shown, not started
@@ -149,3 +153,46 @@ def test_interactive_record_stays_in_the_menu_until_the_target_is_in_the_layout(
     assert "需要修正：目標顏色 purple 不在積木配置 red,yellow,blue 裡" in out
     assert rec.block_colors == ["red", "purple"] and rec.target_color == "purple"
     assert "--block_colors red,purple --target_color purple" in out
+
+
+def test_record_output_must_be_inside_the_repo():
+    """The Isaac container mounts only the repo: another directory would be written inside the container and lost."""
+    from agentic_sim.launch import REPO_ROOT, record_dir
+    assert record_dir("outputs/demos") == "outputs/demos"
+    assert record_dir(os.path.join(REPO_ROOT, "outputs", "x")) == os.path.join("outputs", "x")   # mapped back
+    for bad in ("/tmp/demos", "../demos", ".", "outputs/../.."):
+        with pytest.raises(LaunchError, match="必須在 repo"):
+            record_dir(bad)
+        assert any("必須在 repo" in m for m in check_record(EXP, RecordOptions(out_dir=bad)))
+    argv = build_record("isaac", EXP, RecordOptions(out_dir=os.path.join(REPO_ROOT, "outputs", "x"))).argv
+    assert argv[argv.index("--record") + 1] == os.path.join("outputs", "x")
+
+
+def test_zero_rate_is_refused_and_the_actual_rate_is_shown(capsys):
+    import sim
+    from agentic_sim.launch import record_rate
+    assert record_rate(20) == (3, 20.0) and record_rate(25) == (2, 30.0) and record_rate(60) == (1, 60.0)
+    for hz in ("0", "-5", "61", "nan"):
+        assert sim.main(["--mode", "record", "--record-hz", hz, "--dry-run"]) == 2
+        assert "錄製頻率" in capsys.readouterr().out
+    assert sim.main(["--mode", "record", "--record-hz", "25", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "要求 25 Hz，實際 30 Hz（每 2 個控制步" in out and "--record_hz 25" in out
+
+
+def test_perception_options_are_passed_only_when_asked(capsys):
+    import sim
+    assert sim.main(["--mode", "record", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "即時感知：關" in out and "--live-perception" not in out
+    assert sim.main(["--mode", "record", "--live-perception", "--perception-camera", "wrist", "--perception-hz", "1.5",
+                     "--perception-json", "outputs/p.json", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "--live-perception --perception-camera wrist --perception-hz 1.5 --perception-json outputs/p.json" in out
+    assert "即時感知：開（wrist，最多 1.5 Hz，JSON outputs/p.json" in out
+
+
+def test_the_launch_passes_its_run_id_to_the_recorder():
+    argv = build_record("isaac", EXP, RecordOptions(run_id="r123")).argv
+    assert argv[argv.index("--record_run_id") + 1] == "r123"
+    assert "--record_run_id" not in build_record("isaac", EXP, RecordOptions()).argv

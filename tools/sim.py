@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from agentic_sim.experiments import BACKENDS, ExperimentError, list_experiments, load_experiment  # noqa: E402
 from agentic_sim.launch import (IMPLEMENTED_BACKENDS, MODES, RECORD_EXPERIMENT, LaunchError, RecordOptions,  # noqa: E402
-                                RunOptions, build, build_record, check_record)
+                                RunOptions, build, build_record, check_record, record_rate)
 from agentic_sim.server import runner  # noqa: E402
 from agentic_sim.server.client import RemoteError, SimClient, probe  # noqa: E402
 
@@ -165,12 +165,23 @@ def wrist_lens_default(exp) -> str:
 
 def record_setup_text(exp, rec: RecordOptions) -> str:
     lens = rec.wrist_lens or f"場景預設（{wrist_lens_default(exp)}）"
+    try:
+        stride, actual = record_rate(rec.record_hz)
+        rate = (f"{actual:g} Hz（每 {stride} 個控制步）" if abs(actual - rec.record_hz) < 1e-9 else
+                f"要求 {rec.record_hz:g} Hz，實際 {actual:g} Hz（每 {stride} 個控制步，控制頻率 60 Hz）")
+    except (ValueError, ZeroDivisionError, OverflowError):
+        rate = f"{rec.record_hz:g} Hz（無效）"
+    p = rec.perception
+    perc = (f"開（{p['perception_camera']}，最多 {p['perception_hz']:g} Hz" +
+            (f"，JSON {p['perception_json']}" if p.get("perception_json") else "") + "；操作畫面約慢一半）"
+            if p else "關")
     return "\n".join([
         "錄示範的設定：",
         f"  模擬器：Isaac　實驗：{exp.name}　操作：keyboard／mouse（Isaac 視窗）",
         f"  積木配置（依槽位）：{','.join(rec.block_colors)}",
         f"  目標顏色：{rec.target_color}",
-        f"  錄製：{rec.record_hz:g} Hz，global 與腕部 RGB，腕部鏡頭 {lens}",
+        f"  錄製：{rate}，global 與腕部 RGB，腕部鏡頭 {lens}",
+        f"  即時感知：{perc}",
         f"  輸出：{rec.out_dir}/<日期_時間>_<顏色>/",
         "  成功（積木放進米色盤、夾爪打開、停 1 秒）時自動存檔；按 R 開始下一筆；關閉 Isaac 視窗結束。"])
 
@@ -195,6 +206,11 @@ def record_flow(exp, rec: RecordOptions, dry_run: bool, interactive_ask: bool) -
             print(f"  需要修正：{msg}")
         if not interactive_ask:
             return 2
+    from agentic_sim.demo_entry import new_run_id
+    if interactive_ask and not rec.perception and ask_yes("同時開啟即時感知？（錄鍵鼠示範通常不需要）", False):
+        from agentic_sim.perception_cli import DEFAULTS
+        rec.perception = {k: v for k, v in DEFAULTS.items()} | {"live_perception": True}
+    rec.run_id = rec.run_id or new_run_id()
     cmd = build_record("isaac", exp, rec)
     print("\n採集命令（可複製到另一個終端單獨執行，需要 DISPLAY）：")
     print(f"$ {cmd.shell()}\n", flush=True)
@@ -208,7 +224,8 @@ def record_flow(exp, rec: RecordOptions, dry_run: bool, interactive_ask: bool) -
     if not env.get("DISPLAY"):
         print("注意：沒有設定 DISPLAY，Isaac 視窗可能無法開啟（例如 export DISPLAY=:1）")
     from agentic_sim.demo_entry import run_recording
-    res = run_recording(cmd, ROOT, rec.out_dir, rec.target_color, env, LOG_DIR)
+    from agentic_sim.launch import record_dir
+    res = run_recording(cmd, ROOT, record_dir(rec.out_dir), rec.target_color, env, LOG_DIR, rec.run_id)
     Session.saved += [ev for ev in res["saved"] if ev.get("frames")]
     print("\n這次存檔的 episode：" if res["saved"] else "\n這次沒有存檔任何 episode。")
     for ev in res["saved"]:
@@ -347,9 +364,12 @@ def main(argv=None) -> int:
             if (a.backend or "isaac") != "isaac":
                 ap.error("--mode record runs on Isaac only")
             d = RecordOptions()
+            from agentic_sim.perception_cli import options as perception_options
             rec = RecordOptions(block_colors=a.block_colors.split(",") if a.block_colors else d.block_colors,
-                                target_color=a.target_color or d.target_color, record_hz=a.record_hz or d.record_hz,
-                                out_dir=a.record_dir or d.out_dir, wrist_lens=a.wrist_lens)
+                                target_color=a.target_color or d.target_color,
+                                record_hz=d.record_hz if a.record_hz is None else a.record_hz,   # 0 is refused, not defaulted
+                                out_dir=a.record_dir or d.out_dir, wrist_lens=a.wrist_lens,
+                                perception=perception_options(a))
             return record_flow(load_experiment(a.experiment or RECORD_EXPERIMENT), rec, a.dry_run, False)
         if a.backend or a.experiment or a.mode:
             if not (a.backend and a.experiment and a.mode):

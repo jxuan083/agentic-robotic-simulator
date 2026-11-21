@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 from dataclasses import dataclass, field
 
@@ -25,15 +26,36 @@ class LaunchError(ValueError):
 
 @dataclass
 class RecordOptions:
-    """Demonstration capture (issue #13) from the launcher. Defaults: the lab layout with a yellow block."""
+    """Demonstration capture (issue #13) from the launcher. Defaults: the lab layout with a yellow block, live
+    perception off (a keyboard / mouse demonstration does not need it; it costs about half the frame rate)."""
     block_colors: list = field(default_factory=lambda: ["red", "yellow", "blue"])
     target_color: str = "yellow"
     record_hz: float = 20.0
     out_dir: str = "outputs/demos"
     wrist_lens: str | None = None   # None = the scene default ("real" in lab_20261120)
+    perception: dict = field(default_factory=dict)   # agentic_sim.perception_cli.options(): {} = off
+    run_id: str | None = None       # labels this launch's recorder events (the launcher reads only its own)
 
 
 RECORD_EXPERIMENT = "lab_20261120"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CONTROL_HZ = 60                     # control steps per simulated second (agentic_sim.isaac.session.CONTROL_DT)
+
+
+def record_rate(hz: float) -> tuple:
+    """(stride in control steps, actual recorded rate): the recorder keeps every stride-th control step."""
+    stride = max(1, int(round(CONTROL_HZ / float(hz))))
+    return stride, CONTROL_HZ / stride
+
+
+def record_dir(path: str, root: str = REPO_ROOT) -> str:
+    """The capture output directory relative to the repo. The Isaac container mounts only the repo (at its working
+    directory), so a directory outside it would be written inside the container and lost; refused."""
+    full = os.path.realpath(os.path.join(root, path))
+    rel = os.path.relpath(full, os.path.realpath(root))
+    if rel == os.curdir or rel.startswith(os.pardir + os.sep) or rel == os.pardir:
+        raise LaunchError(f"錄製輸出 {path} 必須在 repo 裡的子目錄（Isaac 容器只掛載 repo {root}）")
+    return rel
 
 
 @dataclass
@@ -119,8 +141,12 @@ def check_record(exp: Experiment, rec: RecordOptions) -> list:
         out.append(f"不認得的積木顏色 {unknown}（可用：{', '.join(names)}）")
     if rec.target_color not in rec.block_colors:
         out.append(f"目標顏色 {rec.target_color} 不在積木配置 {','.join(rec.block_colors)} 裡")
-    if not 0 < rec.record_hz <= 60:
-        out.append(f"錄製頻率 {rec.record_hz:g} Hz：需要在 0 到 60 Hz 之間（控制頻率 60 Hz）")
+    if not (rec.record_hz == rec.record_hz and 0 < rec.record_hz <= CONTROL_HZ):   # also refuses NaN
+        out.append(f"錄製頻率 {rec.record_hz:g} Hz：需要大於 0、最多 {CONTROL_HZ} Hz（控制頻率）")
+    try:
+        record_dir(rec.out_dir)
+    except LaunchError as e:
+        out.append(str(e))
     if rec.wrist_lens not in (None, "real", "pinhole"):
         out.append(f"腕部鏡頭模式 {rec.wrist_lens}：只有 real 或 pinhole")
     return out
@@ -135,10 +161,13 @@ def build_record(backend: str, exp: Experiment, rec: RecordOptions) -> Command:
     problems = check_record(exp, rec)
     if problems:
         raise LaunchError("；".join(problems))
-    args = _app_args(exp, RunOptions(block_colors=list(rec.block_colors)), backend)
+    # perception only when asked for, and then with every option spelled out (camera, rate, JSON path)
+    args = _app_args(exp, RunOptions(block_colors=list(rec.block_colors), **rec.perception), backend)
     if rec.wrist_lens:
         args += ["--wrist_lens", rec.wrist_lens]
-    args += ["--target_color", rec.target_color, "--record_hz", f"{rec.record_hz:g}", "--record", rec.out_dir]
+    args += ["--target_color", rec.target_color, "--record_hz", f"{rec.record_hz:g}", "--record", record_dir(rec.out_dir)]
+    if rec.run_id:
+        args += ["--record_run_id", rec.run_id]
     return Command(["docker/isaac/run.sh", "/isaac-sim/python.sh", "scripts/isaac_ee_teleop.py"] + args)
 
 

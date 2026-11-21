@@ -3,8 +3,8 @@
 Recording: runs the capture command (agentic_sim.launch.build_record, the same command shown for copying) with
 its output in a log file, and shows the recorder's state from <out_dir>/recorder_events.jsonl (written by
 agentic_sim.capture.recorder): waiting for the cameras, recording with the frame count, saved (result and path).
-Only events appended after the launch, from the process that wrote the first of them, belong to this run, so an
-older episode in the same directory is never taken for the one just recorded.
+The launcher gives the recorder a fresh run id (--record_run_id) and reads only events carrying it, so an older
+run or another recorder writing to the same directory is never taken for this one.
 
 Readback: runs the readback command (tools/read_episode.py, the same one shown for copying) as an offline tool;
 no simulator or model service is started.
@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 
 from agentic_sim.launch import Command
 
@@ -31,12 +32,12 @@ def readback_command(episode: str, figures: bool = False) -> Command:
 
 
 class EventReader:
-    """New lines of the recorder's event file since the launch, from one recorder process."""
+    """New lines of the recorder's event file since the launch, carrying this launch's run id."""
 
-    def __init__(self, out_dir: str):
+    def __init__(self, out_dir: str, run_id: str):
         self.path = os.path.join(out_dir, EVENTS_FILE)
         self.offset = os.path.getsize(self.path) if os.path.exists(self.path) else 0
-        self.pid = None
+        self.run_id = run_id
         self._partial = ""
 
     def read(self) -> list:
@@ -57,9 +58,7 @@ class EventReader:
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if self.pid is None:
-                self.pid = ev.get("pid")
-            if ev.get("pid") == self.pid:
+            if ev.get("run_id") == self.run_id:
                 out.append(ev)
         return out
 
@@ -107,14 +106,18 @@ class Status:
         return ""
 
 
+def new_run_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
 def run_recording(cmd: Command, root: str, out_dir: str, target_color: str, env: dict, log_dir: str,
-                  out=sys.stdout, poll_s: float = 0.5) -> dict:
+                  run_id: str, out=sys.stdout, poll_s: float = 0.5) -> dict:
     """Run the capture command until the Isaac window closes; show the recorder state. Returns
     {"exit_code", "saved": [saved events], "log"}."""
     os.makedirs(os.path.join(root, out_dir), exist_ok=True)
     os.makedirs(os.path.join(root, log_dir), exist_ok=True)
     log_path = os.path.join(log_dir, datetime.datetime.now().strftime("record_%Y%m%d_%H%M%S.log"))
-    reader = EventReader(os.path.join(root, out_dir))
+    reader = EventReader(os.path.join(root, out_dir), run_id)
     status = Status(target_color)
     tty = out.isatty()
     shown = ""

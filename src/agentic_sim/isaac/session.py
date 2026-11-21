@@ -90,6 +90,7 @@ class SessionConfig:
     record: str | None = None          # demonstration capture (issue #13): episodes are written under this directory
     target_color: str | None = None    # colour of the block to pick (capture); default: the first block's colour
     record_hz: float = 20.0            # recorded control rate (images and rows), like the lab captures
+    record_run_id: str | None = None   # id in every recorder event / manifest (the launcher follows its own run)
     profile: bool = False
     device: str = "cpu"
 
@@ -262,7 +263,7 @@ class TeleopSession:
             block_colors=self.block_color_names, trays=trays(self.scene_cfg), edge=self.edge,
             gripper={"open": self.ctrl.p.gripper_open, "closed": self.ctrl.p.gripper_closed}, cameras=cams,
             control_dt=CONTROL_DT, record_hz=cfg.record_hz, operator="scripted_input" if cfg.script else "human",
-            lens_mode=cams.get("wrist", {}).get("lens_mode"), log=self.log)
+            lens_mode=cams.get("wrist", {}).get("lens_mode"), log=self.log, run_id=cfg.record_run_id)
 
     def _record(self, q_meas):
         robot = self.robot
