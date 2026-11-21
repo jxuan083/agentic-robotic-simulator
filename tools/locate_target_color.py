@@ -10,6 +10,7 @@ The search sees only images, calibration and measured joints. Simulator block po
 written, to score it (and the global-only baseline: the first global candidate taken as the answer).
 
   MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/locate_target_color.py --episodes 10 --seed 20261121
+  ... --episodes 3 --seed 7 --video            # also write episode_*/video.webm (no window needed)
   tools/mujoco_remote.sh --locate            # one episode in the browser desktop
 """
 from __future__ import annotations
@@ -48,6 +49,63 @@ class Route:
     """Transit for common._move_to: up to transit_z, across, down; 1 cm controller steps."""
     transit_z_m: float = 0.13
     max_segment_m: float = 0.01
+
+
+class VideoRecorder:
+    """Offscreen WebM of one episode (VP8: plays in VS Code and browsers; this OpenCV build has no H.264): scene
+    view (left) with the status line, latest global and wrist captures with their fits (right). One video frame per
+    control frame, so the video plays at simulated real time."""
+
+    def __init__(self, session, manager, path: Path, size=(960, 720), panel_w=480):
+        import cv2
+        import mujoco
+        from agentic_sim.mujoco_backend.model import free_camera
+        self.cv2, self.mujoco, self.manager = cv2, mujoco, manager
+        self.w, self.h, self.pw = size[0], size[1], panel_w
+        m = session.m
+        m.vis.global_.offwidth = max(int(m.vis.global_.offwidth), self.w)
+        m.vis.global_.offheight = max(int(m.vis.global_.offheight), self.h)
+        self.renderer = mujoco.Renderer(m, height=self.h, width=self.w)
+        self.cam = mujoco.MjvCamera()
+        c = free_camera(session.scene_cfg)
+        self.cam.lookat[:] = c["lookat"]
+        self.cam.distance, self.cam.azimuth, self.cam.elevation = c["distance"], c["azimuth"], c["elevation"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self.out = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"VP80"), round(1.0 / session.control_dt),
+                                   (self.w + self.pw, self.h))
+        if not self.out.isOpened():
+            raise IOError(f"cannot open video writer for {path}")
+
+    def _panel(self, key, height, label):
+        cv2 = self.cv2
+        item = self.manager.latest.get(key)
+        tile = np.full((height, self.pw, 3), 40, np.uint8)
+        if item is not None:
+            img = item["overlay_rgb"]
+            s = min(self.pw / img.shape[1], (height - 24) / img.shape[0])
+            img = cv2.resize(img, (int(img.shape[1] * s), int(img.shape[0] * s)), interpolation=cv2.INTER_AREA)
+            y0, x0 = 24 + (height - 24 - img.shape[0]) // 2, (self.pw - img.shape[1]) // 2
+            tile[y0:y0 + img.shape[0], x0:x0 + img.shape[1]] = img
+        cv2.putText(tile, label, (8, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        return tile
+
+    def __call__(self, session, extra=""):
+        cv2 = self.cv2
+        self.renderer.update_scene(session.d, camera=self.cam)
+        scene = self.renderer.render().copy()
+        text = getattr(session, "_target_search_ui", None) or ""
+        cv2.rectangle(scene, (0, self.h - 34), (self.w, self.h), (0, 0, 0), -1)
+        cv2.putText(scene, f"t {session.t_sim:5.2f} s  {text}"[:110], (8, self.h - 12), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        top = self.h * 3 // 8
+        right = np.vstack([self._panel("global", top, "global camera (last capture)"),
+                           self._panel("wrist", self.h - top, "wrist camera (last capture)")])
+        self.out.write(cv2.cvtColor(np.hstack([scene, right]), cv2.COLOR_RGB2BGR))
+
+    def close(self):
+        self.out.release()
+        self.renderer.close()
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -120,7 +178,7 @@ def locate(session, manager, target_color: str, cfg: dict, episode_dir: Path, vi
              "candidates_tried": len(cands), "views": len(attempts)}, global_record, cands, attempts)
 
 
-def run_episode(index, layout_seed, target_seed, random_path, output, scene_path, cfg, gui=False):
+def run_episode(index, layout_seed, target_seed, random_path, output, scene_path, cfg, gui=False, video=False):
     viewer = None
     keys = KeyState(actions={"P": "pause", "R": "reset"})
     if gui:
@@ -137,6 +195,9 @@ def run_episode(index, layout_seed, target_seed, random_path, output, scene_path
     manager.last_capture["global"] = manager.last_capture["wrist"] = float("inf")   # captures only on request
     episode_dir = output / f"episode_{index:03d}"
     target_color = choose_existing_color(session.block_color_names, target_seed, index)   # colour names only
+    recorder = None
+    if video:
+        recorder = session._frame_hook = VideoRecorder(session, manager, episode_dir / "video.webm")
 
     def status(text):
         session._target_search_ui = text
@@ -162,8 +223,8 @@ def run_episode(index, layout_seed, target_seed, random_path, output, scene_path
             status(f"Target {target_color} NOT FOUND | {result['reason']}")
         print(f"[episode {index}] {target_color}: {result['status']} "
               f"({result['views']} wrist views) -> {episode_dir / 'target.json'}", flush=True)
-        if viewer is not None:
-            common._dwell(session, viewer, 120, "done")
+        if viewer is not None or recorder is not None:
+            common._dwell(session, viewer, 120, "done")    # hold the result on screen / in the video
         # ---- scoring only from here on ----
         truth, colors = common._pose_truth(session)
         found = result if result["status"] == "found" else None
@@ -188,6 +249,10 @@ def run_episode(index, layout_seed, target_seed, random_path, output, scene_path
         _write_json(episode_dir / "evaluation.json", episode)
         return episode
     finally:
+        if recorder is not None:
+            session._frame_hook = None
+            recorder.close()
+            print(f"[episode {index}] video: {recorder.path}", flush=True)
         session.live_perception = None
         manager.close()
         session.finish()
@@ -213,6 +278,8 @@ def main():
     parser.add_argument("--config", default=LOCALIZE_CONFIG)
     parser.add_argument("--blocks", type=int, default=8, help="blocks per episode")
     parser.add_argument("--gui", action="store_true", help="show one episode in a MuJoCo window")
+    parser.add_argument("--video", action="store_true",
+                        help="write episode_*/video.webm (offscreen, simulated real time; no window needed)")
     args = parser.parse_args()
     if args.episodes <= 0 or (args.gui and args.episodes != 1):
         parser.error("episodes must be positive; --gui runs exactly one episode")
@@ -231,7 +298,8 @@ def main():
     episodes = []
     try:
         for i in range(args.episodes):
-            row = run_episode(i, args.seed, target_seed, random_path, output, args.scene, cfg, args.gui)
+            row = run_episode(i, args.seed, target_seed, random_path, output, args.scene, cfg, args.gui,
+                              args.video)
             episodes.append(row)
             s = row["score"]
             print(f"episode {i + 1}/{args.episodes}: {row['target_color']} {row['result']['status']} "

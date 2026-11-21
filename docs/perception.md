@@ -193,6 +193,8 @@ wrist 近拍時不同顏色的積木常在畫面中相貼，合成一個擬合�
 MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/locate_target_color.py --episodes 20 --seed 7
 # 瀏覽器桌面看一場（VS Code 轉發 6080，見 remote-desktop.md）
 tools/mujoco_remote.sh --locate --seed 7
+# 不開視窗、錄成影片：每場 episode_*/video.webm（左：場景與狀態列；右：最近一次 global／wrist 拍攝與擬合）
+MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/locate_target_color.py --episodes 3 --seed 99 --video
 ```
 
 ### 結果（MuJoCo，2026-11-21）

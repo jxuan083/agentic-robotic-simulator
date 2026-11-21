@@ -94,6 +94,9 @@ def _render_tick(session, viewer, extra):
         audit["max_block_contact_count"] = max(audit["max_block_contact_count"], sample["block_contact_count"])
         audit["max_robot_block_contact_count"] = max(audit["max_robot_block_contact_count"], sample["robot_block_contact_count"])
         audit["robot_block_contact_frames"] += int(sample["robot_block_contact_count"] > 0)
+    hook = getattr(session, "_frame_hook", None)   # e.g. an offscreen video recorder
+    if hook is not None:
+        hook(session, extra)
     if viewer is not None:
         ticks = getattr(session, "_exploration_gui_tick", 0) + 1
         session._exploration_gui_tick = ticks
