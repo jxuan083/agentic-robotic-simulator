@@ -250,3 +250,41 @@ def test_created_then_timed_out_is_cleaned_and_restarts(stub):
     assert len(stub.containers()) == 1 and stub.containers()[0][1] != cid
     L2.stop()
     assert stub.containers() == []
+
+
+def test_ctrl_c_while_warming_up_records_and_cleans_the_created_instance(fake, monkeypatch):
+    """PR #12 review round 3: Ctrl+C while `up` waits (the ID is already written) -> the interrupt reaches the caller,
+    stop() runs `down <that ID>` exactly once and the ARS_CREATED_FILE temp file is gone."""
+    w = fake()
+    seen = {}
+
+    def run(self, cmd, timeout=None, env=None):
+        w.calls.append((cmd[0], cmd[1]) if cmd[1] != "down" else tuple(cmd))
+        if cmd[1] == "up":
+            seen["file"] = env["ARS_CREATED_FILE"]
+            with open(seen["file"], "w") as f:
+                f.write("cid-123\n")
+            raise KeyboardInterrupt
+        return types.SimpleNamespace(returncode=0)
+    monkeypatch.setattr(lab.Lab, "run", run)
+    L = lab.Lab(_args())
+    with pytest.raises(KeyboardInterrupt):
+        L.model()
+    assert L.owned == [("模型服務 q4", ["docker/llamacpp/serve.sh", "down", "cid-123"])]
+    assert not os.path.exists(seen["file"])
+    L.stop()
+    assert [c for c in w.calls if c[1] == "down"] == [("docker/llamacpp/serve.sh", "down", "cid-123")]
+
+
+def test_ctrl_c_while_reusing_records_nothing(fake, monkeypatch):
+    w = fake(model="starting")
+
+    def run(self, cmd, timeout=None, env=None):
+        w.calls.append((cmd[0], cmd[1]))
+        raise KeyboardInterrupt                      # "already running": nothing was written
+    monkeypatch.setattr(lab.Lab, "run", run)
+    L = lab.Lab(_args())
+    with pytest.raises(KeyboardInterrupt):
+        L.model()
+    L.stop()
+    assert L.owned == [] and [c for c in w.calls if c[1] == "down"] == []

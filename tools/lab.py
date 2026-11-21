@@ -90,7 +90,8 @@ class Lab:
     def _up(self, what: str, script: list, timeout: float, ready) -> None:
         """`script up` (bounded by timeout), then ready(). The script writes the identity of an instance it created to
         ARS_CREATED_FILE; only that one is recorded as ours (and stopped by `script down <id>`), also when `up` failed
-        or timed out. Nothing written: the service already existed and is only reused."""
+        timed out or was interrupted (Ctrl+C while it warms up: the ID is read and recorded first, then the interrupt
+        goes on to the caller, whose stop() removes it). Nothing written: the service already existed and is reused."""
         fd, created = tempfile.mkstemp(prefix="ars-created-")
         os.close(fd)
         os.unlink(created)                           # docker --cidfile wants a path that does not exist yet
@@ -101,6 +102,8 @@ class Lab:
                 err = RuntimeError(f"{what}: {' '.join(script)} up failed (exit {r.returncode})")
         except subprocess.TimeoutExpired:
             err = TimeoutError(f"{what} did not become ready within {timeout:.0f} s")
+        except KeyboardInterrupt as e:               # Ctrl+C during `up`: record what was created, then re-raise
+            err = e
         ident = ""
         for _ in range(10 if err else 1):            # a killed `up` may leave docker writing the ID for a moment
             if os.path.exists(created):
