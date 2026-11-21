@@ -10,7 +10,7 @@
 ```bash
 # MuJoCo：3D 視圖右上角顯示 D455 與腕部相機的小畫面
 uv run scripts/mujoco_ee_teleop.py --scene configs/scenes/lab_20261120.yaml
-# Isaac：左上角兩個浮動視窗顯示 D455 與腕部相機
+# Isaac：3D 視窗下方停靠 D455 與腕部相機畫面（#11 起）
 docker/isaac/run.sh /isaac-sim/python.sh scripts/isaac_ee_teleop.py --scene configs/scenes/lab_20261120.yaml
 # 抓放軌跡（實驗室紅積木位置 → 米色盤），兩個引擎都可以用
 uv run scripts/mujoco_ee_teleop.py --scene configs/scenes/lab_20261120.yaml --trajectory configs/trajectories/lab_pick_place.yaml
@@ -19,7 +19,7 @@ uv run tools/render_sensor_cameras.py --lerobot <pan> <lift> <elbow> <wrist_flex
     --real-global <global.png> --real-wrist <wrist.png> --out outputs/lab_cameras/<name>
 ```
 
-- 相機小畫面和視窗不接受操作，滑鼠事件會略過它們。
+- 相機畫面不接受操作，滑鼠事件會略過它們。
 - RGB-D 錄影的 global 影格是 640 × 480，要比對時加 `--global-k 640 480 <fx> <fy> <cx> <cy>`，改用該串流的內參算圖，相機位姿不變。
 
 ## 座標
@@ -71,7 +71,7 @@ ICP 比較了兩種換算：
   - MuJoCo 保留 Menagerie 的 `camera_mount` body。
 - 視角取自兩份模型：Menagerie 的 `fovy` 是 61°；Workshop 的焦距 13.5 mm 換算成 4:3 時，垂直視角約 60°。廠商標示水平 103°，但有買家回報實際值小很多，所以不採用。
 - 與實機腕部影格比對：兩指的位置與大小相近，指尖間距約 160 px 對 170 px；夾住積木時的開口也對得上。
-- 實機鏡頭有明顯桶形變形，模擬是理想針孔，不模擬變形。要做像素級比對，需另外校正腕部相機的內參。
+- 實機鏡頭有明顯桶形變形。#11 起，模擬腕部畫面預設套用由實拍推算的鏡頭模型（fx 400、k1 −0.15），可以切回理想針孔。見 [lab-entry.md](lab-entry.md#腕部畫面的鏡頭變形)。要做像素級比對，仍需用棋盤格校正內參。
 
 ## 托盤、桌面與積木
 

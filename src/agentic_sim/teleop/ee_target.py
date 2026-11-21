@@ -13,6 +13,8 @@ Rejection reasons are kept apart so the operator (and the log) can tell what blo
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -51,6 +53,12 @@ class TeleopParams:
     yaw_offset_limit: float
     dt_max: float
     max_tilt_deg: float = 4.0
+    # finger opening direction at zero operator offset, relative to the heading from the pan axis:
+    # pi/2 = tangential (lab_current_minimal, wrist roll about 93 deg); 0 = radial (lab scenes: wrist roll about 0
+    # as the lab operators hold it, wrist camera above the gripper and its image upright)
+    finger_heading: float = math.pi / 2
+    start_q: np.ndarray | None = None   # arm joints at reset (lab rest pose); None = start at home
+    homing_rate: float = 0.8            # rad/s from start_q to home (slower than the teleop rate limit)
 
     @classmethod
     def from_cfg(cls, c: dict) -> "TeleopParams":
@@ -116,8 +124,9 @@ class EETargetController:
 
     # ---- helpers -------------------------------------------------------------
     def yaw_for(self, pos, yaw_offset) -> float:
-        """Finger opening direction tangential to the pan circle, plus the operator's offset."""
-        return float(np.arctan2(pos[1] - self.pan[1], pos[0] - self.pan[0]) + np.pi / 2 + yaw_offset)
+        """Finger opening direction: the scene's neutral heading relative to the pan circle (tangential by default,
+        radial in lab scenes), plus the operator's offset."""
+        return float(np.arctan2(pos[1] - self.pan[1], pos[0] - self.pan[0]) + self.p.finger_heading + yaw_offset)
 
     def _solve_home(self) -> np.ndarray:
         pos = self.p.home_ee
@@ -135,10 +144,13 @@ class EETargetController:
     def reset(self):
         session = 0 if self.state is None else self.state.session + 1
         q = self.q_home.copy()
+        # with a start pose (lab rest) the arm starts there and the command moves to home at homing_rate
+        q_cmd = q.copy() if self.p.start_q is None else np.array(self.p.start_q, float)
         self.state = TargetState(
-            pos=self.ee_pos(q), yaw_offset=0.0, q_goal=q.copy(), q_cmd=q.copy(), gripper=self.p.gripper_open,
+            pos=self.ee_pos(q), yaw_offset=0.0, q_goal=q.copy(), q_cmd=q_cmd, gripper=self.p.gripper_open,
             session=session,
         )
+        self.homing = self.p.start_q is not None
 
     # ---- evaluation (no state change) ------------------------------------------------
     def evaluate(self, pos, yaw_offset: float) -> Evaluation:
@@ -321,8 +333,11 @@ class EETargetController:
         """Rate-limited arm joint command toward the accepted IK solution (no jumps even after large changes)."""
         s = self.state
         dt = float(min(max(dt, 0.0), self.p.dt_max))
-        lim = self.p.joint_rate_limit * dt
+        rate = min(self.p.joint_rate_limit, self.p.homing_rate) if self.homing else self.p.joint_rate_limit
+        lim = rate * dt
         s.q_cmd = s.q_cmd + np.clip(s.q_goal - s.q_cmd, -lim, lim)
+        if self.homing and float(np.max(np.abs(s.q_goal - s.q_cmd))) < 1e-9:
+            self.homing = False
         if s.gripper_goal is not None:
             g_lim = self.p.gripper_speed * dt
             s.gripper = float(s.gripper + np.clip(s.gripper_goal - s.gripper, -g_lim, g_lim))
@@ -331,8 +346,19 @@ class EETargetController:
         return s.q_cmd.copy()
 
 
-def load_controller(chain: So101Chain, teleop_cfg: dict, base_pos=(0.0, 0.0, 0.0)) -> EETargetController:
-    """base_pos: the robot base link origin in the mount frame (scene robot.base_pos)."""
+def load_controller(chain: So101Chain, teleop_cfg: dict, base_pos=(0.0, 0.0, 0.0), scene: dict | None = None
+                    ) -> EETargetController:
+    """base_pos: the robot base link origin in the mount frame (scene robot.base_pos).
+    scene: lab scenes set robot.grasp_heading_deg (neutral finger direction) and robot.start_pose_lerobot (arm
+    joints at reset, LeRobot readings); without them the defaults (tangential fingers, start at home) apply."""
     chain.ee_offset = np.array(v(teleop_cfg["ee_offset_in_gripper_link"]), float)
     chain.base_pos = np.array(base_pos, float)
-    return EETargetController(chain, TeleopParams.from_cfg(teleop_cfg))
+    p = TeleopParams.from_cfg(teleop_cfg)
+    rob = (scene or {}).get("robot") or {}
+    if "grasp_heading_deg" in rob:
+        p.finger_heading = math.radians(float(v(rob["grasp_heading_deg"])))
+    if "start_pose_lerobot" in rob:
+        from agentic_sim.real_joints import lerobot_to_shared
+        arm, _ = lerobot_to_shared(v(rob["start_pose_lerobot"]))
+        p.start_q = np.clip(arm, chain.lower, chain.upper)
+    return EETargetController(chain, p)

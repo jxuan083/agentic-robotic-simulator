@@ -181,7 +181,7 @@ def add_sensor_cameras(spec, scene_cfg: dict):
     w = cams.get("wrist")
     if w and wrist_camera_mount(scene_cfg):
         c = spec.camera(WRIST_CAMERA)
-        c.fovy = w["fovy_deg"]
+        c.fovy = w["render_fovy_deg"]   # "real" lens mode: a wider pinhole, resampled to the raw sensor by the viewer
         if w["pos_in_gripper"] is not None:  # the camera_mount body sits at the gripper body origin
             c.pos, c.quat = list(w["pos_in_gripper"]), list(w["quat_in_gripper"])
 

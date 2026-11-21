@@ -136,6 +136,24 @@ def _sensor_cameras(scene: dict) -> dict:
     w = specs.get("wrist")
     if w and w["pos_in_gripper"] is not None and wrist_camera_mount(scene):
         cfg = _pinhole(w)
-        cfg.func(WRIST_CAMERA_PRIM, cfg, translation=w["pos_in_gripper"], orientation=w["quat_in_gripper"])
+        prim = cfg.func(WRIST_CAMERA_PRIM, cfg, translation=w["pos_in_gripper"], orientation=w["quat_in_gripper"])
+        if w.get("lens") is not None:
+            _lens_distortion(prim, w["lens"])
         out["wrist"] = (WRIST_CAMERA_PRIM, w["width"], w["height"])
     return out
+
+
+def _lens_distortion(prim, lens):
+    """"real" lens mode: RTX renders the camera through the OpenCV pinhole lens model (same intrinsics and
+    coefficients as the MuJoCo resampling, agentic_sim.wrist_lens), at the raw sensor size."""
+    from pxr import Gf, Sdf
+    prim.ApplyAPI("OmniLensDistortionOpenCvPinholeAPI")
+    prim.GetAttribute("omni:lensdistortion:model").Set("opencvPinhole")
+    base = "omni:lensdistortion:opencvPinhole:"
+    k1, k2, p1, p2, k3 = lens.dist
+    for name, val in (("k1", k1), ("k2", k2), ("p1", p1), ("p2", p2), ("k3", k3),
+                      ("fx", lens.fx), ("fy", lens.fy), ("cx", lens.cx), ("cy", lens.cy)):
+        attr = prim.GetAttribute(base + name) or prim.CreateAttribute(base + name, Sdf.ValueTypeNames.Float)
+        attr.Set(float(val))
+    size = prim.GetAttribute(base + "imageSize") or prim.CreateAttribute(base + "imageSize", Sdf.ValueTypeNames.Int2)
+    size.Set(Gf.Vec2i(lens.width, lens.height))

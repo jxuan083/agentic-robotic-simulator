@@ -5,6 +5,7 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -88,3 +89,151 @@ def test_lerobot_mapping_workshop_ranges():
     arm, _ = lerobot_to_shared([-6.04, -97.27, 99.0, 71.48, 1.29, 17.0])
     assert np.all(arm >= np.array(chain.lower) - 1e-6) and np.all(arm <= np.array(chain.upper) + 1e-6)
     assert v(LAB["robot"]["base_pos"]) == v(MINIMAL["robot"]["base_pos"])
+
+
+# ---- #11: wrist lens, start pose, lab experiment -------------------------------------------------------------------
+from agentic_sim.wrist_lens import WristLens, apply_wrist_lens, lens_mode  # noqa: E402
+
+
+def _lab(mode=None):
+    return apply_wrist_lens(load("configs/scenes/lab_20261120.yaml"), mode)
+
+
+def test_wrist_lens_round_trip_and_corner_clamp():
+    lens = WristLens.from_scene(LAB)
+    assert (lens.width, lens.height, lens.fx, lens.dist[0]) == (640, 480, 400.0, -0.15)
+    u, vv = np.meshgrid(np.linspace(20, 620, 13), np.linspace(20, 460, 9))
+    x, y = lens.undistort(u, vv)
+    ub, vb = lens.distort(x, y)
+    assert np.max(np.abs(ub - u)) < 0.01 and np.max(np.abs(vb - vv)) < 0.01
+    # barrel: an edge pixel's ray lies farther out than the pinhole with the same focal length would put it
+    x0, _ = lens.undistort(np.array([0.0]), np.array([240.0]))
+    assert abs(x0[0]) > 320 / 400
+    # the extreme corners lie past the model's fold: they map to the fold radius, a few pixels from the corner
+    xc, yc = lens.undistort(np.array([0.0]), np.array([0.0]))
+    uc, vc = lens.distort(xc, yc)
+    assert np.hypot(uc[0], vc[0]) < 4.0
+
+
+def test_wrist_lens_modes_and_render_view():
+    assert lens_mode(LAB) == "real" and lens_mode(LAB, "pinhole") == "pinhole"
+    assert lens_mode(MINIMAL) == "pinhole"
+    real, pin = sensor_cameras(_lab())["wrist"], sensor_cameras(_lab("pinhole"))["wrist"]
+    assert pin["lens_mode"] == "pinhole" and "lens" not in pin and pin["render_fovy_deg"] == pin["fovy_deg"]
+    assert real["lens_mode"] == "real" and real["render_size"] == (960, 720)
+    assert real["render_fovy_deg"] > real["fovy_deg"] + 15          # wider pinhole that covers every raw ray
+    lens = real["lens"]
+    w, h = real["render_size"]
+    iy, ix = lens.maps(w, h, real["render_fovy_deg"])
+    assert iy.shape == (480, 640) and 0 <= iy.min() and iy.max() < h and 0 <= ix.min() and ix.max() < w
+    # the raw centre looks at the render centre; a scaled output (GUI inset) samples the same rays
+    assert abs(iy[240, 320] - (h - 1) / 2) <= 1.5 and abs(ix[240, 320] - (w - 1) / 2) <= 1.5
+    sy, sx = lens.maps(w, h, real["render_fovy_deg"], 320, 240)
+    assert sy.shape == (240, 320) and abs(int(sx[120, 160]) - int(ix[240, 320])) <= 2
+    try:
+        lens_mode(LAB, "fisheye")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown lens mode accepted")
+
+
+def test_lab_start_pose_moves_home_and_minimal_starts_at_home():
+    from agentic_sim.teleop.ee_target import load_controller
+    chain = lambda: So101Chain.from_dict(load("configs/so101_chain.yaml"))  # noqa: E731
+    cfg = load("configs/teleop.yaml")
+    lab = load_controller(chain(), cfg, base_pos=v(LAB["robot"]["base_pos"]), scene=LAB)
+    mini = load_controller(chain(), cfg, base_pos=v(MINIMAL["robot"]["base_pos"]), scene=MINIMAL)
+    assert mini.p.start_q is None and np.allclose(mini.state.q_cmd, mini.q_home) and not mini.homing
+    rest = lerobot_to_shared(v(LAB["robot"]["start_pose_lerobot"]))[0]
+    assert np.allclose(lab.state.q_cmd, rest, atol=1e-9) and lab.homing
+    assert np.allclose(lab.q_home, mini.q_home, atol=1e-6)           # same neutral grasp (tangential fingers)
+    t, steps = 0.0, 0
+    while lab.homing and steps < 2000:
+        prev = lab.state.q_cmd.copy()
+        lab.joint_command(1 / 60)
+        assert np.max(np.abs(lab.state.q_cmd - prev)) <= lab.p.homing_rate / 60 + 1e-9
+        t += 1 / 60
+        steps += 1
+    assert not lab.homing and np.allclose(lab.state.q_cmd, lab.q_home) and 0.8 < t < 3.0
+    lab.reset()
+    assert lab.homing and np.allclose(lab.state.q_cmd, rest, atol=1e-9)
+
+
+def test_lab_experiment_and_wrist_lens_run_option():
+    from agentic_sim.experiments import RUN_OPTIONS, load_experiment
+    from agentic_sim.launch import RunOptions
+    e = load_experiment("lab_20261120")
+    assert e.scene == "configs/scenes/lab_20261120.yaml" and set(e.backends) == {"isaac", "mujoco"}
+    assert "wrist_lens" in RUN_OPTIONS and RunOptions(wrist_lens="pinhole").wrist_lens == "pinhole"
+
+
+def test_undistort_tool_straightens_a_distorted_line(tmp_path):
+    """Raw frame of a straight vertical line (rendered through the lens model) -> tools/undistort_wrist.py -> the
+    line is straight again at its ideal column; a frame of another size is refused."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import undistort_wrist as uw
+    from agentic_sim.image_io import write_png
+    lens = WristLens.from_scene(LAB)
+    col = 520.0                                              # ideal column (off centre: clearly bent when raw)
+    uu, vv = np.meshgrid(np.arange(640), np.arange(480))
+    x, _ = lens.undistort(uu, vv)
+    raw = np.full((480, 640, 3), 230, np.uint8)
+    raw[np.abs(x * lens.fx + lens.cx - col) < 1.5] = 20     # a dark 3 px line in the ideal image, seen raw
+    rows = range(40, 440, 40)
+    raw_cols = [np.nonzero(raw[r, :, 0] < 128)[0].mean() for r in rows]
+    assert np.ptp(raw_cols) > 6                              # bent in the raw frame
+    flat = uw.undistort(raw, uw.flat_maps(lens))
+    flat_cols = [np.nonzero(flat[r, :, 0] < 128)[0].mean() for r in rows]
+    assert np.ptp(flat_cols) < 1.5 and abs(np.mean(flat_cols) - col) < 1.0
+    src = tmp_path / "raw.png"
+    write_png(str(src), raw)
+    assert uw.main([str(src), "--out-dir", str(tmp_path / "out")]) == 0
+    assert (tmp_path / "out" / "raw_flat.png").exists() and src.exists()
+    small = tmp_path / "small.png"
+    write_png(str(small), raw[:240, :320])
+    assert uw.main([str(small)]) == 1 and not (tmp_path / "small_flat.png").exists()
+
+
+def _sha(p):
+    import hashlib
+    return hashlib.sha256(open(p, "rb").read()).hexdigest()
+
+
+@pytest.mark.parametrize("order", [0, 1])
+def test_undistort_batch_refuses_an_output_that_is_another_input(tmp_path, order):
+    """PR #12 review 2-2: frame.png's output is frame_flat.png, given as an input too -> refused before writing."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import undistort_wrist as uw
+    from agentic_sim.image_io import write_png
+    rng = np.random.default_rng(0)
+    a, b = tmp_path / "frame.png", tmp_path / "frame_flat.png"
+    write_png(str(a), rng.integers(0, 255, (480, 640, 3), dtype=np.uint8))
+    write_png(str(b), rng.integers(0, 255, (480, 640, 3), dtype=np.uint8))
+    before = {p: _sha(p) for p in (a, b)}
+    args = [str(a), str(b)] if order == 0 else [str(b), str(a)]
+    assert uw.main(args) == 1
+    assert {p: _sha(p) for p in (a, b)} == before
+    assert sorted(os.listdir(tmp_path)) == ["frame.png", "frame_flat.png"]      # no partial output
+
+
+def test_undistort_batch_same_output_name_and_normal_batch(tmp_path):
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import undistort_wrist as uw
+    from agentic_sim.image_io import image_size, write_png
+    rng = np.random.default_rng(1)
+    for d in ("a", "b"):
+        (tmp_path / d).mkdir()
+        write_png(str(tmp_path / d / "frame.png"), rng.integers(0, 255, (480, 640, 3), dtype=np.uint8))
+    ins = [str(tmp_path / d / "frame.png") for d in ("a", "b")]
+    before = [_sha(p) for p in ins]
+    out = tmp_path / "out"
+    assert uw.main(ins + ["--out-dir", str(out)]) == 1 and not out.exists()   # both would be out/frame_flat.png
+    assert [_sha(p) for p in ins] == before
+    write_png(str(tmp_path / "b" / "other.png"), rng.integers(0, 255, (480, 640, 3), dtype=np.uint8))
+    ok = [ins[0], str(tmp_path / "b" / "other.png")]
+    before = [_sha(p) for p in ok]
+    assert uw.main(ok + ["--out-dir", str(out)]) == 0
+    assert sorted(os.listdir(out)) == ["frame_flat.png", "other_flat.png"]
+    assert all(image_size(str(out / f)) == (640, 480) for f in os.listdir(out))
+    assert [_sha(p) for p in ok] == before

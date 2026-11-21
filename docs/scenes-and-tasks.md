@@ -7,7 +7,7 @@
 | 配置 | 內容 | 狀態 |
 |---|---|---|
 | `lab_current_minimal` | 最小桌面場景（暫定參數），既有驗收情境使用 | 已完成 |
-| `lab_20261120` | 2026-11-20 實驗室單臂配置：托盤擺位、桌面、D455 global 與腕部相機 | 已完成，見 [lab-scene-cameras.md](lab-scene-cameras.md)；部分數值仍為 `estimated`／`provisional` |
+| `lab_20261120` | 2026-11-20 實驗室單臂配置：托盤擺位、桌面、D455 global 與腕部相機（腕部鏡頭變形）、實驗室休息姿態起步 | 已完成，見 [lab-scene-cameras.md](lab-scene-cameras.md)、[lab-entry.md](lab-entry.md)；部分數值仍為 `estimated`／`provisional` |
 | `competition_draft` | 比賽場地草案：兩張各 140 × 40 cm 桌面 | 高度與擺法待確認，取得現場資訊後改為實測版本 |
 
 兩地沿用同一組托盤、相近相機視角與操作區配置，以減少背景差異；光照、影像尺度與位置變化仍須測試。

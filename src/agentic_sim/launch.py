@@ -28,6 +28,7 @@ class RunOptions:
     color_dr_seed: int | None = None
     blocks: int = 1                 # number of blocks in the scene (1-8)
     block_colors: list | None = None  # colour name per block (task scenes); sets the block count
+    wrist_lens: str | None = None   # wrist camera image: "real" (raw-looking, distorted) | "pinhole"; None = scene default
     video: bool = True              # acceptance only: record the app window
 
     def merged(self, forced: dict) -> "RunOptions":

@@ -157,3 +157,15 @@ def test_lab_scene_sensor_cameras():
     m0 = mjm.build(SCENE, 1).model
     assert mjm.sensor_camera_names(m0) == {}
     assert "camera_mount" not in [m0.body(i).name for i in range(m0.nbody)]
+
+
+@needs_model
+def test_lab_wrist_camera_fov_follows_the_lens_mode():
+    from agentic_sim.scene_layout import sensor_cameras
+    from agentic_sim.wrist_lens import apply_wrist_lens
+    for mode in ("real", "pinhole"):
+        lab = apply_wrist_lens(load("configs/scenes/lab_20261120.yaml"), mode)
+        m = mjm.build(lab, 1).model
+        spec = sensor_cameras(lab)["wrist"]
+        assert abs(m.cam_fovy[mjm.sensor_camera_names(m)["wrist"]] - spec["render_fovy_deg"]) < 1e-9
+        assert (spec["render_fovy_deg"] > 80) == (mode == "real")
