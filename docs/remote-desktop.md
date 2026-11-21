@@ -4,10 +4,9 @@ Isaac 是桌面程式，VS Code Remote 終端機本身不會傳回視窗。此�
 
 ## 啟動
 
-在 VS Code 的遠端終端機執行：
+在 VS Code 的遠端終端機，於 repo 根目錄執行：
 
 ```bash
-cd /home/yihua/agentic-robotic-simulator
 docker/isaac/remote.sh run
 ```
 
