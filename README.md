@@ -45,6 +45,7 @@ flowchart LR
 | 實驗室場景、相機視角 | [#9](https://github.com/jxuan083/agentic-robotic-simulator/issues/9) 已完成（模擬，單臂）：依 2026-11-20 實驗室 RGB-D 錄影、關節讀值與照片重建托盤擺位，加入 D455 global 與腕部相機視角，Isaac 與 MuJoCo 共用場景檔；相機位姿由深度點與手臂網格對齊推算（殘差中位數 4.6 mm），部分數值仍為估計或暫定（[docs/lab-scene-cameras.md](docs/lab-scene-cameras.md)） |
 | 一鍵入口、聊天視窗、常駐相機 | [#11](https://github.com/jxuan083/agentic-robotic-simulator/issues/11) 已完成（模擬）：`tools/lab.py` 一個指令開好模型服務、模擬伺服器與獨立的聊天視窗；相機畫面固定在主畫面（Isaac 停靠在 3D 視窗下方）；腕部畫面預設套用由實拍推算的鏡頭變形。兩個引擎都完成「聊天下單 → 缺料詢問 → 聊天回答 → 完成」的競賽流程（[docs/lab-entry.md](docs/lab-entry.md)） |
 | 模擬示範採集與讀回 | [#13](https://github.com/jxuan083/agentic-robotic-simulator/issues/13) 已完成（模擬，單臂）：Isaac 遙操作時以 20 Hz 錄 global 與腕部 RGB、同一步的命令（EE 目標與關節目標）和狀態，格式沿用實機原始錄製；`tools/read_episode.py` 從磁碟檢查完整性並找出夾爪閉合、積木離盤、目標盤放開三個時刻。人工操作的成功示範讀回通過（[docs/demo-capture.md](docs/demo-capture.md)） |
+| 共同入口：錄示範與讀回 | [#16](https://github.com/jxuan083/agentic-robotic-simulator/issues/16) 已完成（模擬，單臂）：`uv run tools/sim.py` 選「錄示範」用預設配置（含黃色積木）開 Isaac 錄製，終端機顯示等待相機、錄製中幀數、已存檔路徑；「檢查上一筆」讀回錄製端回報的那一筆。採集與讀回命令都可複製單獨執行，人工示範從入口錄製並讀回通過（[docs/demo-capture.md](docs/demo-capture.md#從共同入口錄製與讀回)） |
 | Agent（任務規劃、感知整合） | 預計實作 |
 | 評估報表 | 預計實作；驗收數字為目標，尚無成果 |
 

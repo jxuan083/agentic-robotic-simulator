@@ -4,6 +4,49 @@
 
 場景見 [lab-scene-cameras.md](lab-scene-cameras.md)，操作方式見 [isaac-ee-teleop.md](isaac-ee-teleop.md)。
 
+## 從共同入口錄製與讀回
+
+```bash
+export DISPLAY=:1
+uv run tools/sim.py        # 選「錄示範」或「檢查上一筆示範」
+```
+
+不必手填 Docker、場景或相機參數，也不需要模型服務（Qwen）。
+
+- **錄示範**：
+  - 預設設定：Isaac、`lab_20261120`、keyboard／mouse、積木配置 `red,yellow,blue`（依槽位）、目標 `yellow`、20 Hz、場景預設的腕部鏡頭（`real`）、輸出到 `outputs/demos`。
+  - 開始前顯示實際設定、輸出位置和採集命令。只需確認目標顏色；輸入 `layout` 可以改積木配置。
+  - 目標顏色不在配置裡、或顏色名稱不認得時，留在選單提示修正，不會啟動 Isaac。
+  - **錄製中**，終端機的狀態列依序顯示：
+    - 等待相機；
+    - 開始錄製，並顯示目標顏色與已錄幀數；
+    - 已存檔，並顯示結果、幀數、時長與 episode 的實際路徑。
+  - Isaac 的輸出另外寫在 `outputs/sim_entry/record_<時間>.log`。
+  - 結束時請關閉 Isaac 視窗；按 Ctrl+C 中斷時，當下那一筆不會存成結果。
+- **檢查上一筆示範**：
+  - 讀這次選單裡錄製端回報存檔的 episode。這次存了好幾筆時，可以選一筆，預設是最後一筆成功的。
+  - 這次還沒錄製時，只列出標成「既有」的 episode 或讓你輸入路徑，不會把舊資料夾當成剛錄的那一筆。
+  - 讀回是離線工具，不會啟動 Isaac 或模型服務。結果和下一節的 `tools/read_episode.py` 完全相同，因為選單執行的就是畫面上顯示的那條命令。
+  - 讀回失敗時，會分成三類：資料不完整（缺幀或錯檔，列出相機、幀號、原因）、任務未完成、抓放時刻缺少或順序不符。
+  - 讀完可以選擇產生雙相機對照圖。
+- **單獨除錯**：選單顯示的採集命令和讀回命令，都可以貼到另一個終端機直接執行。非互動用法：
+
+  ```bash
+  uv run tools/sim.py --mode record [--target-color yellow] [--block-colors red,yellow,blue] [--record-hz 20] \
+      [--record-dir outputs/demos] [--wrist-lens real|pinhole] [--dry-run]
+  uv run tools/sim.py --mode readback --episode outputs/demos/<episode> [--figures] [--dry-run]
+  ```
+
+- **狀態來源**：狀態和幀數取自錄製端寫的 `<輸出目錄>/recorder_events.jsonl`，每行一個事件：
+  - `episode`：開新一筆、等待相機；
+  - `recording`：寫入第一幀；
+  - `progress`：每 20 幀一次；
+  - `saved`：存檔，含結果、幀數、時長；
+  - `closed`：錄製結束。
+
+  入口只讀這次啟動後、同一個錄製程式寫的事件。單獨執行採集命令時，也會寫這個檔。
+- **episode 名稱的時間**：資料夾名稱與 `started` 用的是 Isaac 容器的時鐘（UTC），入口 log 檔名用的是主機時間。
+
 ## 採集
 
 ```bash
@@ -82,7 +125,7 @@ outputs/demos/<YYYYmmdd_HHMMSS>_<顏色>/
 ## 讀回
 
 ```bash
-uv run tools/read_episode.py outputs/demos/<episode>                          # 報告
+uv run tools/read_episode.py outputs/demos/<episode>                          # 中文摘要（--json 改印完整 JSON）
 uv run --with matplotlib tools/read_episode.py outputs/demos/<episode> --figures
 ```
 
@@ -148,6 +191,18 @@ uv run --with matplotlib tools/read_episode.py outputs/demos/<episode> --figures
   - manifest 分別記 400 px 加畸變係數，以及 407.439 px、沒有畸變。
   - 腕部影像也對得上：`real` 的托盤邊緣有桶形彎曲，`pinhole` 是直線。
 - **自動模式**：`--record` 搭配 `--trajectory` 或 `--task` 都在啟動前被拒絕，結束碼非零，沒有產生資料夾。
+
+### 共同入口（#16）
+
+模擬端實測，2026-11-22：
+
+| 案例 | 結果 |
+|---|---|
+| 從選單錄一筆 | 操作者在 `uv run tools/sim.py` 選「錄示範」，用預設配置與黃色目標，以鍵鼠完成抓放。<br>• 狀態列依序顯示等待相機、錄製中、已存檔。<br>• 存成 `outputs/demos/20261121_173908_yellow`：成功，329 幀，16.4 s。<br>• 同一次啟動中，另外有 3 筆按 R 重來或關窗的未完成紀錄。 |
+| 從磁碟讀回 | 「檢查上一筆」讀的就是上面那筆：完整性通過，兩台相機都沒有缺幀或錯配。三個時刻（幀／模擬步／t_sim）：<br>• 夾爪閉合 211／2194／36.57 s；<br>• 積木離盤 228／2245／37.42 s；<br>• 目標盤放開 294／2443／40.72 s。<br><br>另外在沒有錄製的情況下，選既有的 `20261121_155631_yellow` 讀回，沒有啟動 Isaac 或模型服務。 |
+| CLI 單獨除錯 | 把入口顯示的採集命令拿到另一個終端機執行，錄到的那筆和入口錄的那筆設定完全相同：場景、目標、積木配置、鏡頭模式（`real`）、20 Hz、輸出根目錄。讀回命令單獨執行的輸出，和選單的輸出逐字相同。 |
+| 錯誤可定位 | 在 `20261121_155631_yellow` 的副本裡，把第 5 幀的 wrist 檔名改錯。選單與 CLI 都回報讀回失敗（結束碼 1），列出「wrist 第 5 幀：control row names ...」與缺影像檔。原始那筆仍然通過。 |
+| 原有入口相容 | 在只裝 PyYAML 的環境（沒有 NumPy），以下三條都成功：<br>• `python tools/sim.py --help`<br>• `--backend isaac --experiment lab_20261120 --mode teleop --dry-run`<br>• `--mode record --dry-run` |
 
 ## 限制
 
