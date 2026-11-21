@@ -44,6 +44,7 @@ flowchart LR
 | 繁中聊天層 | [#7](https://github.com/jxuan083/agentic-robotic-simulator/issues/7) 已完成（模擬）：繁中命令列聊天接任務執行器：模型（Qwen3.5-9B，本機 vLLM，可替換）只判斷意圖，程式依帳本檢查後才送命令；改單、追加、只改單一顏色、反問、回答問題、進度與主動回報。語句表與完整對話（Isaac、MuJoCo）都通過（[docs/chat-layer.md](docs/chat-layer.md)） |
 | 實驗室場景、相機視角 | [#9](https://github.com/jxuan083/agentic-robotic-simulator/issues/9) 已完成（模擬，單臂）：依 2026-11-20 實驗室 RGB-D 錄影、關節讀值與照片重建托盤擺位，加入 D455 global 與腕部相機視角，Isaac 與 MuJoCo 共用場景檔；相機位姿由深度點與手臂網格對齊推算（殘差中位數 4.6 mm），部分數值仍為估計或暫定（[docs/lab-scene-cameras.md](docs/lab-scene-cameras.md)） |
 | 一鍵入口、聊天視窗、常駐相機 | [#11](https://github.com/jxuan083/agentic-robotic-simulator/issues/11) 已完成（模擬）：`tools/lab.py` 一個指令開好模型服務、模擬伺服器與獨立的聊天視窗；相機畫面固定在主畫面（Isaac 停靠在 3D 視窗下方）；腕部畫面預設套用由實拍推算的鏡頭變形。兩個引擎都完成「聊天下單 → 缺料詢問 → 聊天回答 → 完成」的競賽流程（[docs/lab-entry.md](docs/lab-entry.md)） |
+| 模擬示範採集與讀回 | [#13](https://github.com/jxuan083/agentic-robotic-simulator/issues/13) 已完成（模擬，單臂）：Isaac 遙操作時以 20 Hz 錄 global 與腕部 RGB、同一步的命令（EE 目標與關節目標）和狀態，格式沿用實機原始錄製；`tools/read_episode.py` 從磁碟檢查完整性並找出夾爪閉合、積木離盤、目標盤放開三個時刻。人工操作的成功示範讀回通過（[docs/demo-capture.md](docs/demo-capture.md)） |
 | Agent（任務規劃、感知整合） | 預計實作 |
 | 評估報表 | 預計實作；驗收數字為目標，尚無成果 |
 
@@ -76,6 +77,7 @@ flowchart LR
 | [docs/perception.md](docs/perception.md) | RGB 積木實例分割、顏色估計、追蹤 ID、CLI 與微調說明 |
 | [docs/random-blocks.md](docs/random-blocks.md) | 隨機積木數量、顏色與合法初始位置；啟動／Reset 抽樣與 seed 重現 |
 | [docs/remote-desktop.md](docs/remote-desktop.md) | 瀏覽器桌面啟動 Isaac 與 host 隔離環境 MuJoCo |
+| [docs/demo-capture.md](docs/demo-capture.md) | 模擬示範採集：錄製指令、資料格式與單位、讀回與三個時刻、人工示範驗收（#13） |
 | [docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md) | Isaac Sim 最小場景與 keyboard／mouse EE 操作：環境、啟動、操作、驗收、已知問題 |
 | [docs/sim-server.md](docs/sim-server.md) | 實驗設定檔、選單、主機端 uv 環境、模擬伺服器控制協定 |
 | [docs/status.md](docs/status.md) | 已完成／預計實作／待確認、可沿用資產與參考來源 |

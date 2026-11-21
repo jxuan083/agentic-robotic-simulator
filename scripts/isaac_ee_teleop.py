@@ -6,6 +6,8 @@ Optional:
     --script configs/acceptance/keyboard_pick_place.yaml   drive the UI with injected input events
     --log outputs/run.csv                                  per-frame debug log
     --task configs/tasks/hold_return.yaml                  task executor scenario (issue #5)
+    --record outputs/demos --block_colors red,yellow,blue --target_color yellow
+                                                           record teleop demonstrations (issue #13)
 """
 
 import argparse
@@ -41,11 +43,18 @@ parser.add_argument("--color_dr_log", default=None, help="JSONL of the drawn col
 parser.add_argument("--blocks", type=int, default=None, help="number of blocks, 1-8 (default: the scene's count)")
 parser.add_argument("--wrist_lens", choices=["real", "pinhole"], default=None,
                     help="wrist camera image: raw-looking (distorted) or ideal pinhole (default: the scene's lens_mode)")
+parser.add_argument("--record", default=None, metavar="DIR",
+                    help="demonstration capture (issue #13): write episodes under DIR (e.g. outputs/demos)")
+parser.add_argument("--target_color", default=None, help="capture: colour of the block to pick (default: first block)")
+parser.add_argument("--record_hz", type=float, default=20.0, help="capture: recorded rate of images and rows")
 AppLauncher.add_app_launcher_args(parser)
 # One small articulation: CPU PhysX steps faster than the GPU pipeline here, and the viewport should not wait for
 # vsync / the 60 Hz main-loop limiter (measured: 16 -> 40 fps on the tested machine, see docs/isaac-ee-teleop.md).
 parser.set_defaults(device="cpu", kit_args="--/app/vsync=false --/app/runLoops/main/rateLimitEnabled=false")
 args = parser.parse_args()
+if args.record and (args.trajectory or args.task):  # checked before Kit starts; the session refuses it as well
+    parser.error(f"--record captures operator demonstrations; it cannot be combined with "
+                 f"--{'trajectory' if args.trajectory else 'task'} (the arm would be driven by code, not the operator)")
 app_launcher = AppLauncher(args)
 app = app_launcher.app
 
@@ -68,7 +77,8 @@ def main():
         color_dr=args.color_dr, color_dr_seed=args.color_dr_seed, color_dr_log=args.color_dr_log, blocks=args.blocks, wrist_lens=args.wrist_lens,
         script=args.script, log=args.log, result=args.result, profile=args.profile, device=args.device,
         trajectory=args.trajectory, task=args.task, task_log=args.task_log,
-        block_colors=args.block_colors.split(",") if args.block_colors else None), log)
+        block_colors=args.block_colors.split(",") if args.block_colors else None,
+        record=args.record, target_color=args.target_color, record_hz=args.record_hz), log)
     t_start = time.monotonic()
     while app.is_running():
         now = time.monotonic()
@@ -77,7 +87,7 @@ def main():
             layout, script = session.focus_mode, session.handover_script()
             session.close(keep_layout=True)
             session = TeleopSession(cfg, log, focus_layout=layout, carry_script=script)
-        if not session.step() and args.exit_after_script:
+        if not session.step() and (args.exit_after_script or session.quitting):
             break
         if args.max_time and now - t_start > args.max_time:
             break

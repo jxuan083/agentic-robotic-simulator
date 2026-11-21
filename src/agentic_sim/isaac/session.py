@@ -87,6 +87,9 @@ class SessionConfig:
     perception_camera: str = "both"
     perception_hz: float = 2.0
     perception_json: str | None = None
+    record: str | None = None          # demonstration capture (issue #13): episodes are written under this directory
+    target_color: str | None = None    # colour of the block to pick (capture); default: the first block's colour
+    record_hz: float = 20.0            # recorded control rate (images and rows), like the lab captures
     profile: bool = False
     device: str = "cpu"
 
@@ -114,6 +117,8 @@ class TeleopSession:
 
         sim = self.sim = sim_utils.SimulationContext(
             sim_utils.SimulationCfg(dt=PHYSICS_DT, render_interval=SUBSTEPS, device=cfg.device))
+        self.quitting = False
+        self._quit_subs = self._watch_quit()
         cam = scene_cfg["camera"]
         sim.set_camera_view(cam["eye"], cam["target"])
         from agentic_sim.task.runner import scenario_colors
@@ -136,6 +141,7 @@ class TeleopSession:
         self.sensor_views.bind(h.sensor_cameras)
         from agentic_sim.isaac.wrist_camera import WristCameraFollower
         self.wrist_camera = WristCameraFollower(sim.stage, scene_cfg, self.robot)
+        self.recorder = self.grabber = None
         # operation UI: scene prims are not pickable in the viewport, so a drag can never select (and then show a
         # transform gizmo for) the robot or the table. The Stage panel can still select prims.
         self.usd_ctx = omni.usd.get_context()
@@ -225,11 +231,59 @@ class TeleopSession:
         self.last_frame = {}
         if cfg.task:
             self.start_task()
+        if cfg.record:
+            self._start_recording()
+
+    def _start_recording(self):
+        from agentic_sim.capture.recorder import DemoRecorder
+        from agentic_sim.isaac.capture import CameraGrabber, camera_intrinsics
+        from agentic_sim.scene_layout import sensor_cameras, trays
+        cfg, h = self.cfg, self.h
+        if cfg.trajectory or cfg.task:   # the arm would be driven by code, not by the operator
+            raise ValueError(f"demonstration capture records operator input only; --record cannot be combined with "
+                             f"--{'trajectory' if cfg.trajectory else 'task'}")
+        if not self.block_color_names:
+            raise ValueError("demonstration capture needs the block colour names (--block_colors)")
+        self.grabber = CameraGrabber(h.sensor_cameras, self.log)
+        # the actual-EE sphere is an operator aid, not part of the scene: keep it out of the recorded images (the
+        # target ring of the viewport handle is a UI overlay and never reaches the cameras)
+        self.markers.set_visibility(False)
+        specs = sensor_cameras(self.scene_cfg)
+        cams = {}
+        for key, (path, w, hh) in h.sensor_cameras.items():
+            # the projection the image is rendered with, read from the prim (the scene's ideal pinhole fx is not the
+            # one in "real" lens mode)
+            cams[key] = {"width": int(w), "height": int(hh), "prim": path,
+                         **camera_intrinsics(self.sim.stage, path, int(w), int(hh))}
+            if key == "wrist":
+                cams[key]["lens_mode"] = specs[key].get("lens_mode")
+        self.recorder = DemoRecorder(
+            cfg.record, scene_path=cfg.scene, experiment=None, target_color=cfg.target_color or self.block_color_names[0],
+            block_colors=self.block_color_names, trays=trays(self.scene_cfg), edge=self.edge,
+            gripper={"open": self.ctrl.p.gripper_open, "closed": self.ctrl.p.gripper_closed}, cameras=cams,
+            control_dt=CONTROL_DT, record_hz=cfg.record_hz, operator="scripted_input" if cfg.script else "human",
+            lens_mode=cams.get("wrist", {}).get("lens_mode"), log=self.log)
+
+    def _record(self, q_meas):
+        robot = self.robot
+        s = self.ctrl.state
+        jq = robot.data.joint_pos[0].cpu().numpy()
+        jv = robot.data.joint_vel[0].cpu().numpy()
+        ids = list(self.arm_ids) + [self.jaw_id]
+        cmd_q = np.r_[s.q_cmd, s.gripper]
+        blocks = [(b.data.root_pos_w[0].cpu().numpy(), b.data.root_quat_w[0].cpu().numpy()) for b in self.blocks]
+        ee = self.ctrl.chain.ee_pose_mount(q_meas)[:3, 3]
+        self.recorder.frame(int(round(self.t_sim / CONTROL_DT)), self.t_sim, paused=self.paused,
+                            focused=self.last_focused, source=s.source, ik_status=s.status, cmd_ee=s.pos,
+                            cmd_yaw=s.yaw_offset, cmd_q=cmd_q, q=jq[ids], qd=jv[ids], ee=ee, blocks=blocks,
+                            grab=self.grabber.grab)
 
     # ---- task executor (issue #5) ----------------------------------------------------------------
     def start_task(self):
         """Hand the arm to the task executor (scenario from cfg.task, or orders from the server)."""
         from agentic_sim.task.runner import TaskRunner, default_color_names
+        if self.recorder is not None:
+            raise RuntimeError("the task executor cannot drive the arm while a demonstration is being recorded")
         if self.task is not None:
             self.task.close()
         colors = self.block_color_names or default_color_names(self.scene_cfg, len(self.blocks))
@@ -334,6 +388,8 @@ class TeleopSession:
         if getattr(self, "live_perception", None) is not None:
             self.live_perception.invalidate()
         self.log(f"reset: session={ctrl.state.session}")
+        if getattr(self, "recorder", None) is not None:
+            self.recorder.reset()
 
     def _tick(self, name, t0):
         t1 = time.monotonic()
@@ -346,6 +402,25 @@ class TeleopSession:
                 or (self.task is not None and self.task.done))
 
     # ---- one control frame --------------------------------------------------------------
+    def _watch_quit(self):
+        """Closing the window posts the app quit. With Replicator loaded (recording), its quit handler stops the
+        timeline, and Isaac Lab's STOP handler would then keep rendering until Play: the window never closes. Run
+        before it (lower order) and switch that handler off, so the main loop ends and finish() writes everything."""
+        import carb.eventdispatcher
+        import omni.kit.app
+
+        def on_quit(*_):
+            self.quitting = True
+            if self.sim is not None:
+                self.sim._disable_app_control_on_stop_handle = True
+
+        app = omni.kit.app.get_app()
+        return [app.get_shutdown_event_stream().create_subscription_to_pop_by_type(
+                    omni.kit.app.POST_QUIT_EVENT_TYPE, on_quit, name="agentic_sim.session.quit", order=-100),
+                carb.eventdispatcher.get_eventdispatcher().observe_event(
+                    event_name=omni.kit.app.GLOBAL_EVENT_POST_QUIT, on_event=on_quit,
+                    observer_name="agentic_sim.session.quit", order=-100)]
+
     def step(self) -> bool:
         """Run one frame. Returns False once the acceptance script has finished (nothing else ends a session)."""
         ctrl, robot, block, sim, kb, panel, handle = (self.ctrl, self.robot, self.block, self.sim, self.kb,
@@ -455,6 +530,8 @@ class TeleopSession:
             self.wrist_camera.update()
             sim.render()
             tp = self._tick("render", tp)
+            if self.quitting:       # the window was closed during this render: the physics views may be gone
+                return False
 
         if self.live_perception is not None:
             self.live_perception.update()
@@ -476,6 +553,9 @@ class TeleopSession:
             self.focus_at_frame -= 1
             if self.focus_at_frame < 0:
                 self.focus_mode.enter()
+        self.last_focused = focused
+        if self.recorder is not None and not self.paused:   # paused frames advance no physics: not recorded
+            self._record(q_meas)
         mode = "focus lost" if not focused else ("keyboard" if s.source == "keyboard" else s.source)
         if self.task is not None:
             mode = "task executor"
@@ -623,6 +703,11 @@ class TeleopSession:
             out.update({"result": self.cfg.result, "passed": res["passed"], "checks": res["checks_total"]})
         if self.task is not None:
             self.task.close()
+        if self.recorder is not None:
+            self.recorder.close()
+            out["episodes"] = [{"path": e["path"], "success": e["result"]["success"], "frames": e["control_frames"],
+                                "duration_s": e.get("duration_s")} for e in self.recorder.episodes]
+            self.grabber.close()
         if self.script is not None and self.cfg.result:
             os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
             passed = sum(r["ok"] for r in self.script.results)
@@ -655,6 +740,7 @@ class TeleopSession:
         self.panel.window.visible = False
         self.panel.window.destroy()
         sim = self.sim
+        self._quit_subs = None      # unsubscribe: the next session (rebuild) watches the quit itself
         # In GUI mode Isaac Lab's STOP handler keeps rendering until the timeline plays again (meant for a user
         # pressing Stop); a programmatic teardown must switch it off first, or stop() never returns.
         sim._disable_app_control_on_stop_handle = True
