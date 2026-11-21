@@ -148,3 +148,47 @@ def test_unknown_target_colour_is_refused(tmp_path):
         DemoRecorder(str(tmp_path), scene_path="x", experiment=None, target_color="green", block_colors=["red"],
                      trays=trays(LAB), edge=0.03, gripper=GRIP, cameras=CAMS, control_dt=DT, record_hz=20,
                      operator="test")
+
+
+def _edit_jsonl(path, frame, fn):
+    rows = [json.loads(line) for line in open(path)]
+    fn(next(r for r in rows if r["frame"] == frame))
+    with open(path, "w") as f:
+        f.writelines(json.dumps(r) + "\n" for r in rows)
+
+
+def _wrist_bad_name(root):
+    _edit_jsonl(os.path.join(root, "control.jsonl"), 5, lambda r: r["images"].update(wrist="does_not_exist.png"))
+
+
+def _global_neighbour(root):            # an image that exists, but of the next frame
+    _edit_jsonl(os.path.join(root, "control.jsonl"), 5, lambda r: r["images"].update(**{"global": "000006.png"}))
+
+
+def _index_step(root):
+    _edit_jsonl(os.path.join(root, "wrist", "frames.jsonl"), 5, lambda r: r.update(step=r["step"] + 3))
+
+
+def _png_gone(root):
+    os.remove(os.path.join(root, "global", "000005.png"))
+
+
+@pytest.mark.parametrize("corrupt,camera,kind", [
+    (_wrist_bad_name, "wrist", "name_mismatch"),
+    (_global_neighbour, "global", "name_mismatch"),
+    (_index_step, "wrist", "step_mismatch"),
+    (_png_gone, "global", "missing_files"),
+])
+def test_row_and_camera_index_are_cross_checked_per_frame(tmp_path, corrupt, camera, kind):
+    """Each corruption of a complete episode (one at a time) fails the readback and names camera, frame, reason."""
+    rec, lay = _recorder(tmp_path)
+    _pick_place(rec, lay)
+    root = rec.episodes[0]["path"]
+    import read_episode
+    assert check(Episode(root))["ok"] and read_episode.main([root]) == 0
+    corrupt(root)
+    rep = check(Episode(root))
+    assert not rep["ok"] and rep["images"][camera][kind] == [5]
+    assert any(e["camera"] == camera and e["frame"] == 5 for e in rep["errors"])
+    assert read_episode.main([root]) == 1
+    assert json.load(open(os.path.join(root, "readback", "readback.json")))["ok"] is False

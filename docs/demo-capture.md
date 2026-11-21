@@ -29,6 +29,7 @@ DISPLAY=:1 docker/isaac/run.sh /isaac-sim/python.sh scripts/isaac_ee_teleop.py \
 - **資料來源**：
   - 加上 `--script`（注入輸入事件的測試腳本）錄到的 episode，會標記 `operator: scripted_input`，不能當示範資料。
   - 示範資料必須是人工操作，標記為 `operator: human`。
+  - `--trajectory`、`--task` 由程式驅動手臂，不能和 `--record` 一起用：啟動前就以錯誤結束（結束碼非零），不會產生資料。任務執行器在錄製中也不能接手。
 - **效能**：錄製時操作畫面約 26–29 fps，不錄時約 38–41 fps（模擬端實測）。模擬時間每幀固定前進 1/60 秒，所以資料的時間軸不受影響。
 
 ## 資料格式
@@ -44,6 +45,14 @@ outputs/demos/<YYYYmmdd_HHMMSS>_<顏色>/
   wrist/frames.jsonl
   wrist/000000.png       腕部，640×480 RGB；預設 real 鏡頭模式（有桶形變形，和實拍一致）
 ```
+
+**相機內參**：`manifest.json` 的 `cameras.<相機>` 記的是該次渲染實際使用的投影，在錄製開始時從相機 prim 讀出，不是場景檔的數值。
+
+| 相機 | `model` | 內參 | 說明 |
+|---|---|---|---|
+| global | `pinhole` | fx = fy = 639.287，cx 640，cy 360 | 由 prim 的焦距與光圈換算。Omniverse 不支援主點偏移，所以主點在影像中心，和場景檔的實測 D455 值（fx 639.53、fy 639.05、cx 640.10、cy 369.29）不同 |
+| 腕部，`real` 模式 | `opencv_pinhole` | fx = fy = 400，cx 320，cy 240，`distortion_opencv` [−0.15, 0, 0, 0, 0] | RTX 的 OpenCV pinhole 鏡頭模型（`estimated`，由 11/20 實拍推算） |
+| 腕部，`pinhole` 模式 | `pinhole` | fx = fy ≈ 407.439，cx 320，cy 240，沒有畸變 | 場景的理想針孔視角 |
 
 **對齊方式**：
 
@@ -80,7 +89,12 @@ uv run --with matplotlib tools/read_episode.py outputs/demos/<episode> --figures
 - **完整性**：
   - 每一列都有上表欄位。
   - `frame` 連續，`step` 等間距。
-  - 每台相機每一幀都有 `frames.jsonl` 紀錄和影像檔，且步號和控制列一致。
+  - 每台相機的每一幀，逐幀核對控制列和 `frames.jsonl`：
+    - 兩邊都有這一幀；
+    - 檔名相同（指向相鄰幀的既有影像也算錯）；
+    - 步號相同；
+    - 影像檔存在。
+  - 有錯時列出相機、幀號和原因（`check.errors`），讀回失敗。
 - **三個時刻**：只從錄到的資料推出。
 
   | 時刻 | 判斷方式 |
@@ -105,6 +119,7 @@ uv run --with matplotlib tools/read_episode.py outputs/demos/<episode> --figures
 - **測試**：`tests/test_capture.py`。合成一次抓放，走真的錄製與讀回程式。
   - 完整性與三個時刻的順序。
   - 缺一張影像會被報出。
+  - 控制列與相機索引逐幀不一致時會失敗：檔名不存在、指向相鄰幀的既有影像、步號不同、影像檔缺失。
   - Reset、關閉時的結果標記。
   - 等兩台相機都有影像才開始錄。
   - LeRobot 單位換算來回一致。
@@ -125,6 +140,14 @@ uv run --with matplotlib tools/read_episode.py outputs/demos/<episode> --figures
     - close 時積木在盤上，量測的夾爪在命令之後停在積木上（約 0.22 rad）；
     - release 時積木在米色盤正上方，結束時在米色盤內。
   - 其餘幾筆是按 R 重來或中斷的未成功紀錄，只留在本機，不算示範。
+  - **內參補正**（2026-11-22）：
+    - 這兩筆錄製時，程式記的是場景檔的內參，不是實際渲染用的值。
+    - 已改成用修正後程式從 prim 讀出的值（同場景、同 `real` 模式），原值留在 `intrinsics_correction.previous`。
+    - 影像、控制列、提交版本與時間不變，重新讀回結果同上。
+- **內參與鏡頭模式**：同一場景用 `real` 和 `pinhole` 各錄一筆短的 episode。
+  - manifest 分別記 400 px 加畸變係數，以及 407.439 px、沒有畸變。
+  - 腕部影像也對得上：`real` 的托盤邊緣有桶形彎曲，`pinhole` 是直線。
+- **自動模式**：`--record` 搭配 `--trajectory` 或 `--task` 都在啟動前被拒絕，結束碼非零，沒有產生資料夾。
 
 ## 限制
 

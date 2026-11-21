@@ -215,9 +215,12 @@ class TeleopSession:
 
     def _start_recording(self):
         from agentic_sim.capture.recorder import DemoRecorder
-        from agentic_sim.isaac.capture import CameraGrabber
+        from agentic_sim.isaac.capture import CameraGrabber, camera_intrinsics
         from agentic_sim.scene_layout import sensor_cameras, trays
         cfg, h = self.cfg, self.h
+        if cfg.trajectory or cfg.task:   # the arm would be driven by code, not by the operator
+            raise ValueError(f"demonstration capture records operator input only; --record cannot be combined with "
+                             f"--{'trajectory' if cfg.trajectory else 'task'}")
         if not self.block_color_names:
             raise ValueError("demonstration capture needs the block colour names (--block_colors)")
         self.grabber = CameraGrabber(h.sensor_cameras, self.log)
@@ -227,14 +230,12 @@ class TeleopSession:
         specs = sensor_cameras(self.scene_cfg)
         cams = {}
         for key, (path, w, hh) in h.sensor_cameras.items():
-            sp = specs[key]
-            cams[key] = {"width": int(w), "height": int(hh), "prim": path, "fx": sp.get("fx"), "fy": sp.get("fy"),
-                         "cx": sp.get("cx"), "cy": sp.get("cy")}
+            # the projection the image is rendered with, read from the prim (the scene's ideal pinhole fx is not the
+            # one in "real" lens mode)
+            cams[key] = {"width": int(w), "height": int(hh), "prim": path,
+                         **camera_intrinsics(self.sim.stage, path, int(w), int(hh))}
             if key == "wrist":
-                cams[key]["lens_mode"] = sp.get("lens_mode")
-                lens = sp.get("lens")
-                if lens is not None:
-                    cams[key]["distortion_opencv"] = [float(x) for x in lens.dist]
+                cams[key]["lens_mode"] = specs[key].get("lens_mode")
         self.recorder = DemoRecorder(
             cfg.record, scene_path=cfg.scene, experiment=None, target_color=cfg.target_color or self.block_color_names[0],
             block_colors=self.block_color_names, trays=trays(self.scene_cfg), edge=self.edge,
@@ -260,6 +261,8 @@ class TeleopSession:
     def start_task(self):
         """Hand the arm to the task executor (scenario from cfg.task, or orders from the server)."""
         from agentic_sim.task.runner import TaskRunner, default_color_names
+        if self.recorder is not None:
+            raise RuntimeError("the task executor cannot drive the arm while a demonstration is being recorded")
         if self.task is not None:
             self.task.close()
         colors = self.block_color_names or default_color_names(self.scene_cfg, len(self.blocks))

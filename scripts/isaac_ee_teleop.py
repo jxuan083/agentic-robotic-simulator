@@ -48,6 +48,9 @@ AppLauncher.add_app_launcher_args(parser)
 # vsync / the 60 Hz main-loop limiter (measured: 16 -> 40 fps on the tested machine, see docs/isaac-ee-teleop.md).
 parser.set_defaults(device="cpu", kit_args="--/app/vsync=false --/app/runLoops/main/rateLimitEnabled=false")
 args = parser.parse_args()
+if args.record and (args.trajectory or args.task):  # checked before Kit starts; the session refuses it as well
+    parser.error(f"--record captures operator demonstrations; it cannot be combined with "
+                 f"--{'trajectory' if args.trajectory else 'task'} (the arm would be driven by code, not the operator)")
 app_launcher = AppLauncher(args)
 app = app_launcher.app
 

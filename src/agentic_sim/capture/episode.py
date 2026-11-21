@@ -180,7 +180,8 @@ class Episode:
 
 
 def check(ep: Episode) -> dict:
-    """Completeness: fields of every row, continuous frames and steps, one existing image per camera and frame."""
+    """Completeness: fields of every row, continuous frames and steps, and for every camera and frame the control row
+    and the camera index name the same image of the same step and that file exists. errors: camera, frame, reason."""
     rep = {"frames": len(ep.rows), "missing_fields": {}, "frame_gaps": [], "step_gaps": [], "images": {}}
     for r in ep.rows:
         for f in ROW_FIELDS:
@@ -194,16 +195,49 @@ def check(ep: Episode) -> dict:
         stride = int(np.median(d))
         rep["step_stride"] = stride
         rep["step_gaps"] = [int(steps[i]) for i in np.nonzero(d != stride)[0]][:20]
+    rep["errors"] = []
     for cam in ep.cameras:
-        listed = {fr["frame"]: fr for fr in ep.frames[cam]}
-        no_row = [i for i in range(len(ep.rows)) if i not in listed]
-        no_file = [i for i in listed if not os.path.exists(os.path.join(ep.root, cam, listed[i]["rgb"]))]
-        step_mismatch = [i for i in listed if i < len(ep.rows) and listed[i]["step"] != ep.rows[i]["step"]]
-        rep["images"][cam] = {"listed": len(listed), "missing_in_frames_jsonl": no_row[:20],
-                              "missing_files": no_file[:20], "step_mismatch": step_mismatch[:20]}
-    rep["ok"] = (not rep["missing_fields"] and not rep["frame_gaps"] and not rep["step_gaps"]
-                 and all(not (v["missing_in_frames_jsonl"] or v["missing_files"] or v["step_mismatch"])
-                         for v in rep["images"].values()))
+        cdir = ep.manifest["cameras"][cam].get("dir", cam)
+        listed = {}
+        duplicate = []
+        for fr in ep.frames[cam]:
+            if fr.get("frame") in listed:
+                duplicate.append(fr.get("frame"))
+            listed[fr.get("frame")] = fr
+        bad = {k: [] for k in ("missing_in_row", "missing_in_frames_jsonl", "name_mismatch", "step_mismatch",
+                               "missing_files")}
+
+        def err(kind, i, why):
+            bad[kind].append(i)
+            rep["errors"].append({"camera": cam, "frame": i, "reason": why})
+
+        # per frame: the control row and the camera index must name the same image of the same step, on disk
+        for i, row in enumerate(ep.rows):
+            name = (row.get("images") or {}).get(cam)
+            fr = listed.get(i)
+            if name is None:
+                err("missing_in_row", i, "control row has no image for this camera")
+            if fr is None:
+                err("missing_in_frames_jsonl", i, "camera index has no entry for this frame")
+                continue
+            if name is not None and fr.get("rgb") != name:
+                err("name_mismatch", i, f"control row names {name}, camera index names {fr.get('rgb')}")
+            if fr.get("step") != row.get("step"):
+                err("step_mismatch", i, f"camera index step {fr.get('step')}, control row step {row.get('step')}")
+            for f in {n for n in (name, fr.get("rgb")) if n}:
+                if not os.path.exists(os.path.join(ep.root, cdir, f)):
+                    err("missing_files", i, f"image file {cdir}/{f} does not exist")
+        extra = sorted(k for k in listed if not (isinstance(k, int) and 0 <= k < len(ep.rows)))
+        for k in extra:
+            rep["errors"].append({"camera": cam, "frame": k, "reason": "camera index entry without a control row"})
+        for k in duplicate:
+            rep["errors"].append({"camera": cam, "frame": k, "reason": "camera index lists this frame twice"})
+        rep["images"][cam] = {"listed": len(listed), **{k: v[:20] for k, v in bad.items()},
+                              "extra_in_frames_jsonl": extra[:20], "duplicate_in_frames_jsonl": duplicate[:20]}
+    n_err = len(rep["errors"])
+    rep["errors"] = rep["errors"][:50]
+    rep["error_count"] = n_err
+    rep["ok"] = not rep["missing_fields"] and not rep["frame_gaps"] and not rep["step_gaps"] and n_err == 0
     return rep
 
 
