@@ -415,3 +415,73 @@ class Home(Skill):
     def on_cancel(self):
         return
         yield
+
+
+class PickAt(Pick):
+    """Pick the block at a perceived pose (`pos` centre, `yaw`) rather than at block `block`'s true pose. `block`
+    names the block expected there, only for the lift check (simulation truth, as in Pick). `yaw_offset` (optional)
+    sets the finger orientation, e.g. the face pair with free room beside it."""
+    name = "pick_at"
+
+    def body(self):
+        b = self.params["block"]
+        m = self.cfg["motion"]
+        safe = float(m["safe_z"])
+        self.set_phase("rise")
+        yield from self.up_to_safe(cancellable=True)
+        bp, byaw = np.asarray(self.params["pos"], float), float(self.params["yaw"])
+        off = self.params.get("yaw_offset")
+        off = self.yaw_offset_for(bp, byaw) if off is None else float(off)
+        g = self.grasp_xy(bp, off)
+        self.evidence["perceived_pos"] = [round(float(x), 5) for x in bp]
+        self.set_phase("approach")
+        yield from self.move([g[0], g[1], safe], off)
+        self.set_phase("descend")
+        yield from self.move([g[0], g[1], bp[2] + float(m["grasp_dz"])], off)
+        self.set_phase("close")
+        yield from self.gripper(False)
+        self.set_phase("lift")
+        z0 = float(self.obs.blocks[b][2])
+        self.holding = b
+        self.ctx.on_grasp(b)
+        yield from self.move([g[0], g[1], safe], off)
+        bz = float(self.obs.blocks[b][2])
+        near = float(np.linalg.norm(self.obs.blocks[b] - self.obs.ee))
+        self.evidence.update({"block_lift_dz": round(bz - z0, 4), "block_ee_dist": round(near, 4),
+                              "observation": "sim_truth"})
+        if bz - z0 < float(self.cfg["grasp_check"]["lifted_dz"]) or near > float(self.cfg["grasp_check"]["max_block_ee"]):
+            self.holding = None
+            self.ctx.on_release(b)
+            yield from self.gripper(True, cancellable=False)
+            yield from self.up_to_safe(cancellable=False)
+            raise _Fail("grasp_missed")
+
+
+class Push(Skill):
+    """Push a block along a straight line with the closed gripper: down behind it at `start`, across to `end`
+    (xy, mount frame) at height `z`, then straight up. For blocks the gripper cannot pick (tilted, crowded)."""
+    name = "push"
+    cancel_phases = ("rise", "approach", "descend")
+
+    def body(self):
+        start, end = np.asarray(self.params["start"], float), np.asarray(self.params["end"], float)
+        z = float(self.params["z"])
+        safe = float(self.cfg["motion"]["safe_z"])
+        d = end - start
+        off = self.yaw_offset_for(start, math.atan2(d[1], d[0]))   # finger faces across the push direction
+        self.set_phase("rise")
+        yield from self.up_to_safe(cancellable=True)
+        yield from self.gripper(False)
+        self.set_phase("approach")
+        yield from self.move([start[0], start[1], safe], off)
+        self.set_phase("descend")
+        yield from self.move([start[0], start[1], z], off)
+        self.set_phase("push")
+        yield from self.move([end[0], end[1], z], off, cancellable=False)
+        self.set_phase("retreat")
+        yield from self.up_to_safe(cancellable=False)
+        yield from self.gripper(True, cancellable=False)
+
+    def on_cancel(self):
+        yield from self.up_to_safe(cancellable=False)
+        yield from self.gripper(True, cancellable=False)

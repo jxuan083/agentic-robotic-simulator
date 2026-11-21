@@ -127,18 +127,24 @@ def _capture_global(manager, session, out_dir: Path):
     return record
 
 
-def locate(session, manager, target_color: str, cfg: dict, episode_dir: Path, reachable, viewer=None, status=None):
+def locate(session, manager, target_color: str, cfg: dict, episode_dir: Path, reachable, viewer=None, status=None,
+           first_candidates=None):
     """The image-only search. Returns (result, global_record, candidates, attempts).
 
     Candidates nearest the arm first. A candidate counts only once the wrist confirmed its colour; its grasp
     reachability is then judged from that pose (reachable(center, yaw_deg)). found: a confirmed, reachable block.
     unreachable: only confirmed blocks out of reach (the first one's pose as evidence). not_found: nothing
-    confirmed, including a block the global camera saw but the wrist could not view."""
+    confirmed, including a block the global camera saw but the wrist could not view. first_candidates: candidates
+    (same fields as global_candidates) tried before the global camera's own."""
     status = status or (lambda text: None)
     status(f"Target {target_color} | global look")
     global_record = _capture_global(manager, session, episode_dir / "views" / "global_home")
     base_xy = [float(x) for x in v(session.scene_cfg["robot"]["base_pos"])[:2]]
     cands = global_candidates(global_record, target_color, cfg, base_xy)
+    if first_candidates:   # chosen by the caller (e.g. the declutter rules): tried first, duplicates dropped
+        cands = list(first_candidates) + [c for c in cands if all(
+            np.hypot(c["center_xyz_m"][0] - f["center_xyz_m"][0], c["center_xyz_m"][1] - f["center_xyz_m"][1]) > 0.02
+            for f in first_candidates)]
     attempts = []
     route = Route()
     ctrl = session.ctrl

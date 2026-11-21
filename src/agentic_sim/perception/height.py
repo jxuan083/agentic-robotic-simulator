@@ -77,7 +77,8 @@ def height_check(points, floor_z_m: float, edge_m: float, cfg: dict, seed: int =
 
     upright    horizontal top, one block edge above the floor, about one face of area
     stacked    horizontal top, two or more edges up: something is under this block
-    tilted     the top face is tilted beyond tilt_max_deg
+    tilted     the top face is tilted beyond tilt_max_deg, or a second face in the segment is (a tilted block merged
+               with a flat one; pose_xy_m is then the tilted face's centre)
     merged     horizontal one-layer top much larger than a face: touching blocks of one colour
     partial    horizontal top much smaller than a face: partly hidden, or a lower block showing past a stack
     off_layer  horizontal top between layers (resting on something uneven)
@@ -113,6 +114,21 @@ def height_check(points, floor_z_m: float, edge_m: float, cfg: dict, seed: int =
         out["status"] = "partial"
     else:
         out["status"] = "upright" if round(layers) == 1 else "stacked"
+    rest = points[~inliers]
+    if out["status"] in ("upright", "merged", "partial", "stacked") and len(rest) >= cfg.get("min_points", 30):
+        # a second, tilted face in the same segment: a tilted block merged with a flat one (look-alike colours)
+        fit2 = dominant_plane(rest, cfg.get("plane_tol_m", 0.0015), seed=seed + 1)
+        if fit2 is not None:
+            n2, _, in2 = fit2
+            tilt2 = math.degrees(math.acos(min(1.0, abs(float(n2[2])))))
+            face2 = rest[in2]
+            hull2 = _hull(face2[:, :2] / max(abs(float(n2[2])), 1e-6) ** 0.5)
+            area2 = float(cv2.contourArea(hull2.astype(np.float32))) / edge_m ** 2
+            if (cfg.get("tilt_max_deg", 5.0) < tilt2 < cfg.get("side_face_min_deg", 70.0)
+                    and area2 >= cfg.get("second_face_min_faces", 0.3) and len(face2) >= cfg.get("min_points", 30)):
+                out.update(status="tilted", tilt_deg=round(tilt2, 1), flat_part_status=out["status"],
+                           pose_xy_m=face2[:, :2].mean(0).round(4).tolist(),
+                           tilted_face_area_faces=round(area2, 2))
     return out
 
 

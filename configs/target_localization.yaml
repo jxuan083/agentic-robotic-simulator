@@ -34,5 +34,17 @@ height_check:
   layer_tol: 0.15          # |height / edge - nearest whole layer| above this: off_layer
   min_area_faces: 0.5      # top face smaller than this many faces: partial (hidden in part)
   merged_area_faces: 1.6   # larger: touching blocks of one colour
+  second_face_min_faces: 0.3  # a second plane this large, tilted (not a side): a tilted block inside the segment
   close_gap_m: 0.015       # provisional gripper clearance between two tops (finger width not measured yet)
   hull_margin_m: 0.002     # the depth top face misses about this much rim per side (erosion, plane band)
+
+# Decluttering before localization (agentic_sim.task.declutter): move blocks out of the way of the target.
+declutter:
+  max_moves: 4               # moves per target before reporting to the LLM
+  max_localize_attempts: 3   # targets the wrist could not confirm; each is excluded and the rules run again
+  max_failures_per_item: 2   # a block whose pick and push both failed this often is left alone
+  support_gap_m: 0.005       # tops this close: touching (a tilted block leans on it, a stacked block sits on it)
+  place_clearance_m: 0.025   # a moved block is set down at least this far from every other top
+  place_avoid_target_m: 0.06 # and at least this far from the target
+  push_distance_m: 0.04      # push the block this far past its centre (when the pick fails)
+  finger_room_m: 0.018       # room beside the block for the opening finger (53 mm open - 29.5 mm block - 5 mm offset)
