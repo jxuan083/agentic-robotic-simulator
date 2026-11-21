@@ -142,7 +142,10 @@ def sample_scene(scene, settings, *, seed, episode=0, region="storage", reachabl
                      "or check IK settings. No partial scene was created.")
 
 
-def _ik_checker(scene, teleop_path):
+def grasp_ik_checker(scene, teleop_path):
+    """reachable(block_centre_xyz, yaw_deg) -> bool: the scripted grasp's approach (6 cm above, at least the 9 cm
+    transport height) and grasp point both have a tilted-grasp IK solution with the fingers on a pair of faces
+    (any of the cube's four quarter turns). Kinematics only: no self-collision or table contact."""
     import numpy as np
     from agentic_sim.kinematics import So101Chain
     from agentic_sim.teleop.ee_target import load_controller
@@ -180,7 +183,7 @@ def prepare_session(cfg, scene, log=print):
         raise ValueError("random blocks cannot combine with explicit block_colors, task scenarios or color DR")
     seed = secrets.randbits(63) if cfg.random_seed is None else cfg.random_seed
     settings = load(cfg.random_config)
-    checker = _ik_checker(scene, cfg.teleop) if settings.get("check_ik", True) else None
+    checker = grasp_ik_checker(scene, cfg.teleop) if settings.get("check_ik", True) else None
     scene, colors, record = sample_scene(scene, settings, seed=seed, episode=cfg.random_episode,
                                           region=cfg.random_region, reachable=checker)
     cfg = replace(cfg, random_seed=seed, blocks=record["count"])

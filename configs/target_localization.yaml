@@ -14,3 +14,11 @@ association_gate_m: 0.03     # wrist fit counts as the candidate when its centre
 # fit there (clipped, poor fit). Lower = larger block in the image, higher = more margin to the image border.
 view_ee_z: [0.10, 0.12]
 settle_frames: 30            # control frames at the view before the wrist capture
+# Colour-only confirmation (wrist sees the target colour where the candidate is, but cannot fit a cube there, e.g. two
+# same-colour blocks touching in the image; the pose then comes from the global fit): the covering silhouette must
+# be at least this fraction of the candidate cube's projected area. A single face split off a block by the hue
+# bands is smaller and its hue unreliable (a light green top face reads yellow).
+color_only_min_area_fraction: 0.7
+# Colours that need a full wrist fit (whole cube, top and sides) to be confirmed: one face alone does not separate
+# them. A light green top face reads yellow from the wrist (3 wrong confirmations in 110 MuJoCo episodes before this).
+color_only_excluded: [yellow, light_green, dark_green]

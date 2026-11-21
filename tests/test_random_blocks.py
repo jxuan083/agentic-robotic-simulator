@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from agentic_sim.config import load, v
-from agentic_sim.random_blocks import legal_position, prepare_session, sample_scene, _ik_checker
+from agentic_sim.random_blocks import legal_position, prepare_session, sample_scene, grasp_ik_checker
 from agentic_sim.scene_layout import block_layout, tray_parts, table_box
 from agentic_sim.launch import RunOptions, _app_args
 from agentic_sim.experiments import load_experiment
@@ -90,7 +90,7 @@ def test_rotated_storage_tray_and_boundary_obstacle_checks():
 def test_sampled_targets_have_approach_and_grasp_ik():
     scene,settings=load('configs/scenes/lab_20261120.yaml'),load('configs/random_blocks.yaml')
     settings['count_range']=[8,8]
-    check=_ik_checker(scene,'configs/teleop.yaml')
+    check=grasp_ik_checker(scene,'configs/teleop.yaml')
     for region in ('storage','table'):
         _,_,rec=sample_scene(scene,settings,seed=8,region=region,reachable=check)
         assert rec['ik_checked']

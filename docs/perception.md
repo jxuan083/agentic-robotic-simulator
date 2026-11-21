@@ -176,52 +176,65 @@ Isaac 的 global/wrist 預覽是兩個同時可見、標題不同的視窗；MuJ
 
 ## 指定顏色定位：global 粗找、wrist 精修
 
-給一個場景中存在的顏色，找出一顆該色積木，輸出它的位姿（mount 座標，公尺／弧度），之後交給 ACT。核心在 `agentic_sim.perception.localize`，參數在 [`../configs/target_localization.yaml`](../configs/target_localization.yaml)，MuJoCo 執行與評估入口為 `tools/locate_target_color.py`。
+給一個場景中存在的顏色，找出一顆該色積木，輸出它的位姿（mount 座標，公尺／弧度），之後交給 ACT；抓不到時由 wrist 確認後回報。核心在 `agentic_sim.perception.localize`，參數在 [`../configs/target_localization.yaml`](../configs/target_localization.yaml)，MuJoCo 執行與評估入口為 `tools/locate_target_color.py`。
 
-1. **global 粗找**：手臂在 home，拍一張 global 影像，取擬合成功、顏色相符的積木當候選。global 會把深綠認成淺綠、淺綠認成黃（渲染評估中僅有這兩種混淆），所以要找深綠時也試 global 標為淺綠的積木，找淺綠時也試標為黃、深綠的積木（`global_lookalikes`）。同色優先，其次依輪廓擬合分數排序，最多 4 個候選。
+1. **global 粗找**：手臂在 home，拍一張 global 影像，取擬合成功、顏色相符的積木當候選，**離手臂底座近的先試**（最可能抓得到）。global 會把深綠認成淺綠、淺綠認成黃（渲染評估中僅有這兩種混淆），所以要找深綠時也試 global 標為淺綠的積木，找淺綠時也試標為黃、深綠的（`global_lookalikes`），排在同色候選之後。最多 4 個候選。
 2. **wrist 精修**：對每個候選，計算讓它落在 wrist 畫面中央的 EE 位置（`plan_wrist_view`：控制器 IK＋相機座 FK，求光軸與積木高度平面的交點並迭代修正）。EE 高度 0.10 m，夾爪保持垂直，相機約在積木上方 0.10 m、俯角約 45–57°；拍不到再試 0.12 m。經控制器（IK、限速、物理步進）移動到位後拍一張 wrist。
-   - 候選 3 cm 內有該色的 wrist 擬合 → **找到**，位姿取 wrist。
+   - 候選 3 cm 內有該色的 wrist 擬合 → 確認，位姿取 wrist。
    - 有其他顏色的 wrist 擬合 → 這個候選是混色，換下一個。
-   - 沒有擬合，但覆蓋候選投影的 wrist 輪廓是目標色（例如兩顆同色積木在畫面中相貼）→ 確認顏色，位姿取 global（`source.pose: global`）。
-   - 都沒有 → 換高度或下一個候選；全部用完回報 `not_found`。
-3. 輸出 `target.json`：`center_xyz_m`、`yaw_rad_mod_pi_over_2`（立方體 90° 對稱）、八頂點 `vertices_xyz_m`、`fit_iou`，以及 `source`（位姿來自 wrist 或 global、影格號、相機外參、同一顆積木的 global 估計）。給 ACT 的格式尚未定案。
+   - 沒有擬合，但有一個至少一顆積木大小的輪廓蓋住候選，且候選頂面投影處的 wrist 像素是目標色（例如兩顆同色積木在畫面中相貼）→ 確認顏色，位姿取 global（`source.pose: global`）。黃、淺綠、深綠不走這條路（單看頂面分不出來，`color_only_excluded`），必須有完整擬合。
+   - 都沒有 → 換高度或下一個候選。
+3. **抓不抓得到**：確認後，用確認的位姿檢查抓取 IK（`random_blocks.grasp_ik_checker`：上方接近點與夾取點都要有解，試立方體四個 90° 朝向）。抓得到 → `found`；抓不到 → 記下並繼續試下一個候選（可能還有同色、抓得到的）。
+4. **結果** `target.json`：
+   - `found`：有一顆確認過、抓得到的積木。
+   - `unreachable`：wrist 確認過該色積木，但都在抓取範圍外；附第一顆的位姿作為證據。只有 wrist 確認後才會這樣宣告。
+   - `not_found`：沒有一顆被 wrist 確認，包括 global 看到但 wrist 看不到（遮擋、拍不到）的情況；`reason` 說明原因，交由上層（LLM）決定怎麼回應。
+   - 位姿欄位：`center_xyz_m`、`yaw_rad_mod_pi_over_2`（立方體 90° 對稱）、八頂點 `vertices_xyz_m`、`fit_iou`、`graspable`，以及 `source`（位姿來自 wrist 或 global、影格號、相機外參、同一顆積木的 global 估計）。給 ACT 的格式尚未定案。
 
-wrist 近拍時不同顏色的積木常在畫面中相貼，合成一個擬合失敗的輪廓。因此 wrist 的分割改為分層：先整塊擬合；失敗的輪廓再依色相區段切開（`ClassicalConfig.split_by_hue`）；仍失敗且是綠色時，再依亮度分淺綠／深綠（`split_green_by_value`）。只在上一層失敗時才往下切，避免把側面偏暗、色相落到相鄰區段的積木切壞。在既有評估影像上，wrist 擬合成功數由 Isaac 12/80 提高到 44/80、MuJoCo 6/24 到 14/24，沒有多出誤檢或辨色錯誤；global 不分層（全切會讓 Isaac global 少 3 顆）。
+wrist 近拍時不同顏色的積木常在畫面中相貼，合成一個擬合失敗的輪廓。因此 wrist 的分割改為分層：先整塊擬合；失敗的輪廓再依色相區段切開（`ClassicalConfig.split_by_hue`）；仍失敗且是綠色時，再依亮度分淺綠／深綠（`split_green_by_value`）。只在上一層失敗時才往下切，避免把側面偏暗、色相落到相鄰區段的積木切壞；切開後仍擬合不了的部分保留為 rejected（顏色可作為證據）。在既有評估影像上，wrist 擬合成功數由 Isaac 12/80 提高到 44/80、MuJoCo 6/24 到 14/24，沒有多出誤檢或辨色錯誤；global 不分層（全切會讓 Isaac global 少 3 顆）。
+
+**顏色相關的規則**（global 混色、哪些顏色不能只看頂面）都是依模擬調色盤的渲染結果訂的；實機積木色差明顯，換成實拍後應重新檢查這些設定。
 
 ```bash
 # 評估：每場 8 顆隨機積木，目標色從當場存在的顏色隨機選；真值只在 target.json 寫出後用來評分
 MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/locate_target_color.py --episodes 20 --seed 7
+# 積木可放在托盤任何位置，包括抓不到的遠角（預設只放抓得到的位置）
+MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/locate_target_color.py --episodes 20 --seed 3 --anywhere
 # 瀏覽器桌面看一場（VS Code 轉發 6080，見 remote-desktop.md）
 tools/mujoco_remote.sh --locate --seed 7
 # 不開視窗、錄成影片：每場 episode_*/video.webm（左：場景與狀態列；右：最近一次 global／wrist 拍攝與擬合）
 MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/locate_target_color.py --episodes 3 --seed 99 --video
 ```
 
+### 抓取範圍
+
+以抓取 IK 檢查粉紅托盤內每 1 cm 的積木中心（468 點，4 種朝向）：78% 任何朝向都抓得到，21% 完全抓不到，集中在遠離手臂的角落；分界約在離底座 0.44 m（托盤最遠內角 0.56 m）。這是運動學結果（傾斜上限 60° 暫定、不含自身碰撞與桌面），實機只會更小。預設的隨機積木只放在抓得到的位置，`--anywhere` 才會放到遠角。圖：`outputs/target-localization/storage_reach.png`。
+
 ### 結果（MuJoCo，2026-11-21）
 
-3 組 seed 共 50 場，每場 8 顆積木。正確 = 顏色正確，且中心與八頂點誤差都 ≤ 5 mm。
+5 組共 110 場，每場 8 顆積木。預期結果由真值決定：目標色有任何一顆抓得到 → 應回報 `found`，否則 `unreachable`。正確 = 回報與預期相同，且位姿與一顆目標色積木的中心、八頂點誤差都 ≤ 5 mm（`found` 時該積木還要抓得到）。
 
-| seed | 場數 | 正確 | 錯誤確認 | 沒找到 | 位姿來自 wrist／global | 只取 global 第一個候選的正確數 |
-|---|---:|---:|---:|---:|---:|---:|
-| 20261121 | 10 | 10 | 0 | 0 | 10／0 | 9（1 次錯色） |
-| 7 | 20 | 20 | 0 | 0 | 18／2 | 20 |
-| 99 | 20 | 19 | 0 | 1 | 19／0 | 17（3 次錯色） |
-| 合計 | 50 | **49** | **0** | 1 | 47／2 | 46 |
+| 設定 | 場數 | 正確 | 預期 found → 回報 | 預期 unreachable → 回報 |
+|---|---:|---:|---|---|
+| 只放抓得到的位置（seed 20261121／7／99） | 50 | 48 | found 48、not_found 2 | — |
+| `--anywhere`（seed 3／11） | 60 | 59 | found 54 | unreachable 6（其中 1 場位姿誤差 6.1 mm） |
+| 合計 | 110 | **107** | | |
 
-| 量測（找到的 49 場） | 平均 | 中位數 | 最大 |
+- **抓得到卻宣告抓不到：0 次**；拿錯顏色：0 次。
+- 失敗的 3 場：2 場 `not_found`（目標與鄰近積木在 wrist 畫面中相貼、無法擬合，且是黃／綠不允許只看頂面）；1 場正確回報 `unreachable`，但遠角只能從近側斜看、目標被部分遮擋，位姿誤差 6.1 mm。
+- 遠角的積木 wrist 只能從靠手臂這一側斜看，被前面的積木擋住時無法確認，會回報 `not_found` 而不是 `unreachable`。
+
+| 量測（有位姿的 107 場） | 平均 | 中位數 | 最大 |
 |---|---:|---:|---:|
-| 中心誤差 | 0.55 mm | 0.33 mm | 3.08 mm |
-| 八頂點 RMSE | 0.76 mm | 0.48 mm | 4.16 mm |
-| yaw 誤差（mod 90°） | 1.2° | 0.8° | 7.7° |
-| 同一顆積木的 global 中心誤差 | 0.69 mm | 0.69 mm | 1.36 mm |
-| wrist 拍攝次數（50 場） | 1.2 | 1 | 4 |
-| 模擬時間（50 場） | 1.8 s | 1.6 s | 4.4 s |
+| 中心誤差 | 0.51 mm | 0.31 mm | 6.11 mm |
+| 八頂點 RMSE | 0.70 mm | 0.48 mm | 6.12 mm |
+| yaw 誤差（mod 90°） | 1.1° | 0.7° | 7.7° |
+| wrist 拍攝次數（110 場） | 1.4 | 1 | 7 |
+| 模擬時間（110 場） | 1.9 s | 1.6 s | 6.2 s |
 
-- 和先前「只用 wrist 盲掃 11 個點」的指定顏色搜尋（5/10）比，成功率大幅提高，平均只需一次 wrist 拍攝。
-- wrist 的主要貢獻是**確認顏色**：只取 global 第一個候選有 4/50 場會拿到錯色積木，這裡 0 場。
-- 在模擬中 global 位姿本身就很準；wrist 位姿平均略好，但最大誤差較大（3.1 mm 對 1.4 mm）。實機的 global 相機外參仍是估計值（殘差中位數 4.6 mm），預期 wrist 近拍的價值會更大，需實機驗證。
-- 唯一沒找到的一場：深綠積木在 wrist 畫面中與淺綠積木相貼，深綠受光面偏亮，分層分割仍無法擬合。
+- 和先前「只用 wrist 盲掃 11 個點」的指定顏色搜尋（5/10）比，成功率大幅提高，多半只需一次 wrist 拍攝。
+- 在模擬中 global 位姿本身就很準（中心誤差最大約 1.4 mm）；wrist 位姿平均略好，但偶有較大誤差。wrist 的主要貢獻是確認顏色與抓不到前的確認。實機的 global 相機外參仍是估計值（殘差中位數 4.6 mm），預期 wrist 近拍的價值更大，需實機驗證。
 - 掃描過程中機械臂與積木沒有接觸（0 幀），積木最大位移 < 0.001 mm。
 - 限制同前：RGB-only、已知邊長、直立平放在粉紅托盤；只在 MuJoCo 渲染影像上評估，Isaac 尚未接上這個入口，實體相機尚未驗證。
 
-證據在 `outputs/target-localization/mujoco-seed{20261121,7,99}/`（不進 repo）：`evaluation.json`、`evaluation.csv`，每場目錄含 global 與每次 wrist 拍攝的原圖、疊圖、`target.json` 與事後評分。
+證據在 `outputs/target-localization/`（不進 repo）：`mujoco-seed{20261121,7,99}/`、`anywhere-seed{3,11}/` 各有 `evaluation.json`、`evaluation.csv`，每場目錄含 global 與每次 wrist 拍攝的原圖、疊圖、`target.json` 與事後評分；`video-seed99/` 是 3 場錄影。

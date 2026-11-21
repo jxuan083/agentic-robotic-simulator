@@ -19,6 +19,7 @@ import argparse
 import csv
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -34,11 +35,12 @@ import numpy as np
 import yaml
 
 import evaluate_perception_exploration as common
-from agentic_sim.config import load
+from agentic_sim.config import load, v
 from agentic_sim.mujoco_backend.live_perception import MjLivePerception
 from agentic_sim.mujoco_backend.session import MjSession, SessionConfig
 from agentic_sim.perception.exploration import choose_existing_color, score_target_confirmation
 from agentic_sim.perception.localize import global_candidates, plan_wrist_view, refine_with_wrist, target_pose
+from agentic_sim.random_blocks import grasp_ik_checker
 from agentic_sim.teleop.keys import KeyState
 
 LOCALIZE_CONFIG = "configs/target_localization.yaml"
@@ -125,21 +127,38 @@ def _capture_global(manager, session, out_dir: Path):
     return record
 
 
-def locate(session, manager, target_color: str, cfg: dict, episode_dir: Path, viewer=None, status=None):
-    """The image-only search. Returns (result, global_record, candidates, attempts)."""
+def locate(session, manager, target_color: str, cfg: dict, episode_dir: Path, reachable, viewer=None, status=None):
+    """The image-only search. Returns (result, global_record, candidates, attempts).
+
+    Candidates nearest the arm first. A candidate counts only once the wrist confirmed its colour; its grasp
+    reachability is then judged from that pose (reachable(center, yaw_deg)). found: a confirmed, reachable block.
+    unreachable: only confirmed blocks out of reach (the first one's pose as evidence). not_found: nothing
+    confirmed, including a block the global camera saw but the wrist could not view."""
     status = status or (lambda text: None)
     status(f"Target {target_color} | global look")
     global_record = _capture_global(manager, session, episode_dir / "views" / "global_home")
-    cands = global_candidates(global_record, target_color, cfg)
+    base_xy = [float(x) for x in v(session.scene_cfg["robot"]["base_pos"])[:2]]
+    cands = global_candidates(global_record, target_color, cfg, base_xy)
     attempts = []
     route = Route()
     ctrl = session.ctrl
+    out_of_reach = None            # first wrist-confirmed block that cannot be grasped
+
+    def judged(found, cand, record, ci):
+        result = target_pose(found, cand, record, global_record)
+        yaw = result["yaw_rad_mod_pi_over_2"]
+        result["graspable"] = bool(reachable(result["center_xyz_m"], math.degrees(yaw or 0.0)))
+        result.update(target_color=target_color, candidates_tried=ci + 1, views=len(attempts))
+        return result
+
     for ci, cand in enumerate(cands):
         color_only = None          # (verdict, wrist record) of a view that confirmed the colour but gave no pose
+        confirmed = None
         for z in cfg["view_ee_z"]:
             view_id = f"cand{ci}_z{int(round(z * 1000))}"
             row = {"view_id": view_id, "candidate": ci, "global_color": cand["global_color"],
-                   "global_center_xyz_m": cand["center_xyz_m"], "ee_z": z}
+                   "global_center_xyz_m": cand["center_xyz_m"], "base_distance_m": cand["base_distance_m"],
+                   "ee_z": z}
             attempts.append(row)
             status(f"Target {target_color} | candidate {ci + 1}/{len(cands)} ({cand['global_color']}) z {z:.2f}")
             plan = plan_wrist_view(ctrl.chain, ctrl.p, session.scene_cfg, cand["center_xyz_m"], z,
@@ -150,35 +169,49 @@ def locate(session, manager, target_color: str, cfg: dict, episode_dir: Path, vi
             row["plan"] = {k: plan[k] for k in ("ee_xyz_m", "center_offset", "camera_height_m")}
             ok, why = common._move_to(session, plan["ee_xyz_m"], route, viewer)
             if not ok:
-                row["outcome"] = f"unreachable: {why}"
+                row["outcome"] = f"unreachable view: {why}"
                 continue
             common._dwell(session, viewer, int(cfg.get("settle_frames", 30)), f"settle at {view_id}")
-            payload, _, _ = common._capture(manager, session, view_id, plan["ee_xyz_m"],
-                                            episode_dir / "views" / view_id, viewer,
-                                            display_extra=f"wrist close-up {view_id}")
-            verdict = refine_with_wrist(payload["record"], cand, target_color, cfg)
+            payload, rgb, _ = common._capture(manager, session, view_id, plan["ee_xyz_m"],
+                                              episode_dir / "views" / view_id, viewer,
+                                              display_extra=f"wrist close-up {view_id}")
+            verdict = refine_with_wrist(payload["record"], cand, target_color, cfg, rgb)
             row["outcome"] = verdict["status"]
             row["verdict"] = {k: v for k, v in verdict.items() if k != "vertices_xyz_m"}
             if verdict["status"] == "confirmed":
-                result = target_pose(verdict, cand, payload["record"], global_record)
-                result.update(target_color=target_color, candidates_tried=ci + 1, views=len(attempts))
-                return result, global_record, cands, attempts
+                confirmed = (verdict, payload["record"])
+                break
             if verdict["status"] == "color_only" and color_only is None:
                 color_only = (verdict, payload["record"])
             if verdict["status"] == "wrong_color":   # an accepted fit outweighs a colour-only look
                 color_only = None
                 break
-        if color_only is not None:     # colour confirmed by the wrist, pose from the global fit
-            result = target_pose(color_only[0], cand, color_only[1], global_record)
-            result.update(target_color=target_color, candidates_tried=ci + 1, views=len(attempts))
+        hit = confirmed or color_only      # colour_only: colour confirmed by the wrist, pose from the global fit
+        if hit is None:
+            continue
+        result = judged(hit[0], cand, hit[1], ci)
+        attempts[-1]["graspable"] = result["graspable"]
+        if result["graspable"]:
             return result, global_record, cands, attempts
-    reason = "no global candidate of this colour" if not cands else \
-        f"{len(cands)} candidate(s), none confirmed by the wrist camera"
+        if out_of_reach is None:
+            out_of_reach = result
+    if out_of_reach is not None:
+        out_of_reach.update(status="unreachable", views=len(attempts), candidates_tried=len(cands),
+                            reason="wrist confirmed the colour, but no confirmed block of it is within the arm's "
+                                   "grasp reach")
+        return out_of_reach, global_record, cands, attempts
+    if not cands:
+        reason = "no global candidate of this colour"
+    elif all(a["outcome"] in ("no_view_plan",) or a["outcome"].startswith("unreachable view") for a in attempts):
+        reason = f"{len(cands)} global candidate(s), but the wrist camera could not be brought to view any of them"
+    else:
+        reason = f"{len(cands)} candidate(s), none confirmed by the wrist camera"
     return ({"status": "not_found", "target_color": target_color, "reason": reason,
              "candidates_tried": len(cands), "views": len(attempts)}, global_record, cands, attempts)
 
 
-def run_episode(index, layout_seed, target_seed, random_path, output, scene_path, cfg, gui=False, video=False):
+def run_episode(index, layout_seed, target_seed, random_path, output, scene_path, cfg, reachable, gui=False,
+                video=False):
     viewer = None
     keys = KeyState(actions={"P": "pause", "R": "reset"})
     if gui:
@@ -212,13 +245,13 @@ def run_episode(index, layout_seed, target_seed, random_path, output, scene_path
             "max_robot_block_contact_count": 0, "robot_block_contact_frames": 0}
         t0 = session.t_sim
         result, global_record, cands, attempts = locate(session, manager, target_color, cfg, episode_dir,
-                                                       viewer, status)
+                                                       reachable, viewer, status)
         result["sim_time_s"] = round(session.t_sim - t0, 3)
         _write_json(episode_dir / "target.json", result)     # frozen before any ground truth is read
-        if result["status"] == "found":
+        if result["status"] in ("found", "unreachable"):
             c = result["center_xyz_m"]
-            status(f"Target {target_color} FOUND | center [{c[0]:.3f}, {c[1]:.3f}, {c[2]:.3f}] m | "
-                   f"yaw {result['yaw_deg_mod_90']:.1f} deg")
+            status(f"Target {target_color} {result['status'].upper()} | center [{c[0]:.3f}, {c[1]:.3f}, {c[2]:.3f}] m"
+                   f" | yaw {result['yaw_deg_mod_90']:.1f} deg")
         else:
             status(f"Target {target_color} NOT FOUND | {result['reason']}")
         print(f"[episode {index}] {target_color}: {result['status']} "
@@ -227,8 +260,17 @@ def run_episode(index, layout_seed, target_seed, random_path, output, scene_path
             common._dwell(session, viewer, 120, "done")    # hold the result on screen / in the video
         # ---- scoring only from here on ----
         truth, colors = common._pose_truth(session)
-        found = result if result["status"] == "found" else None
+        found = result if result["status"] in ("found", "unreachable") else None
         score = score_target_confirmation(found, target_color, truth, colors)
+        # expected outcome: found if any block of the colour is graspable (judged on its true pose), else unreachable
+        target_reach = [bool(reachable(t["center_xyz_m"], math.degrees(t["yaw_rad"])))
+                        for t, c in zip(truth, colors) if c == target_color]
+        expected = "found" if any(target_reach) else "unreachable"
+        matched = score["matched_gt_index"]
+        matched_reachable = None if matched is None else bool(reachable(truth[matched]["center_xyz_m"],
+                                                                        math.degrees(truth[matched]["yaw_rad"])))
+        outcome_correct = (result["status"] == expected and score["correct_target_confirmation"]
+                           and (expected != "found" or matched_reachable))
         global_of_found = None if found is None else score_target_confirmation(
             {"center_xyz_m": found["source"]["global_center_xyz_m"],
              "vertices_xyz_m": found["source"]["global_vertices_xyz_m"],
@@ -238,7 +280,9 @@ def run_episode(index, layout_seed, target_seed, random_path, output, scene_path
         audit = session._exploration_motion_audit
         episode = {"episode": index, "layout_seed": layout_seed, "target_seed": target_seed,
                    "target_color": target_color, "result": result, "candidates": cands, "attempts": attempts,
-                   "score": score, "score_global_pose_of_found_block": global_of_found,
+                   "score": score, "expected_status": expected, "target_blocks_reachable": target_reach,
+                   "matched_block_reachable": matched_reachable, "outcome_correct": bool(outcome_correct),
+                   "score_global_pose_of_found_block": global_of_found,
                    "score_global_only_first_candidate": global_only,
                    "global_detections": [{"color": d.get("color"), "status": d["geometry"].get("status"),
                                           "reason": d["geometry"].get("reason")}
@@ -278,6 +322,8 @@ def main():
     parser.add_argument("--config", default=LOCALIZE_CONFIG)
     parser.add_argument("--blocks", type=int, default=8, help="blocks per episode")
     parser.add_argument("--gui", action="store_true", help="show one episode in a MuJoCo window")
+    parser.add_argument("--anywhere", action="store_true",
+                        help="blocks anywhere in the storage tray, also out of the arm's reach (default: reachable only)")
     parser.add_argument("--video", action="store_true",
                         help="write episode_*/video.webm (offscreen, simulated real time; no window needed)")
     args = parser.parse_args()
@@ -290,7 +336,11 @@ def main():
     cfg = load(args.config)
     random_cfg = load("configs/random_blocks.yaml")
     random_cfg["count_range"] = [args.blocks, args.blocks]
-    random_cfg["check_ik"] = True
+    random_cfg["check_ik"] = not args.anywhere
+    if args.anywhere:   # the whole storage tray, out-of-reach corner included
+        random_cfg["max_radius_m"] = 1.0
+        random_cfg["workspace_xy"] = [[0.0, 1.0], [-1.0, 1.0]]
+    reachable = grasp_ik_checker(load(args.scene), "configs/teleop.yaml")
     random_path = output / "random_blocks.yaml"
     random_path.write_text(yaml.safe_dump(random_cfg, sort_keys=False), encoding="utf-8")
     target_seed = args.target_seed if args.target_seed is not None else (
@@ -298,21 +348,31 @@ def main():
     episodes = []
     try:
         for i in range(args.episodes):
-            row = run_episode(i, args.seed, target_seed, random_path, output, args.scene, cfg, args.gui,
-                              args.video)
+            row = run_episode(i, args.seed, target_seed, random_path, output, args.scene, cfg, reachable,
+                              args.gui, args.video)
             episodes.append(row)
             s = row["score"]
             print(f"episode {i + 1}/{args.episodes}: {row['target_color']} {row['result']['status']} "
-                  f"correct={s['correct_target_confirmation']} center_mm={s['center_error_mm']}", flush=True)
+                  f"(expected {row['expected_status']}) correct={row['outcome_correct']} "
+                  f"center_mm={s['center_error_mm']}", flush=True)
     except common.ResetCancelled as exc:
         print(f"cancelled: {exc}", flush=True)
         return
-    found = [e for e in episodes if e["result"]["status"] == "found"]
+    found = [e for e in episodes if e["result"]["status"] in ("found", "unreachable")]   # with a pose
     g_only = [e["score_global_only_first_candidate"] for e in episodes]
+    outcomes = {}
+    for e in episodes:
+        key = f"expected {e['expected_status']} -> {e['result']['status']}"
+        outcomes[key] = outcomes.get(key, 0) + 1
     summary = {
         "episodes_n": len(episodes), "layout_seed": args.seed, "target_seed": target_seed,
-        "blocks_per_episode": args.blocks,
-        "found_n": len(found),
+        "blocks_per_episode": args.blocks, "anywhere": args.anywhere,
+        "outcomes": outcomes,
+        "outcome_correct_n": sum(e["outcome_correct"] for e in episodes),
+        "false_unreachable_n": sum(e["result"]["status"] == "unreachable" and e["expected_status"] == "found"
+                                   for e in episodes),
+        "found_n": sum(e["result"]["status"] == "found" for e in episodes),
+        "unreachable_n": sum(e["result"]["status"] == "unreachable" for e in episodes),
         "correct_n": sum(e["score"]["correct_target_confirmation"] for e in episodes),
         "wrong_n": sum(not e["score"]["correct_target_confirmation"] for e in found),
         "not_found_n": len(episodes) - len(found),
@@ -331,6 +391,7 @@ def main():
         "max_block_drift_mm": max(e["block_motion_audit"]["max_block_drift_mm"] for e in episodes),
         "robot_block_contact_frames": sum(e["block_motion_audit"]["robot_block_contact_frames"] for e in episodes),
         "episodes": [{"episode": e["episode"], "target_color": e["target_color"], "status": e["result"]["status"],
+                      "expected": e["expected_status"], "outcome_correct": e["outcome_correct"],
                       "views": e["result"]["views"], "correct": e["score"]["correct_target_confirmation"],
                       "pose_source": (e["result"].get("source") or {}).get("pose"),
                       "center_error_mm": e["score"]["center_error_mm"],

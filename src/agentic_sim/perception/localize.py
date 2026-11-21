@@ -27,10 +27,11 @@ def _center(detection: dict) -> np.ndarray:
     return np.asarray(detection["geometry"]["center_xyz_m"], float)
 
 
-def global_candidates(record: dict, target_color: str, cfg: dict) -> list[dict]:
+def global_candidates(record: dict, target_color: str, cfg: dict, base_xy=(0.0, 0.0)) -> list[dict]:
     """Global-camera blocks that may be `target_color`: exact colour first, then configured look-alikes.
 
-    Within each group, better silhouette fits come first. Rejected fits are left out (no reliable centre)."""
+    Within each group the block nearest the robot base (base_xy, mount frame) comes first: it is the most likely to
+    be within reach. Rejected fits are left out (no reliable centre)."""
     alike = list((cfg.get("global_lookalikes") or {}).get(target_color, []))
     out = []
     for d in record.get("detections", []):
@@ -45,11 +46,13 @@ def global_candidates(record: dict, target_color: str, cfg: dict) -> list[dict]:
             continue
         g = d["geometry"]
         out.append({"rank": rank, "global_color": c, "global_detection_id": d.get("detection_id"),
+                    "base_distance_m": float(np.hypot(g["center_xyz_m"][0] - base_xy[0],
+                                                      g["center_xyz_m"][1] - base_xy[1])),
                     "center_xyz_m": [float(x) for x in g["center_xyz_m"]],
                     "yaw_rad_mod_pi_over_2": g.get("yaw_rad_mod_pi_over_2"),
                     "vertices_xyz_m": [vx["xyz_m"] for vx in g.get("vertices", [])],
                     "fit_iou": g.get("fit_iou")})
-    out.sort(key=lambda c: (c["rank"], -float(c["fit_iou"] or 0.0)))
+    out.sort(key=lambda c: (c["rank"], c["base_distance_m"]))
     return out[:int(cfg.get("max_candidates", 4))]
 
 
@@ -138,31 +141,67 @@ def _record_camera(record: dict) -> CameraGeometry | None:
                           record.get("camera", "wrist"))
 
 
-def _covering_rejected(record: dict, center_xyz) -> dict | None:
-    """The rejected wrist silhouette whose box contains the candidate centre's projection (smallest box first)."""
+def _covering_rejected(record: dict, candidate: dict, min_area_fraction: float) -> dict | None:
+    """The rejected wrist silhouette whose box contains the candidate centre's projection (smallest box first) and
+    whose area is at least min_area_fraction of the candidate cube's own projected silhouette. A smaller piece (one
+    face split off a block by the hue bands) says little about the block's colour and is ignored."""
+    import cv2
     cam = _record_camera(record)
     if cam is None:
         return None
     try:
-        u, v = cam.project(np.asarray(center_xyz, float)[None, :])[0]
-    except ValueError:
+        u, v = cam.project(np.asarray(candidate["center_xyz_m"], float)[None, :])[0]
+        corners = cam.project(np.asarray(candidate["vertices_xyz_m"], float))
+    except (ValueError, KeyError):
         return None
+    expected = float(cv2.contourArea(cv2.convexHull(np.asarray(corners, np.float32))))
     hits = []
     for d in record.get("detections", []):
         box = d.get("bbox_xyxy")
-        if _estimated(d) or not box:
+        if _estimated(d) or not box or float(d.get("area_px", 0)) < min_area_fraction * expected:
             continue
         if box[0] <= u <= box[2] and box[1] <= v <= box[3]:
             hits.append(((box[2] - box[0]) * (box[3] - box[1]), d))
     return min(hits, key=lambda h: h[0])[1] if hits else None
 
 
-def refine_with_wrist(record: dict, candidate: dict, target_color: str, cfg: dict) -> dict:
+CLASSICAL_CONFIG = "configs/perception-classical.yaml"
+
+
+def top_face_color(rgb, record: dict, candidate: dict, shrink: float = 0.3,
+                   classical_config: str = CLASSICAL_CONFIG) -> str | None:
+    """Colour of the wrist pixels where the candidate's top face projects (its global corners 4..7, shrunk toward
+    their centre by `shrink`): the colour at the candidate itself, not the vote of a silhouette that may also hold
+    a touching block of another colour. None when it cannot be projected or is out of the image."""
+    import cv2
+    from agentic_sim.perception.classical import ClassicalConfig
+    from agentic_sim.perception.color import estimate_color
+    cam = _record_camera(record)
+    verts = candidate.get("vertices_xyz_m") or []
+    if cam is None or len(verts) != 8:
+        return None
+    try:
+        top = np.asarray(cam.project(np.asarray(verts[4:], float)), np.float32)
+    except ValueError:
+        return None
+    top = top.mean(axis=0) + (1 - shrink) * (top - top.mean(axis=0))
+    h, w = rgb.shape[:2]
+    if (top[:, 0] < 0).any() or (top[:, 1] < 0).any() or (top[:, 0] >= w).any() or (top[:, 1] >= h).any():
+        return None
+    mask = np.zeros((h, w), np.uint8)
+    cv2.fillConvexPoly(mask, np.round(top).astype(np.int32), 1)
+    color_cfg = ClassicalConfig.from_yaml(classical_config).color   # same colour rules as the detector
+    return estimate_color(rgb, mask.astype(bool), color_cfg) if mask.any() else None
+
+
+def refine_with_wrist(record: dict, candidate: dict, target_color: str, cfg: dict, rgb=None) -> dict:
     """Judge one candidate from a wrist record taken over it.
 
     confirmed     an accepted wrist fit of the target colour within the gate of the candidate centre
-    color_only    no accepted fit there, but the rejected wrist silhouette covering the candidate is the target
-                  colour (e.g. two same-colour blocks touching in the image): colour confirmed, no wrist pose
+    color_only    no accepted fit there (e.g. two same-colour blocks touching in the image), but a block-sized
+                  rejected wrist silhouette covers the candidate and the wrist pixels on the candidate's top face
+                  (rgb given) are the target colour: colour confirmed, no wrist pose. Not for colours in
+                  cfg["color_only_excluded"] (a face alone does not tell them apart)
     wrong_color   an accepted wrist fit of another colour is there (the global colour was a look-alike)
     not_seen      nothing usable near the candidate (clipped, occluded); worth another view"""
     gate = float(cfg.get("association_gate_m", 0.03))
@@ -177,12 +216,14 @@ def refine_with_wrist(record: dict, candidate: dict, target_color: str, cfg: dic
     if not near:
         rejected = [((d.get("geometry") or {}).get("reason") or "rejected") for d in record.get("detections", [])
                     if not _estimated(d)]
-        cover = _covering_rejected(record, c0)
-        if cover is not None and cover.get("color") == target_color:
-            return {"status": "color_only", "wrist_color": cover["color"],
+        cover = _covering_rejected(record, candidate, float(cfg.get("color_only_min_area_fraction", 0.7)))
+        allowed = target_color not in set(cfg.get("color_only_excluded") or [])
+        face = None if cover is None or rgb is None or not allowed else top_face_color(rgb, record, candidate)
+        if face == target_color:
+            return {"status": "color_only", "wrist_color": face, "covering_color": cover.get("color"),
                     "wrist_rejected_reason": cover["geometry"].get("reason"), "wrist_rejected_reasons": rejected}
         # a rejected silhouette of another colour may be several blocks merged: not proof, try another view
-        return {"status": "not_seen", "wrist_rejected_reasons": rejected,
+        return {"status": "not_seen", "wrist_rejected_reasons": rejected, "top_face_color": face,
                 "covering_color": None if cover is None else cover.get("color")}
     near.sort(key=lambda x: x[0])
     same = [(dist, d) for dist, d in near if d.get("color") == target_color]

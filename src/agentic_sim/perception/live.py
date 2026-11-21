@@ -74,9 +74,11 @@ class LiveEstimator:
                 if g['status'] == 'estimated':
                     out.append((d, g))
                     continue
-                fitted = [pg for pg in (fit(p) for p in parts if (p.mask & d.mask).sum() > 0.5 * p.mask.sum())
-                          if pg[1]['status'] == 'estimated']
-                out.extend(fitted or [(d, g)])
+                tried = [fit(p) for p in parts if (p.mask & d.mask).sum() > 0.5 * p.mask.sum()]
+                if any(pg[1]['status'] == 'estimated' for pg in tried):
+                    out.extend(tried)     # parts that still do not fit stay as rejected (their colour is evidence)
+                else:
+                    out.append((d, g))
             found = out
         return found
 
@@ -86,7 +88,7 @@ class LiveEstimator:
         for i, (d, geometry) in enumerate(self._fits(rgb, camera, captured_at)):
             fits.append((i, geometry))
             records.append({'detection_id': i, 'color': d.color, 'bbox_xyxy': list(d.bbox_xyxy),
-                            'geometry': geometry})
+                            'area_px': int(d.mask.sum()), 'geometry': geometry})
         return annotate_vertices(rgb, fits), {
             'frame_number': frame_number, 'captured_at_monotonic_s': captured_at,
             'camera': camera.name, 'image_size': [camera.width, camera.height],

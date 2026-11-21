@@ -18,14 +18,16 @@ def _det(i, color, center, status="estimated", fit=0.9, bbox=None, reason=None):
     return {"detection_id": i, "color": color, "bbox_xyxy": bbox, "geometry": g}
 
 
-def test_global_candidates_exact_colour_first_then_lookalikes_by_fit():
+def test_global_candidates_exact_colour_first_then_lookalikes_nearest_first():
     record = {"detections": [_det(0, "light_green", [0.2, 0.2, 0.02], fit=0.99),
                              _det(1, "dark_green", [0.3, 0.2, 0.02], fit=0.90),
                              _det(2, "dark_green", [0.3, 0.3, 0.02], fit=0.95),
                              _det(3, "red", [0.1, 0.1, 0.02]),
                              _det(4, "dark_green", None, status="rejected", reason="image_boundary_clipped")]}
-    cands = global_candidates(record, "dark_green", CFG)
-    assert [c["global_detection_id"] for c in cands] == [2, 1, 0]
+    cands = global_candidates(record, "dark_green", CFG)          # base at the origin
+    assert [c["global_detection_id"] for c in cands] == [1, 2, 0]   # 0.36 m, 0.42 m, then the look-alike
+    far_base = global_candidates(record, "dark_green", CFG, base_xy=(0.3, 0.4))
+    assert [c["global_detection_id"] for c in far_base] == [2, 1, 0]
     assert [c["rank"] for c in cands] == [0, 0, 1]
     assert global_candidates(record, "blue", CFG) == []
 
@@ -52,18 +54,33 @@ def _wrist_record(dets, center):
 
 def test_refine_colour_only_when_covering_silhouette_is_rejected():
     c = [0.25, 0.20, 0.019]
-    cand = {"center_xyz_m": c, "global_color": "yellow", "vertices_xyz_m": [[0, 0, 0]] * 8,
+    e = 0.0295 / 2
+    verts = [[c[0] + sx * e, c[1] + sy * e, c[2] + sz * e] for sz in (-1, 1)
+             for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    cand = {"center_xyz_m": c, "global_color": "yellow", "vertices_xyz_m": verts,
             "yaw_rad_mod_pi_over_2": 0.3, "fit_iou": 0.97}
-    covered = _wrist_record([_det(0, "yellow", None, status="rejected", reason="silhouette_fit_below_threshold",
-                                  bbox=[250, 180, 400, 330])], c)
-    verdict = refine_with_wrist(covered, cand, "yellow", CFG)
+    covered = _wrist_record([dict(_det(0, "yellow", None, status="rejected", reason="silhouette_fit_below_threshold",
+                                       bbox=[250, 180, 400, 330]), area_px=20000)], c)
+    yellow, mixed = np.full((480, 640, 3), 235, np.uint8), np.full((480, 640, 3), 235, np.uint8)
+    yellow[150:330, 230:410] = (230, 210, 20)
+    mixed[150:330, 230:410] = (150, 230, 60)      # light green where the candidate is ...
+    mixed[300:330, 230:410] = (230, 210, 20)      # ... a yellow block touching it below
+    verdict = refine_with_wrist(covered, cand, "yellow", CFG, yellow)
     assert verdict["status"] == "color_only"
+    assert refine_with_wrist(covered, cand, "yellow", CFG, mixed)["status"] == "not_seen"
+    assert refine_with_wrist(covered, cand, "yellow", CFG)["status"] == "not_seen"   # no image, no colour check
+    strict = dict(CFG, color_only_excluded=["yellow", "light_green", "dark_green"])
+    assert refine_with_wrist(covered, cand, "yellow", strict, yellow)["status"] == "not_seen"
     pose = target_pose(verdict, cand, covered, {"frame_number": 3})
     assert pose["source"]["pose"] == "global" and pose["center_xyz_m"] == c and pose["yaw_rad_mod_pi_over_2"] == 0.3
     # a rejected silhouette of another colour may be merged blocks: not proof of a wrong colour
-    other = _wrist_record([_det(0, "purple", None, status="rejected", reason="silhouette_fit_below_threshold",
-                                bbox=[250, 180, 400, 330])], c)
-    assert refine_with_wrist(other, cand, "yellow", CFG)["status"] == "not_seen"
+    other = _wrist_record([dict(_det(0, "purple", None, status="rejected", reason="silhouette_fit_below_threshold",
+                                     bbox=[250, 180, 400, 330]), area_px=20000)], c)
+    assert refine_with_wrist(other, cand, "yellow", CFG, mixed)["status"] == "not_seen"
+    # one face split off a block is too small to vouch for the block's colour
+    piece = _wrist_record([dict(_det(0, "yellow", None, status="rejected", reason="silhouette_fit_below_threshold",
+                                     bbox=[290, 220, 350, 260]), area_px=1500)], c)
+    assert refine_with_wrist(piece, cand, "yellow", CFG, yellow)["status"] == "not_seen"
     elsewhere = _wrist_record([_det(0, "yellow", None, status="rejected", reason="image_boundary_clipped",
                                     bbox=[0, 0, 60, 60])], c)
     assert refine_with_wrist(elsewhere, cand, "yellow", CFG)["status"] == "not_seen"
