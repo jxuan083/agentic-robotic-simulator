@@ -173,3 +173,53 @@ Isaac 的 global/wrist 預覽是兩個同時可見、標題不同的視窗；MuJ
 `get_state` 回傳的 `perception.cameras.global` 與 `.wrist` 各自包含 `latest`（相機矩陣、候選、中心、八點）、`age_s`、`stale`、`processing` 與 `error`，與原有模擬真值欄位分開。這裡的 detection ID 僅在該影格有效；移動中的腕部畫面不使用像素距離追蹤來假裝維持實體 ID。MuJoCo `--perception-json` 檔是相同的 `perception` state。八點仍受上一節的直立、已知邊長與粉紅托盤支撐面假設限制，抬起、搬離托盤、傾倒或遮擋時不應供 ACT 當作可靠抓取座標。
 
 若使用 VS Code Remote，改以 `docker/isaac/remote.sh run` 啟動，再轉發 6080；可於瀏覽器同時操作手臂及觀看八點預覽，見 [遠端桌面說明](remote-desktop.md)。
+
+## 指定顏色定位：global 粗找、wrist 精修
+
+給一個場景中存在的顏色，找出一顆該色積木，輸出它的位姿（mount 座標，公尺／弧度），之後交給 ACT。核心在 `agentic_sim.perception.localize`，參數在 [`../configs/target_localization.yaml`](../configs/target_localization.yaml)，MuJoCo 執行與評估入口為 `tools/locate_target_color.py`。
+
+1. **global 粗找**：手臂在 home，拍一張 global 影像，取擬合成功、顏色相符的積木當候選。global 會把深綠認成淺綠、淺綠認成黃（渲染評估中僅有這兩種混淆），所以要找深綠時也試 global 標為淺綠的積木，找淺綠時也試標為黃、深綠的積木（`global_lookalikes`）。同色優先，其次依輪廓擬合分數排序，最多 4 個候選。
+2. **wrist 精修**：對每個候選，計算讓它落在 wrist 畫面中央的 EE 位置（`plan_wrist_view`：控制器 IK＋相機座 FK，求光軸與積木高度平面的交點並迭代修正）。EE 高度 0.10 m，夾爪保持垂直，相機約在積木上方 0.10 m、俯角約 45–57°；拍不到再試 0.12 m。經控制器（IK、限速、物理步進）移動到位後拍一張 wrist。
+   - 候選 3 cm 內有該色的 wrist 擬合 → **找到**，位姿取 wrist。
+   - 有其他顏色的 wrist 擬合 → 這個候選是混色，換下一個。
+   - 沒有擬合，但覆蓋候選投影的 wrist 輪廓是目標色（例如兩顆同色積木在畫面中相貼）→ 確認顏色，位姿取 global（`source.pose: global`）。
+   - 都沒有 → 換高度或下一個候選；全部用完回報 `not_found`。
+3. 輸出 `target.json`：`center_xyz_m`、`yaw_rad_mod_pi_over_2`（立方體 90° 對稱）、八頂點 `vertices_xyz_m`、`fit_iou`，以及 `source`（位姿來自 wrist 或 global、影格號、相機外參、同一顆積木的 global 估計）。給 ACT 的格式尚未定案。
+
+wrist 近拍時不同顏色的積木常在畫面中相貼，合成一個擬合失敗的輪廓。因此 wrist 的分割改為分層：先整塊擬合；失敗的輪廓再依色相區段切開（`ClassicalConfig.split_by_hue`）；仍失敗且是綠色時，再依亮度分淺綠／深綠（`split_green_by_value`）。只在上一層失敗時才往下切，避免把側面偏暗、色相落到相鄰區段的積木切壞。在既有評估影像上，wrist 擬合成功數由 Isaac 12/80 提高到 44/80、MuJoCo 6/24 到 14/24，沒有多出誤檢或辨色錯誤；global 不分層（全切會讓 Isaac global 少 3 顆）。
+
+```bash
+# 評估：每場 8 顆隨機積木，目標色從當場存在的顏色隨機選；真值只在 target.json 寫出後用來評分
+MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/locate_target_color.py --episodes 20 --seed 7
+# 瀏覽器桌面看一場（VS Code 轉發 6080，見 remote-desktop.md）
+tools/mujoco_remote.sh --locate --seed 7
+```
+
+### 結果（MuJoCo，2026-11-21）
+
+3 組 seed 共 50 場，每場 8 顆積木。正確 = 顏色正確，且中心與八頂點誤差都 ≤ 5 mm。
+
+| seed | 場數 | 正確 | 錯誤確認 | 沒找到 | 位姿來自 wrist／global | 只取 global 第一個候選的正確數 |
+|---|---:|---:|---:|---:|---:|---:|
+| 20261121 | 10 | 10 | 0 | 0 | 10／0 | 9（1 次錯色） |
+| 7 | 20 | 20 | 0 | 0 | 18／2 | 20 |
+| 99 | 20 | 19 | 0 | 1 | 19／0 | 17（3 次錯色） |
+| 合計 | 50 | **49** | **0** | 1 | 47／2 | 46 |
+
+| 量測（找到的 49 場） | 平均 | 中位數 | 最大 |
+|---|---:|---:|---:|
+| 中心誤差 | 0.55 mm | 0.33 mm | 3.08 mm |
+| 八頂點 RMSE | 0.76 mm | 0.48 mm | 4.16 mm |
+| yaw 誤差（mod 90°） | 1.2° | 0.8° | 7.7° |
+| 同一顆積木的 global 中心誤差 | 0.69 mm | 0.69 mm | 1.36 mm |
+| wrist 拍攝次數（50 場） | 1.2 | 1 | 4 |
+| 模擬時間（50 場） | 1.8 s | 1.6 s | 4.4 s |
+
+- 和先前「只用 wrist 盲掃 11 個點」的指定顏色搜尋（5/10）比，成功率大幅提高，平均只需一次 wrist 拍攝。
+- wrist 的主要貢獻是**確認顏色**：只取 global 第一個候選有 4/50 場會拿到錯色積木，這裡 0 場。
+- 在模擬中 global 位姿本身就很準；wrist 位姿平均略好，但最大誤差較大（3.1 mm 對 1.4 mm）。實機的 global 相機外參仍是估計值（殘差中位數 4.6 mm），預期 wrist 近拍的價值會更大，需實機驗證。
+- 唯一沒找到的一場：深綠積木在 wrist 畫面中與淺綠積木相貼，深綠受光面偏亮，分層分割仍無法擬合。
+- 掃描過程中機械臂與積木沒有接觸（0 幀），積木最大位移 < 0.001 mm。
+- 限制同前：RGB-only、已知邊長、直立平放在粉紅托盤；只在 MuJoCo 渲染影像上評估，Isaac 尚未接上這個入口，實體相機尚未驗證。
+
+證據在 `outputs/target-localization/mujoco-seed{20261121,7,99}/`（不進 repo）：`evaluation.json`、`evaluation.csv`，每場目錄含 global 與每次 wrist 拍攝的原圖、疊圖、`target.json` 與事後評分。

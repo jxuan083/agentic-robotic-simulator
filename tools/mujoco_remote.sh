@@ -55,6 +55,12 @@ if [[ "${1:-}" == "--explore-wrist" ]]; then
     --output "outputs/perception-target-search/gui-$RUN_TAG" "$@"
   exit $?
 fi
+if [[ "${1:-}" == "--locate" ]]; then
+  shift
+  "$PYTHON" tools/locate_target_color.py --episodes 1 --gui \
+    --output "outputs/target-localization/gui-$(date +%Y%m%d-%H%M%S)-$$" "$@"
+  exit $?
+fi
 if [[ "${1:-}" == "--full-scan" ]]; then
   shift
   "$PYTHON" tools/evaluate_perception_exploration.py --episodes 1 --gui \

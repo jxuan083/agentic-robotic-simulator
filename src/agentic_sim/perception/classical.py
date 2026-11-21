@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from .color import ColorConfig, estimate_color
+from .color import GREEN_VALUE_SPLIT, ColorConfig, estimate_color
 from .types import Detection, FrameDetections
 
 
@@ -24,6 +24,10 @@ class ClassicalConfig:
     min_solidity: float = 0.42
     close_kernel: int = 3
     open_kernel: int = 3
+    # Split the foreground by hue band before connected components, so touching blocks of different colours (common
+    # in close wrist views) become separate candidates. Bands come from color.hue_ranges (shared bands merged).
+    split_by_hue: bool = False
+    split_green_by_value: bool = False   # with split_by_hue: also separate light / dark green by value
     roi_xyxy_normalized: tuple[float, float, float, float] | None = None
     track_max_distance_px: float = 90.0
     track_max_missed_frames: int = 3
@@ -121,16 +125,13 @@ class ClassicalBlockPerception:
         if self.config.roi_xyxy_normalized is not None:
             # Closing can grow foreground across the crop boundary; enforce ROI last.
             binary[~roi] = 0
-        count, labels, stats, _ = self.cv2.connectedComponentsWithStats(binary, connectivity=8)
         detections = []
         max_area = int(height * width * self.config.max_area_fraction)
-        for label in range(1, count):
-            x, y, w, h, area = (int(v) for v in stats[label])
+        for label, x, y, w, h, area, component in self._components(binary, hsv):
             if area < self.config.min_area_px or area > max_area or min(w, h) < self.config.min_side_px:
                 continue
             if max(w / h, h / w) > self.config.max_aspect_ratio:
                 continue
-            component = labels == label
             contour = self._largest_contour(component)
             hull_area = float(self.cv2.contourArea(self.cv2.convexHull(contour))) if len(contour) >= 3 else 0.0
             solidity = area / hull_area if hull_area > 0 else 0.0
@@ -161,6 +162,44 @@ class ClassicalBlockPerception:
         return FrameDetections(frame_id, None if timestamp_s is None else float(timestamp_s),
                                (height, width), detections,
                                timestamp_source or ("caller" if timestamp_s is not None else None))
+
+    def _hue_bands(self) -> list:
+        """(hue ranges, value range) per colour band; with split_green_by_value the green band shared by light / dark
+        green is split by value."""
+        bands = []
+        for name, ranges in self.config.color.hue_ranges.items():
+            r = tuple(tuple(float(x) for x in pair) for pair in ranges)
+            vr = (0, 256)
+            if self.config.split_green_by_value:
+                vr = {"light_green": (GREEN_VALUE_SPLIT, 256), "dark_green": (0, GREEN_VALUE_SPLIT)}.get(name, vr)
+            if (r, vr) not in bands:
+                bands.append((r, vr))
+        return bands
+
+    def _components(self, binary: np.ndarray, hsv: np.ndarray):
+        """(label, x, y, w, h, area, mask) of each foreground component, per colour band when split_by_hue."""
+        if self.config.split_by_hue:
+            hue = hsv[..., 0].astype(np.float32)
+            value = hsv[..., 2]
+            layers = []
+            for ranges, (vlo, vhi) in self._hue_bands():
+                band = np.zeros(hue.shape, bool)
+                for lo, hi in ranges:
+                    band |= (hue >= lo) & (hue < hi)
+                band &= (value >= vlo) & (value < vhi)
+                layer = (binary != 0) & band
+                if self.config.open_kernel > 1:   # drop thin hue fringes along other blocks' edges
+                    k = self._odd_kernel(self.config.open_kernel)
+                    layer = self.cv2.morphologyEx(layer.astype(np.uint8), self.cv2.MORPH_OPEN,
+                                                  np.ones((k, k), np.uint8)) != 0
+                layers.append(layer.astype(np.uint8) * 255)
+        else:
+            layers = [binary]
+        for layer in layers:
+            count, labels, stats, _ = self.cv2.connectedComponentsWithStats(layer, connectivity=8)
+            for label in range(1, count):
+                x, y, w, h, area = (int(v) for v in stats[label])
+                yield label, x, y, w, h, area, labels == label
 
     @staticmethod
     def _odd_kernel(size: int) -> int:

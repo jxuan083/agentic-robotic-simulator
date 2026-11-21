@@ -15,6 +15,9 @@ DEFAULT_HUE_RANGES = {
     "blue": ((99.5, 132.5),), "purple": ((132.5, 170.0),),
 }
 
+# light_green and dark_green share a hue band; the median value of the block's pixels separates them.
+GREEN_VALUE_SPLIT = 145
+
 
 @dataclass(slots=True)
 class ColorConfig:
@@ -87,5 +90,5 @@ def estimate_color(rgb: np.ndarray, mask: np.ndarray, config: ColorConfig | None
     # Green is split by brightness to distinguish the two palette classes.
     if name in ("light_green", "dark_green"):
         median_v = float(np.median(valid_value))
-        name = "light_green" if median_v >= 145 else "dark_green"
+        name = "light_green" if median_v >= GREEN_VALUE_SPLIT else "dark_green"
     return name if count else "unknown"
