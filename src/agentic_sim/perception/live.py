@@ -4,12 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 
-def add_arguments(parser):
-    parser.add_argument('--live-perception', action='store_true', help='show live RGB block corners and coordinates')
-    parser.add_argument('--perception-camera', choices=('both', 'wrist', 'global'), default='both')
-    parser.add_argument('--perception-hz', type=float, default=2.0, help='maximum inference updates per second (default: 2)')
-    parser.add_argument('--perception-json', default=None,
-                        help='optional path periodically overwritten with latest full estimates')
+from agentic_sim.perception_cli import add_arguments  # noqa: E402,F401  (kept for existing callers)
 
 
 def rendered_camera(base, view, projection, width, height):

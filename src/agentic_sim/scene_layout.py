@@ -77,6 +77,16 @@ class BlockLayout:
     init_rots: list | None = None  # optional per-block wxyz; init_rot remains the legacy shared value
 
 
+def block_support_top(scene: dict) -> float:
+    """Height (m, mount frame) of the surface the blocks of this scene stand on: the support chosen when the layout
+    was sampled (random blocks: storage tray floor or table top 0), else the pink storage tray floor. The spawn and
+    the live perception (cube centre = support + edge / 2) both use it."""
+    bl = scene["block"]
+    if "_spawn_floor_top" in bl:
+        return float(bl["_spawn_floor_top"])
+    return float(tray_parts(scene["trays"]["storage_pink"])[1]["floor_top"])
+
+
 def block_layout(scene: dict, n_blocks: int | None = None, colors: list | None = None) -> BlockLayout:
     """Block 0 at block.init_xy with the scene colour; blocks 1..n-1 at block.layout_xy[i] with palette colours.
 
@@ -90,7 +100,7 @@ def block_layout(scene: dict, n_blocks: int | None = None, colors: list | None =
     if not lo <= n <= hi:
         raise ValueError(f"block count {n} outside {lo}..{hi}")
     e = v(bl["edge"])
-    floor_top = bl.get("_spawn_floor_top", tray_parts(scene["trays"]["storage_pink"])[1]["floor_top"])
+    floor_top = block_support_top(scene)
     layout = [tuple(v(bl["init_xy"]))] + [tuple(xy) for xy in (v(bl["layout_xy"])[1:] if "layout_xy" in bl else [])]
     if len(layout) < n:
         raise ValueError(f"scene block.layout_xy has {len(layout)} positions, {n} blocks requested")

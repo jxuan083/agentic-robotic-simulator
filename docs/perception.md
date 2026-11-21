@@ -116,7 +116,7 @@ yolo segment val model=runs/segment/train/weights/best.pt data=/data/block-seg/d
 
 ## 八個幾何頂點
 
-`tools/estimate_block_vertices.py` 對單張已校正相機 RGB 影像執行傳統分割，再將**已知邊長、直立、平放在粉紅托盤底板**的立方體投影，擬合每個 mask 的完整外輪廓（頂面與可見側面）。最佳化未知的 x、y、yaw；高度由已知支撐面與邊長決定。沒有使用積木的初始位置、模擬真值或先前隨機抽樣記錄，也沒有假設影像 mask 質心就是頂面中心。
+`tools/estimate_block_vertices.py` 對單張已校正相機 RGB 影像執行傳統分割，再將**已知邊長、直立、平放在已知支撐面**的立方體投影，擬合每個 mask 的完整外輪廓（頂面與可見側面）。最佳化未知的 x、y、yaw；高度由已知支撐面與邊長決定。沒有使用積木的初始位置、模擬真值或先前隨機抽樣記錄，也沒有假設影像 mask 質心就是頂面中心。
 
 ```bash
 # 使用獨立 classical 環境；輸入必須是完整相機畫面，不能截取或縮放 GUI 小視窗
@@ -138,7 +138,7 @@ PYTHONPATH=src .venv-perception-classical/bin/python tools/estimate_block_vertic
 - 底面點為橘色、頂面為青色；自遮擋點為空心，隱藏邊為虛線。標籤是 `detection_id:vertex_id`。
 - `fit_iou` 為投影與 mask 的符合程度，不是三維定位準確率或抓取信心。低於 `--min-iou`（預設 .82）、畫面邊界截斷或支撐面在相機後方等情況，輸出 `rejected` 與空頂點清單。
 
-**適用範圍與精度：**不支援未知高度、傾倒、堆疊或明顯外部遮擋；兩顆相貼時也可能無法分割。依賴正確邊長、托盤底板高度、相機內外參與關節校正；現有腕部校正仍有 estimated/provisional 值，因此輸出是估計值。相同立方體有 90° 旋轉對稱性，yaw 以 π/2 取模，頂點編號不保證對應固定的實體材質角點或跨幀不變。
+**適用範圍與精度：**不支援未知高度、傾倒、堆疊或明顯外部遮擋；兩顆相貼時也可能無法分割。依賴正確邊長、支撐面高度、相機內外參與關節校正；現有腕部校正仍有 estimated/provisional 值，因此輸出是估計值。相同立方體有 90° 旋轉對稱性，yaw 以 π/2 取模，頂點編號不保證對應固定的實體材質角點或跨幀不變。
 
 本工具提供 ACT 後續可使用的幾何資料與離線標記；Isaac 即時預覽見下一節，目前尚未將八點作為 ACT 模型輸入。若 ACT 要接收這些座標，需要在訓練與推論使用一致的座標系、編號與輸入格式。
 
@@ -170,7 +170,9 @@ Isaac 的 global/wrist 預覽是兩個同時可見、標題不同的視窗；MuJ
 
 一次最多一個背景推算工作，忙碌時不排隊累積舊影像；`--perception-hz` 是更新頻率上限，不保證每秒達到指定次數。疊圖和數字屬於同一張處理後的快照，`Snapshot age` 從渲染捕獲回報時開始計時，超過兩秒標示 `STALE`。不會把舊八點畫到正在移動的新相機畫面。Reset 會清除舊結果；畫面截斷、分割合併或擬合不佳的候選顯示 rejected。沒有候選時清空上一幀座標。
 
-`get_state` 回傳的 `perception.cameras.global` 與 `.wrist` 各自包含 `latest`（相機矩陣、候選、中心、八點）、`age_s`、`stale`、`processing` 與 `error`，與原有模擬真值欄位分開。這裡的 detection ID 僅在該影格有效；移動中的腕部畫面不使用像素距離追蹤來假裝維持實體 ID。MuJoCo `--perception-json` 檔是相同的 `perception` state。八點仍受上一節的直立、已知邊長與粉紅托盤支撐面假設限制，抬起、搬離托盤、傾倒或遮擋時不應供 ACT 當作可靠抓取座標。
+**支撐面高度**：Isaac 與 MuJoCo 的即時感知都用當次場景的支撐面（`agentic_sim.scene_layout.block_support_top`，和積木生成同一個值）：固定配置與 `--random-region storage` 是粉紅托盤底板 0.004 m，`--random-region table` 是桌面 0 m。估測中心高度為支撐面加半個邊長。
+
+`get_state` 回傳的 `perception.cameras.global` 與 `.wrist` 各自包含 `latest`（相機矩陣、候選、中心、八點）、`age_s`、`stale`、`processing` 與 `error`，與原有模擬真值欄位分開。這裡的 detection ID 僅在該影格有效；移動中的腕部畫面不使用像素距離追蹤來假裝維持實體 ID。MuJoCo `--perception-json` 檔是相同的 `perception` state。八點仍受上一節的直立、已知邊長與支撐面假設限制，抬起、搬離托盤、傾倒或遮擋時不應供 ACT 當作可靠抓取座標。
 
 若使用 VS Code Remote，改以 `docker/isaac/remote.sh run` 啟動，再轉發 6080；可於瀏覽器同時操作手臂及觀看八點預覽，見 [遠端桌面說明](remote-desktop.md)。
 

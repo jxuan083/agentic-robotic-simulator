@@ -288,3 +288,37 @@ def test_ctrl_c_while_reusing_records_nothing(fake, monkeypatch):
         L.model()
     L.stop()
     assert L.owned == [] and [c for c in w.calls if c[1] == "down"] == []
+
+
+def _capture_options(monkeypatch):
+    seen = []
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def connect(self):
+            pass
+
+        def call(self, method, **k):
+            seen.append((method, k))
+
+        def close(self):
+            pass
+    monkeypatch.setattr(lab.SimClient, "for_backend", staticmethod(lambda *a, **k: Client()))
+    return seen
+
+
+def test_live_perception_options_reach_the_server(fake, monkeypatch):
+    """--live-perception on: the server's load_experiment gets camera, rate and JSON path; off or absent: none."""
+    fake()
+    seen = _capture_options(monkeypatch)
+    lab.Lab(_args(live_perception=True, perception_camera="wrist", perception_hz=1.5,
+                  perception_json="outputs/perception-live/latest.json")).simulator()
+    assert seen[-1] == ("load_experiment", {"name": "lab_20261120", "options": {
+        "live_perception": True, "perception_camera": "wrist", "perception_hz": 1.5,
+        "perception_json": "outputs/perception-live/latest.json"}})
+    for a in (_args(live_perception=False, perception_camera="wrist", perception_hz=1.5, perception_json=None),
+              _args()):                                        # a settings object without the options at all
+        lab.Lab(a).simulator()
+        assert not any(k.startswith("perception") or k == "live_perception" for k in seen[-1][1]["options"])

@@ -172,7 +172,7 @@ def run_on_server(backend, exp, mode, opts, scenario) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    from agentic_sim.perception.live import add_arguments as add_perception_arguments
+    from agentic_sim.perception_cli import add_arguments as add_perception_arguments
     add_perception_arguments(ap)
     ap.add_argument("--list", action="store_true", help="list experiments and server status")
     ap.add_argument("--server", choices=["up", "down", "status"], help="manage the backend's persistent server")
