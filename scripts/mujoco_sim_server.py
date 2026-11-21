@@ -69,9 +69,14 @@ class MujocoServer(TaskCommands):
 
     def _open(self, exp, opts: RunOptions, script=None, out_dir=None, carry_script=None):
         cfg = SessionConfig(scene=exp.scene, teleop=exp.teleop,
+                            random_blocks=opts.random_blocks, random_seed=opts.random_seed,
+                            random_region=opts.random_region, random_config=opts.random_config,
+                            random_episode=opts.random_episode,
                             color_dr_config=exp.color_dr or "configs/color_randomization.yaml",
                             color_dr=opts.color_dr, color_dr_seed=opts.color_dr_seed, blocks=opts.blocks,
-                            block_colors=opts.block_colors, wrist_lens=opts.wrist_lens)
+                            block_colors=opts.block_colors, wrist_lens=opts.wrist_lens,
+                            live_perception=opts.live_perception, perception_camera=opts.perception_camera,
+                            perception_hz=opts.perception_hz, perception_json=opts.perception_json)
         if script:
             cfg.script = f"configs/acceptance/{script}.yaml"
             cfg.log = os.path.join(out_dir, f"{script}.csv")
@@ -88,6 +93,9 @@ class MujocoServer(TaskCommands):
                                  script=carry_script, viewer=self.viewer)
         if self.viewer:
             self.viewer.attach(self.session)
+        if opts.random_blocks:
+            opts = replace(opts, random_seed=self.session.cfg.random_seed,
+                           random_episode=self.session.cfg.random_episode)
         self.experiment, self.options = exp, opts
         dt = time.monotonic() - t0
         log(f"loaded {exp.name} in {dt:.2f}s (options {opts.__dict__}{', scenario ' + script if script else ''}); "

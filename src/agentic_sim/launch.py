@@ -38,6 +38,15 @@ RECORD_EXPERIMENT = "lab_20261120"
 
 @dataclass
 class RunOptions:
+    random_blocks: bool = False
+    random_seed: int | None = None
+    random_region: str = "storage"
+    random_config: str = "configs/random_blocks.yaml"
+    random_episode: int = 0           # advanced on Reset; seed + episode reproduce the layout
+    live_perception: bool = False
+    perception_camera: str = "both"
+    perception_hz: float = 2.0
+    perception_json: str | None = None
     focus: bool = False
     color_dr: bool = False
     color_dr_seed: int | None = None
@@ -66,6 +75,11 @@ class Command:
 
 def _app_args(exp: Experiment, opts: RunOptions, backend: str = "isaac") -> list:
     args = ["--scene", exp.scene, "--teleop", exp.teleop]
+    if opts.live_perception:
+        args += ["--live-perception", "--perception-camera", opts.perception_camera,
+                 "--perception-hz", str(opts.perception_hz)]
+        if opts.perception_json:
+            args += ["--perception-json", opts.perception_json]
     if exp.color_dr:
         args += ["--color_dr_config", exp.color_dr]
     if opts.focus and backend == "isaac":
@@ -80,6 +94,10 @@ def _app_args(exp: Experiment, opts: RunOptions, backend: str = "isaac") -> list
         args.append("--color_dr")
         if opts.color_dr_seed is not None:
             args += ["--color_dr_seed", str(int(opts.color_dr_seed))]
+    if opts.random_blocks:
+        args += ["--random-blocks", "--random-region", opts.random_region, "--random-config", opts.random_config]
+        if opts.random_seed is not None:
+            args += ["--random-seed", str(opts.random_seed)]
     return args
 
 

@@ -152,7 +152,11 @@ class Lab:
             say(f"啟動{what}（{self.a.experiment}）")
             self.env[env_key] = self.a.experiment
             self._up(what, script, timeout, ready)
-        opts = {}
+        from agentic_sim.perception_cli import options as perception_options
+        opts = perception_options(self.a)     # {} when off; a namespace without the options means off
+        if getattr(self.a, "random_blocks", False):
+            opts.update(random_blocks=True, random_seed=self.a.random_seed,
+                        random_region=self.a.random_region, random_config=self.a.random_config)
         if self.a.block_colors:
             colors = self.a.block_colors.split(",")
             opts.update(block_colors=colors, blocks=len(colors))
@@ -199,6 +203,10 @@ def enter_pressed() -> bool:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    from agentic_sim.random_blocks import add_arguments
+    add_arguments(ap)
+    from agentic_sim.perception_cli import add_arguments as add_perception_arguments
+    add_perception_arguments(ap)
     ap.add_argument("--backend", choices=list(SERVERS), default="mujoco")
     ap.add_argument("--model", choices=list(MODELS), default="q4")
     ap.add_argument("--experiment", default="lab_20261120")

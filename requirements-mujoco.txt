@@ -1,0 +1,6 @@
+# Install into a dedicated host venv; do not use the Isaac or real-robot environments.
+numpy>=1.26
+PyYAML>=6.0
+mujoco==4.0.1
+glfw>=2.7
+opencv-python-headless>=4.9

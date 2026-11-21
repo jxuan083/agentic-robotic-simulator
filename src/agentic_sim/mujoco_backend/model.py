@@ -49,6 +49,7 @@ class MjScene:
     block_qvel: list
     block_init_pos: list
     block_init_rot: tuple
+    block_init_rots: list
     block_colors: list       # display rgb per block (baseline)
     shell_materials: list    # material ids recoloured by colour DR
     edge: float
@@ -139,7 +140,7 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
         b = wb.add_body()
         b.name = f"block_{i}"
         b.pos = list(pos)
-        b.quat = list(lay.init_rot)
+        b.quat = list(lay.init_rots[i])
         b.add_freejoint().name = f"block_{i}_free"
         g = _box(b, f"block_{i}_geom", (lay.edge,) * 3, (0, 0, 0), (*rgb, 1), friction=lay.friction[fr])
         g.mass = lay.mass
@@ -160,7 +161,8 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
         block_geoms=[m.geom(f"block_{i}_geom").id for i in range(len(lay.init_pos))],
         block_qpos=[int(m.jnt_qposadr[m.joint(f"block_{i}_free").id]) for i in range(len(lay.init_pos))],
         block_qvel=[int(m.jnt_dofadr[m.joint(f"block_{i}_free").id]) for i in range(len(lay.init_pos))],
-        block_init_pos=list(lay.init_pos), block_init_rot=lay.init_rot, block_colors=list(lay.display_rgb),
+        block_init_pos=list(lay.init_pos), block_init_rot=lay.init_rot, block_init_rots=list(lay.init_rots),
+        block_colors=list(lay.display_rgb),
         shell_materials=shell, edge=lay.edge, trays=trays)
 
 

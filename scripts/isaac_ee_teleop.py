@@ -17,6 +17,10 @@ import sys
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+from agentic_sim.random_blocks import add_arguments
+add_arguments(parser)
+from agentic_sim.perception_cli import add_arguments as add_perception_arguments
+add_perception_arguments(parser)
 parser.add_argument("--scene", default="configs/scenes/lab_current_minimal.yaml")
 parser.add_argument("--teleop", default="configs/teleop.yaml")
 parser.add_argument("--script", default=None, help="YAML input script for automated runs")
@@ -65,7 +69,11 @@ def log(msg):
 
 def main():
     session = TeleopSession(SessionConfig(
-        scene=args.scene, teleop=args.teleop, color_dr_config=args.color_dr_config, focus=args.focus,
+        scene=args.scene, teleop=args.teleop,
+        live_perception=args.live_perception, perception_camera=args.perception_camera, perception_hz=args.perception_hz,
+        perception_json=args.perception_json,
+        random_blocks=args.random_blocks, random_seed=args.random_seed,
+        random_region=args.random_region, random_config=args.random_config, color_dr_config=args.color_dr_config, focus=args.focus,
         color_dr=args.color_dr, color_dr_seed=args.color_dr_seed, color_dr_log=args.color_dr_log, blocks=args.blocks, wrist_lens=args.wrist_lens,
         script=args.script, log=args.log, result=args.result, profile=args.profile, device=args.device,
         trajectory=args.trajectory, task=args.task, task_log=args.task_log,

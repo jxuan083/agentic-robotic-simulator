@@ -77,7 +77,16 @@ class SessionConfig:
     task_log: str | None = None        # executor event log (JSONL)
     log: str | None = None             # per-frame CSV
     result: str | None = None          # result JSON (script runs)
+    random_blocks: bool = False
+    random_seed: int | None = None
+    random_region: str = "storage"
+    random_config: str = "configs/random_blocks.yaml"
+    random_episode: int = 0           # advanced on Reset; seed + episode reproduce the layout
     wrist_lens: str | None = None      # wrist camera image mode ("real" | "pinhole"); None = scene default
+    live_perception: bool = False
+    perception_camera: str = "both"
+    perception_hz: float = 2.0
+    perception_json: str | None = None
     record: str | None = None          # demonstration capture (issue #13): episodes are written under this directory
     target_color: str | None = None    # colour of the block to pick (capture); default: the first block's colour
     record_hz: float = 20.0            # recorded control rate (images and rows), like the lab captures
@@ -101,6 +110,9 @@ class TeleopSession:
         self._finished = None
         self._requests: list[str] = []
         scene_cfg = self.scene_cfg = apply_wrist_lens(load(cfg.scene), cfg.wrist_lens)
+        from agentic_sim.random_blocks import prepare_session
+        cfg, scene_cfg, spawn_colors, self.random_spawn = prepare_session(cfg, scene_cfg, log)
+        self.cfg, self.scene_cfg = cfg, scene_cfg
         teleop_cfg = load(cfg.teleop)
 
         sim = self.sim = sim_utils.SimulationContext(
@@ -110,7 +122,7 @@ class TeleopSession:
         cam = scene_cfg["camera"]
         sim.set_camera_view(cam["eye"], cam["target"])
         from agentic_sim.task.runner import scenario_colors
-        self.block_color_names = cfg.block_colors or scenario_colors(cfg.task)
+        self.block_color_names = spawn_colors or cfg.block_colors or scenario_colors(cfg.task)
         h = self.h = build_scene(scene_cfg, cfg.blocks, colors=self.block_color_names)
         self.robot, self.block, self.blocks = h.robot, h.block, h.blocks
         self.rebuild_request: dict | None = None
@@ -127,6 +139,8 @@ class TeleopSession:
         from agentic_sim.isaac.sensor_views import sensor_views
         self.sensor_views = sensor_views(log)      # resident across sessions, docked below the viewport
         self.sensor_views.bind(h.sensor_cameras)
+        from agentic_sim.isaac.wrist_camera import WristCameraFollower
+        self.wrist_camera = WristCameraFollower(sim.stage, scene_cfg, self.robot)
         self.recorder = self.grabber = None
         # operation UI: scene prims are not pickable in the viewport, so a drag can never select (and then show a
         # transform gizmo for) the robot or the table. The Stage panel can still select prims.
@@ -185,6 +199,13 @@ class TeleopSession:
             for b in self.blocks:
                 b.update(PHYSICS_DT)
 
+        self.wrist_camera.update()
+        self.live_perception = None
+        if cfg.live_perception:
+            from agentic_sim.isaac.live_perception import LivePerception
+            self.live_perception = LivePerception(scene_cfg, self.sensor_views,
+                                                  cfg.perception_camera, cfg.perception_hz, log,
+                                                  cfg.perception_json)
         self.log_f = self.log_w = None
         if cfg.log:
             os.makedirs(os.path.dirname(cfg.log) or ".", exist_ok=True)
@@ -301,6 +322,12 @@ class TeleopSession:
     def _apply_settings(self) -> bool:
         """On reset: apply the panel's settings. Returns False if the scene must be rebuilt (block count)."""
         want = self.panel.settings()
+        if self.cfg.random_blocks:
+            want["color_dr"] = False  # spawn colours are the task colour identities
+            want.update(random_seed=self.cfg.random_seed, random_episode=self.cfg.random_episode + 1)
+            self.rebuild_request = want
+            self.log(f"random scene rebuild requested: {want}")
+            return False
         if want["blocks"] != len(self.h.block_prims):
             self.rebuild_request = want
             self.log(f"rebuild requested: {want}")
@@ -346,8 +373,8 @@ class TeleopSession:
         robot.write_joint_state_to_sim(q, torch.zeros_like(q))
         robot.set_joint_position_target(q)
         robot.reset()
-        for b, init in zip(self.blocks, h.block_init_pos):
-            pose = torch.tensor([[*init, *h.block_init_rot]], dtype=torch.float32, device=sim.device)
+        for b, init, init_rot in zip(self.blocks, h.block_init_pos, h.block_init_rots):
+            pose = torch.tensor([[*init, *init_rot]], dtype=torch.float32, device=sim.device)
             b.write_root_pose_to_sim(pose)
             b.write_root_velocity_to_sim(torch.zeros((1, 6), device=sim.device))
             b.reset()
@@ -358,6 +385,8 @@ class TeleopSession:
         self.kb.clear()
         self.panel.cancel()
         self.handle.cancel()
+        if getattr(self, "live_perception", None) is not None:
+            self.live_perception.invalidate()
         self.log(f"reset: session={ctrl.state.session}")
         if getattr(self, "recorder", None) is not None:
             self.recorder.reset()
@@ -498,11 +527,14 @@ class TeleopSession:
                     b.update(PHYSICS_DT)
             self.t_sim += CONTROL_DT
             tp = self._tick("physics", tp)
+            self.wrist_camera.update()
             sim.render()
             tp = self._tick("render", tp)
             if self.quitting:       # the window was closed during this render: the physics views may be gone
                 return False
 
+        if self.live_perception is not None:
+            self.live_perception.update()
         q_meas = robot.data.joint_pos[0, self.arm_ids].cpu().numpy()
         ee_pose = ctrl.chain.ee_pose_mount(q_meas)
         ee = ee_pose[:3, 3].copy()
@@ -616,6 +648,10 @@ class TeleopSession:
                "settings": self.settings(), "rebuild_pending": self.rebuild_request is not None,
                "target": r(s.pos), "yaw_offset": round(float(s.yaw_offset), 4), "gripper_cmd": round(float(s.gripper), 4),
                "frames": self.frames, "t_sim": round(self.t_sim, 3)}
+        if self.live_perception is not None:
+            out["perception"] = self.live_perception.state()
+        if self.random_spawn is not None:
+            out["random_spawn"] = self.random_spawn
         if f:
             out.update({"ee": r(f["ee"]), "block": r(f["block"]), "q": r(f["q"]), "jaw": round(f["jaw"], 4),
                         "focused": bool(f["focused"]), "tilt_deg": round(f["tilt_deg"], 2),
@@ -692,6 +728,9 @@ class TeleopSession:
         if self.closed:
             return
         self.finish()
+        if self.live_perception is not None:
+            self.live_perception.close()
+            self.live_perception = None
         self.kb.close()
         self.handle.destroy()
         self.sensor_views.unbind()
@@ -708,6 +747,7 @@ class TeleopSession:
         if sim.is_playing():
             sim.stop()
         # drop every reference to the assets so their timeline / physics callbacks unsubscribe
+        self.wrist_camera = None
         self.h = self.robot = self.block = self.blocks = self.markers = self.script = self.ctrl = None
         gc.collect()
         sim.clear_all_callbacks()
@@ -723,4 +763,6 @@ def session_config_with(cfg: SessionConfig, settings: dict) -> SessionConfig:
     n = int(settings["blocks"])
     colors = cfg.block_colors if cfg.block_colors and len(cfg.block_colors) == n else None
     return replace(cfg, blocks=n, block_colors=colors, color_dr=bool(settings["color_dr"]),
-                   color_dr_seed=int(settings["color_dr_seed"]))
+                   color_dr_seed=int(settings["color_dr_seed"]),
+                   random_seed=settings.get("random_seed", cfg.random_seed),
+                   random_episode=settings.get("random_episode", cfg.random_episode))

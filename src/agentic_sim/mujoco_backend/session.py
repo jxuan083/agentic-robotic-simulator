@@ -58,7 +58,16 @@ class SessionConfig:
     block_colors: list | None = None   # colour name per block (task scenes); sets the block count
     task: str | None = None            # task scenario (configs/tasks/*.yaml): the executor drives the arm
     task_log: str | None = None        # executor event log (JSONL)
+    random_blocks: bool = False
+    random_seed: int | None = None
+    random_region: str = "storage"
+    random_config: str = "configs/random_blocks.yaml"
+    random_episode: int = 0           # advanced on Reset; seed + episode reproduce the layout
     wrist_lens: str | None = None      # wrist camera image mode ("real" | "pinhole"); None = scene default
+    live_perception: bool = False
+    perception_camera: str = "both"
+    perception_hz: float = 2.0
+    perception_json: str | None = None
 
 
 class MjColorRandomizer:
@@ -162,9 +171,12 @@ class MjSession:
         self._requests: list[str] = []
         self._finished = None
         self.scene_cfg = apply_wrist_lens(load(cfg.scene), cfg.wrist_lens)
+        from agentic_sim.random_blocks import prepare_session
+        cfg, self.scene_cfg, spawn_colors, self.random_spawn = prepare_session(cfg, self.scene_cfg, log)
+        self.cfg = cfg
         teleop_cfg = load(cfg.teleop)
         from agentic_sim.task.runner import scenario_colors
-        self.block_color_names = cfg.block_colors or scenario_colors(cfg.task)
+        self.block_color_names = spawn_colors or cfg.block_colors or scenario_colors(cfg.task)
         self.sc = build(self.scene_cfg, cfg.blocks, colors=self.block_color_names)
         self.m = self.sc.model
         self.d = mujoco.MjData(self.m)
@@ -205,6 +217,11 @@ class MjSession:
             f"home q={np.round(self.ctrl.q_home, 3).tolist()}")
         log(MJ_HELP)
         self.do_reset()
+        self.live_perception = None
+        if cfg.live_perception:
+            from agentic_sim.mujoco_backend.live_perception import MjLivePerception
+            self.live_perception = MjLivePerception(self.scene_cfg, self.m, cfg.perception_hz, log,
+                                                    cfg.perception_camera, cfg.perception_json)
 
         self.log_f = self.log_w = None
         if cfg.log:
@@ -269,6 +286,12 @@ class MjSession:
     def _apply_settings(self) -> bool:
         """On reset: apply the panel's settings. Returns False if the scene must be rebuilt (block count)."""
         want = self.panel.settings()
+        if self.cfg.random_blocks:
+            want["color_dr"] = False  # spawn colours are the task colour identities
+            want.update(random_seed=self.cfg.random_seed, random_episode=self.cfg.random_episode + 1)
+            self.rebuild_request = want
+            self.log(f"random scene rebuild requested: {want}")
+            return False
         if want["blocks"] != len(self.sc.block_bodies):
             self.rebuild_request = want
             self.log(f"rebuild requested: {want}")
@@ -323,14 +346,16 @@ class MjSession:
         for adr, q, off in zip(sc.arm_qpos, ctrl.state.q_cmd, sc.arm_offset):
             d.qpos[adr] = q + off
         d.qpos[sc.jaw_qpos] = ctrl.state.gripper
-        for qa, pos in zip(sc.block_qpos, sc.block_init_pos):
+        for qa, pos, rot in zip(sc.block_qpos, sc.block_init_pos, sc.block_init_rots):
             d.qpos[qa:qa + 3] = pos
-            d.qpos[qa + 3:qa + 7] = sc.block_init_rot
+            d.qpos[qa + 3:qa + 7] = rot
         self._command()
         mujoco.mj_forward(self.m, d)
         for _ in range(30):  # settle (blocks land on the tray floor, arm holds home)
             mujoco.mj_step(self.m, d)
         self.color_dr.apply_next()
+        if getattr(self, "live_perception", None) is not None:
+            self.live_perception.invalidate()
         if hasattr(self, "panel"):
             self.panel.set_colors(self.color_dr.summary())
             self.panel.mark_applied(self.settings())
@@ -534,6 +559,10 @@ class MjSession:
                "settings": self.settings(), "rebuild_pending": False,
                "target": r(s.pos), "yaw_offset": round(float(s.yaw_offset), 4), "gripper_cmd": round(float(s.gripper), 4),
                "frames": self.frames, "t_sim": round(self.t_sim, 3)}
+        if self.random_spawn is not None:
+            out["random_spawn"] = self.random_spawn
+        if self.live_perception is not None:
+            out["perception"] = self.live_perception.state()
         if f:
             out.update({"ee": r(f["ee"]), "block": r(f["block"]), "q": r(f["q"]), "jaw": round(f["jaw"], 4),
                         "focused": bool(f["focused"]), "tilt_deg": round(f["tilt_deg"], 2),
@@ -588,6 +617,9 @@ class MjSession:
             self.log(f"wrote {self.cfg.result}: {passed}/{len(self.script.results)} checks passed")
             out.update({"result": self.cfg.result, "passed": passed, "checks": len(self.script.results)})
         self._finished = out
+        if self.live_perception is not None:
+            self.live_perception.close()
+            self.live_perception = None
         return out
 
 
@@ -597,4 +629,6 @@ def session_config_with(cfg: SessionConfig, settings: dict) -> SessionConfig:
     n = int(settings["blocks"])
     colors = cfg.block_colors if cfg.block_colors and len(cfg.block_colors) == n else None
     return replace(cfg, blocks=n, block_colors=colors, color_dr=bool(settings["color_dr"]),
-                   color_dr_seed=int(settings["color_dr_seed"]))
+                   color_dr_seed=int(settings["color_dr_seed"]),
+                   random_seed=settings.get("random_seed", cfg.random_seed),
+                   random_episode=settings.get("random_episode", cfg.random_episode))

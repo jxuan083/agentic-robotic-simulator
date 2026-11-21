@@ -362,6 +362,8 @@ class Viewer:
             glfw.poll_events()
             return
         s = session
+        if getattr(s, "live_perception", None) is not None:
+            s.live_perception.update(s.d)
         if getattr(s, "reset_view_requested", False):
             s.reset_view_requested = False
             self.reset_camera()
@@ -385,10 +387,32 @@ class Viewer:
         banner = ("PAUSED" if s.paused else "") or ("" if s.focused() else "focus lost: input dropped")
         if extra:
             banner = (banner + "   " if banner else "") + extra
+        if getattr(s, "live_perception", None) is not None:
+            pstate = s.live_perception.state()["cameras"]
+            parts = []
+            for key in ("global", "wrist"):
+                item = pstate.get(key)
+                if item is None:
+                    continue
+                age = item["age_s"]
+                centers = []
+                latest = item.get("latest")
+                if latest is not None:
+                    for detection in latest.get("detections", []):
+                        geometry = detection.get("geometry", {})
+                        if geometry.get("status") == "estimated":
+                            xyz = geometry["center_xyz_m"]
+                            centers.append(f"{detection['detection_id']}=({xyz[0]:.3f},{xyz[1]:.3f},{xyz[2]:.3f})")
+                center_text = " XYZ " + ";".join(centers[:3]) if centers else " XYZ —"
+                parts.append(f"{key}: {'late' if age is None else f'{age:.1f}s'}" + center_text +
+                             (f" ERROR {item['error']}" if item["error"] else ""))
+            banner = (banner + "   " if banner else "") + "perception " + " | ".join(parts)
         if banner:
             mujoco.mjr_overlay(mujoco.mjtFont.mjFONT_NORMAL, mujoco.mjtGridPos.mjGRID_TOPLEFT,
                                cv.mjrect(*self.view_rect), banner, "", self.con)
         self._draw_sensor_insets(cv, s, layout, lens_images)
+        if getattr(s, "live_perception", None) is not None:
+            self._draw_perception_centers(cv, s, view_w, layout)
         # panel + top view
         s.panel.draw(cv, view_w, 0, win_h)
         mr = s.panel.map_rect
@@ -455,13 +479,54 @@ class Viewer:
         for key, label, x, y, w, h in layout:
             cam, scn, _, _, _ = self._sensor[key]
             cv.rect(x - 2, y - 2, w + 4, h + 4, (0.1, 0.1, 0.12, 1.0))
-            if key in lens_images:
+            if (getattr(s, "live_perception", None) is not None and key in s.live_perception.selected
+                    and s.live_perception.overlay(key) is not None):
+                import cv2
+                overlay = s.live_perception.overlay(key)
+                rect = cv.mjrect(x, y, w, h)
+                pixels = cv2.resize(overlay, (rect.width, rect.height), interpolation=cv2.INTER_AREA)
+                mujoco.mjr_drawPixels(np.flipud(pixels).copy().ravel(), None, rect, self.con)
+            elif key in lens_images:
                 mujoco.mjr_drawPixels(lens_images[key].ravel(), None, cv.mjrect(x, y, w, h), self.con)
             else:
                 mujoco.mjv_updateScene(self.model, s.d, self.opt, self.pert, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
                 mujoco.mjr_render(cv.mjrect(x, y, w, h), scn, self.con)
             cv.label(x, y, cv.text_width(label) + 12, cv.line_h + 4, label, (0.1, 0.1, 0.12, 0.8))
             self._inset_rects.append((x - 2, y - 2, w + 4, h + 4))
+
+    def _draw_perception_centers(self, cv, s, view_w, layout):
+        """Readable XYZ rows for every estimated candidate, in separate global/wrist sections."""
+        manager = s.live_perception
+        if not manager.selected:
+            return
+        line_h = max(14, int(cv.line_h))
+        bottom = max((y + h for _, _, _, y, _, h in layout), default=INSET_MARGIN) + 8
+        rows = []
+        state = manager.state()["cameras"]
+        for key in manager.selected:
+            camera = state.get(key, {})
+            latest = camera.get("latest") or {}
+            age = camera.get("age_s")
+            suffix = "late" if age is None else f"{age:.1f}s"
+            rows.append(f"{key.upper()} perception   {suffix}" + ("  STALE" if camera.get("stale") else ""))
+            detections = latest.get("detections", [])
+            if not detections:
+                rows.append("  no estimates yet")
+            for detection in detections:
+                geom = detection.get("geometry", {})
+                if geom.get("status") == "estimated":
+                    x, y, z = geom["center_xyz_m"]
+                    rows.append(f"  #{detection['detection_id']} {detection['color']}: {x:+.3f}, {y:+.3f}, {z:+.3f} m")
+                else:
+                    rows.append(f"  #{detection['detection_id']} rejected: {geom.get('reason', 'unknown')}")
+        width = min(520, int(view_w * .55))
+        x0 = max(8, int(view_w) - width - 8)
+        height = min(len(rows) * line_h + 8, max(0, self.view_rect[3] - bottom))
+        if height <= 0:
+            return
+        cv.rect(x0 - 4, bottom - 4, width + 8, height, (0.04, 0.05, 0.07, .86))
+        for i, row in enumerate(rows[:max(0, height // line_h)]):
+            cv.text(x0, bottom + i * line_h, row, (0.95, 0.95, 0.95))
 
     def render_idle(self):
         """No session loaded (server waiting for load_experiment): keep the window responsive."""

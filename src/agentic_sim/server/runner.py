@@ -17,22 +17,35 @@ from agentic_sim.experiments import Experiment
 from agentic_sim.launch import RunOptions
 from agentic_sim.server.client import SimClient
 
-SESSION_OPTIONS = ("focus", "color_dr", "color_dr_seed", "blocks", "block_colors")
+SESSION_OPTIONS = ("live_perception", "perception_camera", "perception_hz", "perception_json", "focus", "color_dr", "color_dr_seed", "blocks", "block_colors", "random_blocks", "random_seed", "random_region", "random_config", "random_episode")
 
 
 def session_options(opts: RunOptions) -> dict:
     d = asdict(opts)
-    return {k: d[k] for k in SESSION_OPTIONS if not (k == "block_colors" and d[k] is None)}
+    return {k: d[k] for k in SESSION_OPTIONS if not (k == "block_colors" and d[k] is None)
+            and not (k in ("live_perception", "perception_camera", "perception_hz", "perception_json") and not d["live_perception"])
+            and not (k.startswith("random_") and not d["random_blocks"])}
 
 
 def same_options(loaded: dict, wanted: dict) -> bool:
     """Loaded session options (server status) match the wanted ones. The seed only counts with colour DR on, and a
     missing seed means the config default (any seed is accepted)."""
     loaded = loaded or {}
+    if bool(loaded.get("live_perception")) != bool(wanted.get("live_perception")):
+        return False
+    if wanted.get("live_perception"):
+        if any(loaded.get(k) != wanted.get(k) for k in ("perception_camera", "perception_hz", "perception_json")):
+            return False
+    if bool(loaded.get("random_blocks")) != bool(wanted.get("random_blocks")):
+        return False
+    if wanted.get("random_blocks"):
+        for k in ("random_seed", "random_region", "random_config", "random_episode"):
+            if wanted.get(k) is not None and loaded.get(k) != wanted[k]:
+                return False
     for k in ("focus", "color_dr"):
         if bool(loaded.get(k)) != bool(wanted.get(k)):
             return False
-    if int(loaded.get("blocks") or 1) != int(wanted.get("blocks") or 1):
+    if not wanted.get("random_blocks") and int(loaded.get("blocks") or 1) != int(wanted.get("blocks") or 1):
         return False
     if (loaded.get("block_colors") or None) != (wanted.get("block_colors") or None):
         return False
