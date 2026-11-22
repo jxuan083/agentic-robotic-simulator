@@ -5,6 +5,12 @@
   each control frame:  ex.step(obs)          # before ctrl.joint_command(); obs: skills.Obs (sim truth here)
   ex.answer(qid, "return")                   # reply to ex.question
 
+With cameras (TaskExecutor(..., cameras=MjTaskCameras(...), loc_cfg=..., reachable=...)) a needed block is found
+with the cameras instead of the simulation truth: the Acquire skill clears the storage tray where needed and either
+hands back a wrist-confirmed pose, grasped next by PickAt (later ACT), or ends with the target already in the
+gripper. A colour Acquire cannot get (not found, out of reach, still blocked) counts as missing for the shortage
+question. Truth then only names blocks for the bookkeeping and verifies deliveries.
+
 One skill runs at a time; it only proposes EE targets and gripper goals to the shared controller. Rules (issue #5):
 - "total" is the new complete order, "add" adds to it. Each change is a new ledger revision; the running skill is
   re-checked against it at once: kept (and re-tagged with the new revision) if it still serves the order, otherwise
@@ -25,15 +31,25 @@ import numpy as np
 
 from agentic_sim.scene_layout import block_in_tray
 from agentic_sim.task.ledger import Ledger
-from agentic_sim.task.skills import Home, Hold, Motion, Obs, Pick, Place, World
+from agentic_sim.task.acquire import Acquire
+from agentic_sim.task.skills import Home, Hold, Motion, Obs, Pick, PickAt, Place, World
 
 HELD_OPTIONS = ("return", "place_at", "deliver")
 SHORTAGE_OPTIONS = ("substitute", "reduce", "wait")
 
 
 class TaskExecutor:
-    def __init__(self, ctrl, world: World, cfg: dict, dt: float, log=print, event_log: str | None = None):
+    def __init__(self, ctrl, world: World, cfg: dict, dt: float, log=print, event_log: str | None = None,
+                 cameras=None, loc_cfg: dict | None = None, reachable=None, base_xy=(0.0, 0.0)):
         self.ctrl, self.world, self.cfg, self.dt, self.log = ctrl, world, cfg, dt, log
+        self.cameras, self.loc_cfg, self.reachable = cameras, loc_cfg, reachable   # perception mode when cameras
+        self.base_xy = [float(x) for x in base_xy]
+        self.acquired: dict | None = None     # wrist-confirmed pose of the next block to grasp
+        self.unfindable: dict = {}            # colour -> why Acquire could not get it (cleared by a new order)
+        self._unfindable_t = 0.0
+        self.grasp_failures: dict = {}        # colour -> failed grasps of acquired poses
+        self.seen_stock: dict = {}            # colour -> blocks the last global look saw in the storage tray
+        self.status_text = ""
         self.ledger = Ledger()
         self.motion = Motion(ctrl, cfg, dt)
         self.skill = None
@@ -175,7 +191,7 @@ class TaskExecutor:
         self._track_cancel()
 
     def _start(self, cls, **params):
-        c = self.color(params["block"]) if params.get("block") is not None else None
+        c = params.get("color") or (self.color(params["block"]) if params.get("block") is not None else None)
         key = (cls.name, c)
         self.skill_counts[key] = self.skill_counts.get(key, 0) + 1
         params.setdefault("color", c)
@@ -212,12 +228,40 @@ class TaskExecutor:
             self.purpose = "retrieve"
             return self._start(Pick, block=b, purpose="retrieve")
         needed = led.needed()
+        if self.cameras is not None:
+            return self._plan_perceived(needed)
         for c in needed:
             av = self.available(c)
             if av:
                 self.restock_wait = False
                 self.purpose = "deliver"
                 return self._start(Pick, block=av[0], purpose="deliver")
+        if needed:
+            if not self.restock_wait and self._asked_shortage != led.revision:
+                self._ask_shortage(needed)
+            self.state = "waiting"
+            return
+        if self.state != "done":
+            if float(np.linalg.norm(self.ctrl.state.pos - self.world.home)) > 1e-3:
+                return self._start(Home)
+            self.state = "done"
+            self.emit("task_done", ledger=led.snapshot(), placement=self._counts_in("placement"))
+
+    def _plan_perceived(self, needed: dict):
+        """Next block with the cameras: grasp an acquired pose, else acquire the first needed colour not given up on;
+        when none is left, the shortage question (as without cameras)."""
+        led = self.ledger
+        if self.restock_wait and self.unfindable and \
+                self.t - self._unfindable_t >= float((self.cfg.get("shortage") or {}).get("recheck_s", 1.0)):
+            self.unfindable = {}                # waiting for more blocks: look again
+        a, self.acquired = self.acquired, None
+        if a is not None and led.need(a["color"]) > 0:
+            self.purpose = "deliver"
+            return self._start(PickAt, block=a["block"], pos=a["pos"], yaw=a["yaw"], yaw_offset=a["yaw_offset"],
+                               color=a["color"], purpose="deliver")
+        for c in needed:
+            if c not in self.unfindable:
+                return self._start(Acquire, color=c, purpose="deliver")
         if needed:
             if not self.restock_wait and self._asked_shortage != led.revision:
                 self._ask_shortage(needed)
@@ -254,16 +298,23 @@ class TaskExecutor:
         led = self.ledger
         self._asked_shortage = led.revision
         stock = {}
-        for b, c in enumerate(self.world.colors):
-            if b != self.holding and b not in self.delivered_blocks and b not in self.skipped and self._in(b, "storage"):
-                stock[c] = stock.get(c, 0) + 1
+        if self.cameras is not None:      # what the last global look saw
+            stock = {c: n for c, n in self.seen_stock.items() if n}
+        else:
+            for b, c in enumerate(self.world.colors):
+                if b != self.holding and b not in self.delivered_blocks and b not in self.skipped \
+                        and self._in(b, "storage"):
+                    stock[c] = stock.get(c, 0) + 1
+        why = {c: self.unfindable[c] for c in needed if c in self.unfindable}
         delivered = {c: n for c, n in led.delivered.items() if n}
         txt = ("Delivered " + (", ".join(f"{n} {c}" for c, n in delivered.items()) or "nothing") +
                "; still missing " + ", ".join(f"{n} {c}" for c, n in needed.items()) +
-               " and none left in the storage tray. Left there: " +
+               (" and none left in the storage tray" if not why else " and the cameras could not get them (" +
+                "; ".join(f"{c}: {r}" for c, r in why.items()) + ")") + ". Left there: " +
                (", ".join(f"{n} {c}" for c, n in stock.items()) or "nothing") +
                ". Substitute another colour (substitute <colour>), reduce the order (reduce), or wait for more (wait)?")
-        self._ask("shortage", txt, SHORTAGE_OPTIONS, delivered=delivered, missing=dict(needed), available=stock)
+        self._ask("shortage", txt, SHORTAGE_OPTIONS, delivered=delivered, missing=dict(needed), available=stock,
+                  **({"reasons": why} if why else {}))
 
     # ---- inputs ---------------------------------------------------------------------------------------------
     def _process_inputs(self):
@@ -283,6 +334,7 @@ class TaskExecutor:
         e = self.ledger.set_order(counts, mode, self.t)
         self._write(e)
         self.restock_wait = False
+        self.unfindable, self.grasp_failures = {}, {}
         if self.state == "done":
             self.state = "running"
         q = self.question
@@ -304,10 +356,12 @@ class TaskExecutor:
         if sk is None or sk.status != "running":
             return
         b = sk.params.get("block")
-        c = self.color(b) if b is not None else None
+        c = sk.params.get("color") or (self.color(b) if b is not None else None)
         purpose = sk.params.get("purpose")
         keep = True
-        if sk.name == "pick":
+        if sk.name == "acquire":
+            keep = led.need(c) > 0
+        elif sk.name in ("pick", "pick_at"):
             keep = led.over(c) > 0 if purpose == "retrieve" else led.need(c) > 0
         elif sk.name == "place":
             if purpose == "deliver":
@@ -383,7 +437,14 @@ class TaskExecutor:
         led = self.ledger
         if self._pending_cancel is not None and r.status == "cancelled":
             self._pending_cancel["t_done"] = self.t
-        if sk.name == "pick":
+        if sk.name == "acquire":
+            self._acquire_done(sk, r)
+        elif sk.name in ("pick", "pick_at"):
+            if sk.name == "pick_at" and r.status == "failed":
+                c = sk.params["color"]
+                self.grasp_failures[c] = self.grasp_failures.get(c, 0) + 1
+                if self.grasp_failures[c] >= int(self.cfg["retry"]["pick_attempts"]):
+                    self.unfindable[c], self._unfindable_t = f"grasp failed {self.grasp_failures[c]} times", self.t
             if r.status in ("succeeded", "cancelled"):
                 self.holding = r.holding
             elif r.holding is not None and r.failure_reason != "dropped":
@@ -422,6 +483,25 @@ class TaskExecutor:
                     self.skipped.add(b)
         elif sk.name == "home":
             pass
+
+    def _acquire_done(self, sk, r):
+        c = sk.params["color"]
+        out = r.evidence.get("outcome") or {}
+        self.seen_stock = r.evidence.get("seen", self.seen_stock)
+        self.holding = r.holding
+        self.purpose = "deliver" if self.holding is not None else None
+        self.status_text = ""
+        if r.status == "succeeded":
+            self.restock_wait = False
+            if out["status"] == "found":
+                self.acquired = {"color": c, "block": out["block"], "pos": list(out["center_xyz_m"]),
+                                 "yaw": float(out.get("yaw_rad_mod_pi_over_2") or 0.0),
+                                 "yaw_offset": out.get("grasp_yaw_offset")}
+            self.emit("target_acquired", color=c, outcome=out["status"], moves=out.get("moves", 0),
+                      block=out.get("block"))
+        elif r.status == "failed":
+            self.unfindable[c], self._unfindable_t = r.failure_reason, self.t
+            self.emit("target_not_acquired", color=c, reason=r.failure_reason, moves=out.get("moves", 0))
 
     def _report_over(self):
         led = self.ledger
@@ -478,6 +558,8 @@ class TaskExecutor:
         s = v["skill"]
         out.append((f"skill: {s['name']} / {s['phase']}" + (f"  ({s['purpose']})" if s.get("purpose") else "")
                     if s else "skill: -", "dim"))
+        if self.status_text and s and s["name"] == "acquire":
+            out.append((self.status_text, "dim"))
         if v["question"]:
             q = v["question"]
             out.append((f"Q{q['id']}: {q['text']}", "ask"))

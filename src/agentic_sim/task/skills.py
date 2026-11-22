@@ -449,7 +449,13 @@ class PickAt(Pick):
         z0, ee_z0 = float(self.obs.blocks[b][2]), float(self.obs.ee[2])
         self.holding = b
         self.ctx.on_grasp(b)
-        yield from self.move([g[0], g[1], safe], off)
+        try:
+            yield from self.move([g[0], g[1], safe], off)
+        except _Fail as f:                    # dropped (or stuck): leave with the gripper open and up
+            self.ctx.on_release(b)
+            yield from self.gripper(True, cancellable=False)
+            yield from self.up_to_safe(cancellable=False)
+            raise f
         gc = self.cfg["grasp_check"]
         bz = float(self.obs.blocks[b][2])
         near = float(np.linalg.norm(self.obs.blocks[b] - self.obs.ee))
@@ -467,7 +473,13 @@ class PickAt(Pick):
             yield from self.gripper(True, cancellable=False)
             yield from self.up_to_safe(cancellable=False)
             raise _Fail("grasp_missed")
-
+        # bookkeeping (simulation truth): the block now in the gripper, which in a stack can differ from the one
+        # nearest the perceived pose
+        held_b = int(np.argmin([np.linalg.norm(p - self.obs.ee) for p in self.obs.blocks]))
+        if held_b != b:
+            self.evidence["held_block"] = held_b
+            self.holding = held_b
+            self.ctx.on_grasp(held_b)
 
     def jaw_holding(self) -> bool:
         return float(self.obs.jaw) >= float(self.cfg["grasp_check"]["jaw_hold_min_rad"])

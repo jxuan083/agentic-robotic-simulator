@@ -1,6 +1,6 @@
 import numpy as np
 
-from agentic_sim.task.declutter import free_spot, item_key, plan, push_path
+from agentic_sim.task.declutter import free_spot, in_tray_xy, item_key, mount_conflicts, plan, push_path
 
 E = 0.0295
 CFG = {"close_gap_m": 0.015, "hull_margin_m": 0.0, "support_gap_m": 0.005, "max_failures_per_item": 2,
@@ -84,3 +84,16 @@ def test_free_spot_inset_keeps_away_from_the_walls():
     reach = lambda p, yaw: True
     spot = free_spot([], TRAY, E, reach, (0.0, 0.0), inset_m=0.02)
     assert abs(spot[0] - 0.25) <= 0.10 - E / 2 - 0.02 + 1e-9 and abs(spot[1] - 0.20) <= 0.12 - E / 2 - 0.02 + 1e-9
+
+
+def test_mount_conflicts_low_points_over_other_blocks_only():
+    items = [_item("red", (0.20, 0.20)), _item("blue", (0.25, 0.20)), _item("cyan", (0.20, 0.30))]
+    low_over_blue = [[0.25, 0.20, 0.02], [0.20, 0.20, 0.02]]        # also over the target: ignored
+    assert mount_conflicts(items, 0, low_over_blue) == [1]
+    assert mount_conflicts(items, 0, [[0.25, 0.20, 0.004 + E + 0.01]]) == []   # above the block top
+    assert mount_conflicts(items, 0, [[0.20, 0.25, 0.01]]) == []                 # between blocks
+
+
+def test_in_tray_xy():
+    assert in_tray_xy((0.25, 0.20), TRAY) and in_tray_xy((0.355, 0.20), TRAY)
+    assert not in_tray_xy((0.40, 0.20), TRAY)

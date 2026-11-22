@@ -36,7 +36,7 @@ from agentic_sim.perception.exploration import score_target_confirmation
 from agentic_sim.perception.height import backproject, height_check, polygon_gap
 from agentic_sim.random_blocks import grasp_ik_checker
 from agentic_sim.scene_layout import block_in_tray, trays
-from agentic_sim.task.declutter import (free_spot, grasp_yaw_offset, item_gap, item_key, items_from,
+from agentic_sim.task.declutter import (free_spot, grasp_yaw_offset, in_tray_xy, item_gap, item_key, items_from,
                                         localize_candidate, plan, push_path)
 from agentic_sim.task.skills import Home, Motion, PickAt, Place, Push, World, wrap_quarter
 
@@ -61,15 +61,6 @@ class Driver:
         pass
 
 
-def _in_tray_xy(xy, tray, margin=0.01):
-    cx, cy = tray["center"]
-    c, s = math.cos(-tray["yaw"]), math.sin(-tray["yaw"])
-    lx = c * (xy[0] - cx) - s * (xy[1] - cy)
-    ly = s * (xy[0] - cx) + c * (xy[1] - cy)
-    hx, hy = tray["inner_half"]
-    return abs(lx) <= hx + margin and abs(ly) <= hy + margin
-
-
 def perceive(session, manager, hc, noise_m, rng, tray):
     """Items in the storage tray from one global RGB + depth capture (segments elsewhere, e.g. the gripper, dropped)."""
     rgb, depth, cam, _ = render_global(manager, session, noise_m, rng)
@@ -87,7 +78,7 @@ def perceive(session, manager, hc, noise_m, rng, tray):
         cv2.rectangle(overlay, (x0, y0), (x1, y1), col, 2)
         cv2.putText(overlay, c["status"], (x0, max(12, y0 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
     manager.latest["global"] = {"record": None, "overlay_rgb": overlay}
-    return [it for it in items if _in_tray_xy(it["xy"], tray)], rgb
+    return [it for it in items if in_tray_xy(it["xy"], tray)], rgb
 
 
 def held_color(manager, session, block_from_ee, yaw_rad, edge, out_dir: Path, shrink: float = 0.5):

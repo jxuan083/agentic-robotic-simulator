@@ -39,6 +39,8 @@ parser.add_argument("--trajectory", default=None, help="scripted EE target seque
 parser.add_argument("--task", default=None, help="task scenario (configs/tasks/*.yaml): the task executor drives the "
                     "arm; ends the run with --exit_after_script")
 parser.add_argument("--task_log", default=None, help="executor event log (JSONL)")
+parser.add_argument("--task_perception", action="store_true",
+                    help="the task executor finds blocks with the cameras (Acquire) instead of the simulation truth")
 parser.add_argument("--block_colors", default=None, help="comma-separated colour names, one per block")
 parser.add_argument("--exit_after_script", action="store_true")
 parser.add_argument("--max_time", type=float, default=0.0, help="exit after N wall seconds (0 = run until closed)")
@@ -75,7 +77,7 @@ def main():
         random_blocks=args.random_blocks, random_seed=args.random_seed,
         random_region=args.random_region, random_config=args.random_config, color_dr_config=args.color_dr_config, color_dr=args.color_dr,
         color_dr_seed=args.color_dr_seed, color_dr_log=args.color_dr_log, blocks=args.blocks, wrist_lens=args.wrist_lens, script=args.script,
-        log=args.log, result=args.result, trajectory=args.trajectory, task=args.task, task_log=args.task_log,
+        log=args.log, result=args.result, trajectory=args.trajectory, task=args.task, task_log=args.task_log, task_perception=args.task_perception,
         block_colors=args.block_colors.split(",") if args.block_colors else None,
         live_perception=args.live_perception, perception_camera=args.perception_camera,
         perception_hz=args.perception_hz,

@@ -68,6 +68,7 @@ class SessionConfig:
     perception_camera: str = "both"
     perception_hz: float = 2.0
     perception_json: str | None = None
+    task_perception: bool = False      # the executor finds blocks with the cameras (Acquire), not the sim truth
 
 
 class MjColorRandomizer:
@@ -252,8 +253,13 @@ class MjSession:
         if self.task is not None:
             self.task.close()
         colors = self.block_color_names or default_color_names(self.scene_cfg, len(self.sc.block_bodies))
+        cameras = None
+        if self.cfg.task_perception:
+            from agentic_sim.mujoco_backend.task_cameras import MjTaskCameras
+            cameras = MjTaskCameras(self, log=self.log)
         self.task = TaskRunner(self.ctrl, self.scene_cfg, self.sc.block_init_pos, colors, self.control_dt, self.log,
-                               scenario=self.cfg.task, event_log=self.cfg.task_log)
+                               scenario=self.cfg.task, event_log=self.cfg.task_log, cameras=cameras,
+                               teleop=self.cfg.teleop)
         return self.task
 
     def stop_task(self):

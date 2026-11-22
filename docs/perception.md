@@ -307,6 +307,7 @@ MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/evaluate_height_check
 | 都沒有 | 回報 `not_found` |
 
 3. 「搬」是夾起來放到托盤空位：空位離其他積木至少 25 mm、離目標至少 6 cm，往外 1.5 cm 也還抓得到，從近手臂的位置開始選。夾爪方向預設轉動最小的那組面；手指那側空間不足 18 mm 時，才改用另一組面（並檢查 IK）。夾不起來就改用推（閉合夾爪，先確認路徑的 IK），推之前先回 home。同一顆失敗 2 次就不再碰。
+   - 夾爪往外伸、傾斜時，wrist 相機座會低到積木旁邊，可能壓到手指碰不到的鄰居。每個夾爪方向都用 FK 算相機座的兩個碰撞盒，壓到其他積木的頂面（`wrist_mount_box_cv_m`、`mount_margin_m`）就不用這個方向。小轉角都會壓到、只剩超過 `mount_big_offset_rad`（1 rad）的大轉角可用時，夾爪本體會壓在目標上，所以改成先把相機座下面那顆搬開。
 4. 搬完回 home 再拍照；搬過之後，之前的定位結果作廢。如果搬的是**目標本身**（已確認、疊在別顆上、或傾斜），夾起來後先用 wrist 看夾爪裡積木的顏色。做法是把夾取時積木相對末端的位置投影到 wrist 影像，往中心縮一半避開手指（夾爪本身是黃色）。顏色對了就直接送到放置盤（`placement_beige`，離盤邊至少 2 cm），結果記為 `delivered`，不用放下來再定位、再抓一次。顏色不對（global 看錯的近似色），就照原本放回托盤的空位。
    - 有沒有夾起來，用機器人自己的感測判斷，不用模擬真值：
      - 夾爪實際角度 ≥ `grasp_check.jaw_hold_min_rad`（0.10 rad）：合上時會停在積木寬度，空夾會一路合到 −0.17 rad；
@@ -314,7 +315,7 @@ MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/evaluate_height_check
    - MuJoCo 117 次抓取的夾爪角度：有夾住 0.127–0.234 rad，空夾或滑掉 ≤ 0.113 rad。
    - 有 3 次夾住了，但手臂卡在低處沒抬起來；只看夾爪會誤判，所以也要看末端高度。
    - 10 場驗證中，這個判斷和真值 12/12 一致。
-5. 上限：搬 4 次、wrist 確認失敗 3 次。超過就回報 `gave_up`，交給 LLM。
+5. 上限：搬 6 次（原本 4 次，任務執行器接上後放寬）、wrist 確認失敗 3 次。超過就回報 `gave_up`，交給 LLM。
 
 目前的抓取、放置、推是腳本動作（`task/skills.py` 的 `PickAt`、`Place`、`Push`），代替 ACT。`PickAt` 用夾爪角度＋末端高度判斷有沒有夾起；`Place` 放下後的確認仍用模擬真值，和任務執行器相同。
 

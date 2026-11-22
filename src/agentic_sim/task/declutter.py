@@ -53,6 +53,16 @@ def item_gap(a: dict, b: dict, margin_m: float) -> float:
     return max(0.0, polygon_gap(a["hull"], b["hull"]) - 2 * margin_m)
 
 
+def in_tray_xy(xy, tray: dict, margin: float = 0.01) -> bool:
+    """xy inside the tray interior (plus margin): items seen elsewhere (the gripper, the other tray) are dropped."""
+    cx, cy = tray["center"]
+    c, s = math.cos(-tray["yaw"]), math.sin(-tray["yaw"])
+    lx = c * (xy[0] - cx) - s * (xy[1] - cy)
+    ly = s * (xy[0] - cx) + c * (xy[1] - cy)
+    hx, hy = tray["inner_half"]
+    return abs(lx) <= hx + margin and abs(ly) <= hy + margin
+
+
 def item_key(item):
     """Identity of an item across looks: its xy rounded to 1 cm (it does not move unless moved)."""
     return (round(item["xy"][0], 2), round(item["xy"][1], 2))
@@ -246,3 +256,21 @@ def grasp_yaw_offset(items: list, i: int, base_offset: float, finger_dir, limit:
     if room[opts[0]] >= need_m or max(room.values()) < need_m:
         return opts[0]
     return max(opts[1:], key=lambda o: room[o]) if opts[0] == base_offset else opts[0]
+
+
+def mount_conflicts(items: list, i: int, points, margin_m: float = 0.003) -> list:
+    """Items (other than i) that points of the wrist camera mount (mount frame, at the grasp pose) would hit: a point
+    over an item's top face (within margin_m of its hull) and not above its top. A tilted gripper reaching out lowers
+    the mount beside the block, onto blocks the fingers clear."""
+    import cv2
+    out = []
+    for j, it in enumerate(items):
+        if j == i:
+            continue
+        hull = (np.asarray(it["hull"], float) * 1000).astype(np.float32)
+        for p in np.asarray(points, float):
+            if p[2] <= it["top_z_m"] + margin_m and \
+                    cv2.pointPolygonTest(hull, (float(p[0] * 1000), float(p[1] * 1000)), True) >= -margin_m * 1000:
+                out.append(j)
+                break
+    return out

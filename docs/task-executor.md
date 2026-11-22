@@ -175,9 +175,63 @@ checks: [...]
 DISPLAY= ISAAC_CONTAINER_NAME=ars-plot docker/isaac/run.sh /isaac-sim/python.sh tools/plot_task.py
 ```
 
+## 用相機找積木（M1）
+
+`TaskExecutor(..., cameras=MjTaskCameras(session), loc_cfg=..., reachable=...)`，或在 session 設定 `task_perception=True`（`scripts/mujoco_ee_teleop.py --task_perception`）。這個模式下，執行器不讀積木的真值位置，改用 `Acquire` 技能（`src/agentic_sim/task/acquire.py`）找下一顆需要的積木：
+
+1. global RGB-D 做高度檢查，列出儲存盤內的物件，再跑整理迴圈（[perception.md](perception.md#整理迴圈先把擋住目標的積木移開)）。過程中需要時，會先把擋住目標的積木移開。
+2. 結果有兩種：
+   - `found`：wrist 確認過的位姿與夾爪方向，交給 `PickAt` 抓。之後換成 ACT，介面相同。
+   - `holding`：整理時目標已經夾在手上，wrist 也確認了顏色，就直接放進放置盤。
+3. 失敗時（`not_found`、`unreachable`、`gave_up`，或同一色 `PickAt` 失敗達 `retry.pick_attempts` 次），這個顏色記為拿不到，執行器改做其他顏色。都做完後提出缺料問題，問題裡附上相機給的原因（`reasons`），交給 LLM 或使用者決定。新的改單會清掉拿不到的記錄；回答「等補料」時，每隔 `shortage.recheck_s` 重新找一次。
+4. 執行中的 `Acquire` 隨時可取消：在拍照或觀察時立刻停止，搬動中則等目前的動作做完再停。
+
+模擬真值只剩三個用途，之後（M4）改成相機核對：
+
+- 替感知到的位姿找出對應的 block id，用於帳本；
+- 交付核對；
+- 放置格位是否被佔。
+
+`PickAt` 夾起後，改用手上那顆積木的 block id。疊放時，感知位姿最近的那顆可能是下面那顆。
+
+### 結果（MuJoCo，2026-11-22）
+
+`tools/evaluate_task_perception.py`，seed 11、12 各 15 場。
+
+- **場景：** 每場 8 顆隨機積木，再隨機疊放、斜靠、推到相貼。
+- **訂單：** 2 色各 1 顆。其中一色優先選有問題的積木（被壓住、疊放、傾斜或太擠），另一色隨機選。
+- **成功：** 執行器到 `done`，而且放置盤裡剛好是訂單的顏色（只在跑完後用真值評分）。
+
+| 項目 | 結果 |
+|---|---:|
+| 訂單完成 | **23/30** |
+| 積木送達 | 52/60 |
+| 錯色送進放置盤 | 0 |
+| 平均模擬時間 | 55 s（最長 174 s） |
+| `PickAt` 抓取 | 31/38 成功 |
+| 整理時直接夾在手上送達 | 22 次 |
+
+失敗的 7 場：
+
+- **3 場：同一色 `PickAt` 連續兩次在抬起時滑掉。** 目標很擠或剛被搬過，夾偏了，屬於抓取品質問題。
+- **1 場：搬運途中滑掉。** 夾起時積木離末端 2.5 cm，搬運中滑出，掉到托盤外，相機只看儲存盤，所以找不到。
+- **1 場：傾斜的目標推不正。** 搬了 6 次仍擋住，回報 `gave_up`。
+- **1 場：目標被搬到抓不到的位置。** 回報 `unreachable`。
+- **1 場：wrist 確認不了淺綠色。** 模擬調色盤的問題。
+
+這兩個情況會先擋下來：
+
+- **相機座壓到積木：** 夾爪往外伸、傾斜時，wrist 相機座會壓到旁邊的積木。夾之前先檢查（perception.md），會壓到就換方向或先搬開。加入前，同一批 30 場有 4 場因此抓不起來。
+- **搬動上限：** 從 4 次放寬到 6 次。
+
+```bash
+MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/evaluate_task_perception.py --episodes 15 --seed 11
+# --only 3 5：只跑指定場次；--video：錄影；--colors 1：單色訂單
+```
+
 ## 已知問題與限制
 
-- **只用模擬真值**：積木位置、交付核對都直接讀模擬器，沒有感知誤差、遮擋或辨色錯誤。
+- **只用模擬真值**（預設模式）：積木位置、交付核對都直接讀模擬器。相機模式（上一節）只剩 block id、交付核對與格位用真值；Isaac session 還沒接相機模式。
 - **抓取是腳本化的**：接近點、夾取高度與固定指間隙都是暫定值（`configs/task.yaml`），只在暫定場景調過；積木只會是正立的。
 - **Isaac 回報的關節速度**：夾住積木靜止時，PhysX 回報約 0.2 rad/s 的關節速度，所以「停下」改用相鄰幀的關節位置差判斷（兩個引擎相同）。
 - **等回答時沒有逾時**：手臂會一直舉著。模擬中沒問題；實機會下垂、馬達發熱，等實機數據再決定。
@@ -191,6 +245,9 @@ DISPLAY= ISAAC_CONTAINER_NAME=ars-plot docker/isaac/run.sh /isaac-sim/python.sh 
 | `src/agentic_sim/task/ledger.py` | 需求帳本、事件、重播 |
 | `src/agentic_sim/task/skills.py` | `pick`、`place`、`hold`、`home` 技能，取消規則，觀察與結果格式 |
 | `src/agentic_sim/task/executor.py` | 任務執行器 |
+| `src/agentic_sim/task/acquire.py` | `acquire` 技能：用相機找積木、整理、wrist 確認 |
+| `src/agentic_sim/mujoco_backend/task_cameras.py` | MuJoCo 的按需拍照（global RGB-D、wrist） |
+| `tools/evaluate_task_perception.py` | 相機模式的訂單到交付評估 |
 | `src/agentic_sim/task/scenario.py` | 場景觸發與檢查 |
 | `src/agentic_sim/task/runner.py` | 兩個 session 共用的接線 |
 | `src/agentic_sim/task/server_cmds.py` | `task_*` 伺服器指令 |

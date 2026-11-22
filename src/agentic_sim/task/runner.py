@@ -22,6 +22,7 @@ from agentic_sim.task.scenario import TaskScenario
 from agentic_sim.task.skills import Obs, World
 
 TASK_CONFIG = "configs/task.yaml"
+LOCALIZATION_CONFIG = "configs/target_localization.yaml"
 
 
 def default_color_names(scene: dict, n: int) -> list:
@@ -41,7 +42,9 @@ def quat_yaw(wxyz) -> float:
 
 class TaskRunner:
     def __init__(self, ctrl, scene_cfg: dict, block_init_pos, colors: list, dt: float, log=print,
-                 scenario: str | None = None, event_log: str | None = None, task_cfg: str = TASK_CONFIG):
+                 scenario: str | None = None, event_log: str | None = None, task_cfg: str = TASK_CONFIG,
+                 cameras=None, teleop: str = "configs/teleop.yaml", loc_cfg: str = LOCALIZATION_CONFIG):
+        """cameras: find blocks with the cameras (agentic_sim.task.acquire) instead of the simulation truth."""
         cfg = load(task_cfg)
         tr = trays(scene_cfg)
         from agentic_sim.config import v
@@ -49,11 +52,17 @@ class TaskRunner:
                       edge=float(v(scene_cfg["block"]["edge"])), colors=list(colors),
                       init_pos=[np.asarray(p, float) for p in block_init_pos], home=np.asarray(ctrl.p.home_ee, float),
                       slots=[list(map(float, s)) for s in cfg["placement_slots"]])
-        self.ex = TaskExecutor(ctrl, world, cfg, dt, log=log, event_log=event_log)
+        perception = {}
+        if cameras is not None:
+            from agentic_sim.random_blocks import grasp_ik_checker
+            perception = dict(cameras=cameras, loc_cfg=load(loc_cfg), reachable=grasp_ik_checker(scene_cfg, teleop),
+                              base_xy=v(scene_cfg["robot"]["base_pos"])[:2])
+        self.ex = TaskExecutor(ctrl, world, cfg, dt, log=log, event_log=event_log, **perception)
         self.scenario = TaskScenario(load(scenario), self.ex, log) if scenario else None
         self.scenario_path = scenario
         self.log = log
-        log(f"task executor ready: blocks {colors}" + (f", scenario {scenario}" if scenario else ""))
+        log(f"task executor ready: blocks {colors}" + (f", scenario {scenario}" if scenario else "") +
+            (", blocks found with the cameras" if cameras is not None else ""))
 
     def step(self, obs: Obs):
         if self.scenario is not None:
