@@ -14,6 +14,10 @@ python3 -S tools/real_teleop.py fake --arms left right --output outputs/fake-dua
 
 開啟 episode 裡的 `replay.html`。拖曳控制幀可看兩路影像、配對時間差和每個關節的命令與實測曲線。時間軸以同一主機的單調時鐘配對最近的相機幀。移到另一台電腦時帶上整個 episode 目錄，資料內路徑都相對於該目錄。
 
+讀回會各自核對每路相機的影格編號及 RGB／深度檔名。重複引用、檔名錯配或影像損毀會讓 `read` 回傳失敗，報告會指出相機與索引。檔名錯配會附上預期及實際檔名。
+
+報告的 `control_timing` 包含設定控制頻率、預期週期，以及最大間隔前後的控制幀與時間。控制間隔大於 1.5 個設定週期時，會在 `warnings` 列出該次實際間隔，仍可產生離線檢視頁。時間重複或倒退會使讀回失敗。請搭配錄製紀錄判讀時間缺口的成因。
+
 單臂範例在第 0、1 幀送出肩部轉向 2°、4° 的策略命令。第 2 幀切換人工，清空剩餘的 80°、85° 命令，拒絕舊控制權收到的延遲策略段，首筆人工指令取 follower 實測的 2.5°。下一幀以接管時的 leader 位置為基準開始追蹤位移。`fake_device_trace.json` 記錄真正打到假裝置的命令和開啟／關閉記錄。所有範例影像是合成資料，manifest 標記 `source: fake`。
 
 ## 現場採集
@@ -27,6 +31,7 @@ conda activate lerobot
 python tools/real_teleop.py check --config outputs/single.local.yaml
 python tools/real_teleop.py record --config outputs/single.local.yaml \
   --layout lab-right --output outputs/lab-right-01 --allow-motion
+python tools/real_teleop.py read outputs/lab-right-01 --html > outputs/lab-right-01/readback.json
 ```
 
 `check` 只做檔案、依賴與裝置路徑檢查。實機採集需要現場操作員、互動終端和明確的 `--allow-motion`。將 follower 放在可卸力的支撐姿勢，保持淨空，確認 leader 扭力已關且 follower 在位置模式。採集器核對已載入的校正和馬達讀回，以 follower 的當前姿勢起步。第一幀對齊後，follower 跟隨 leader 位移。各路相機獨立寫檔，`control_hz` 設定迴圈目標。夾爪閉合指令最多比最新回讀少 3 個百分點。此值沿用 11/20 過載後的重錄設定。回報 `RECORDING` 後開始操作，結束前支撐 follower 再按 `q`。退出會逐軸讀回扭力。中斷會保留已寫資料並標記該 episode。

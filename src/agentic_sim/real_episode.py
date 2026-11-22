@@ -4,7 +4,9 @@ Uses only the standard library. Device adapters encode native-size RGB and
 optional native depth before writing to the episode.
 """
 
+from itertools import pairwise
 import json
+from math import isfinite
 from pathlib import Path
 import re
 from struct import unpack
@@ -17,6 +19,7 @@ from agentic_sim.real_control import JOINTS, UNITS, pose
 SCHEMA = "trc.so101.real_teleop.v1"
 SOURCES = {"real", "converted", "fake"}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+CONTROL_GAP_PERIODS = 1.5
 
 
 def stream_name(name):
@@ -43,6 +46,9 @@ def _read_jsonl(path):
 def _metadata(manifest):
     arms = manifest["arms"]
     cameras = manifest["cameras"]
+    hz = manifest["control_hz"]
+    if type(hz) not in (int, float) or not isfinite(hz) or hz <= 0:
+        raise ValueError("control_hz must be positive and finite")
     if (manifest["source"] not in SOURCES or not isinstance(arms, dict) or not isinstance(cameras, dict)
             or not 1 <= len(arms) <= 2 or len(cameras) < 2):
         raise ValueError("episode needs a valid source, one or two arms, and at least two cameras")
@@ -62,6 +68,11 @@ def _calibration(calib):
     if not isinstance(calib, dict) or not all(isinstance(calib.get(key), str) and calib[key].strip()
                                                for key in ("id", "version")):
         raise ValueError("calibration id and version must be supplied")
+
+
+def _image_name(frame, *, depth=False):
+    suffix = "_depth" if depth else ""
+    return f"{frame:06d}{suffix}.png"
 
 
 class EpisodeWriter:
@@ -97,12 +108,12 @@ class EpisodeWriter:
 
     def add_image(self, camera, png, stamp, *, depth=None, device_timing=None):
         index = self.camera_counts[camera]
-        name = f"{index:06d}.png"
+        name = _image_name(index)
         folder = self.root / camera
         (folder / name).write_bytes(png)
         row = {"frame": index, "capture_ns": stamp, "rgb": name}
         if depth is not None:
-            depth_name = f"{index:06d}_depth.png"
+            depth_name = _image_name(index, depth=True)
             (folder / depth_name).write_bytes(depth)
             row["depth"] = depth_name
         if device_timing is not None:
@@ -162,6 +173,35 @@ def _observed_hz(count, first, last):
     return None
 
 
+def _control_timing(rows, configured_hz):
+    expected_period_ns = 1e9 / configured_hz
+    gap_threshold_ns = CONTROL_GAP_PERIODS * expected_period_ns
+    maximum = None
+    warnings = []
+    for before_frame, (before, after) in enumerate(pairwise(rows)):
+        before_ns = before.get("timestamp_ns")
+        after_ns = after.get("timestamp_ns")
+        if not _timestamp(before_ns) or not _timestamp(after_ns, minimum=before_ns + 1):
+            continue
+        after_frame = before_frame + 1
+        interval = {
+            "before_frame": before_frame, "before_ns": before_ns,
+            "after_frame": after_frame, "after_ns": after_ns, "interval_ns": after_ns - before_ns,
+        }
+        if maximum is None or interval["interval_ns"] > maximum["interval_ns"]:
+            maximum = interval
+        if interval["interval_ns"] > gap_threshold_ns:
+            warnings.append({
+                "stream": "control", "frame": after_frame,
+                "reason": f"control interval exceeds {CONTROL_GAP_PERIODS:g} configured periods",
+                **interval,
+            })
+    return {
+        "configured_hz": configured_hz, "expected_period_ns": expected_period_ns,
+        "gap_threshold_ns": gap_threshold_ns, "max_interval": maximum,
+    }, warnings
+
+
 class Episode:
     def __init__(self, root):
         self.root = Path(root)
@@ -185,8 +225,8 @@ class Episode:
         issues = []
         takeovers = []
 
-        def issue(stream, frame, reason):
-            issues.append({"stream": stream, "frame": frame, "reason": reason})
+        def issue(stream, frame, reason, **details):
+            issues.append({"stream": stream, "frame": frame, "reason": reason, **details})
 
         if m.get("status") != "complete":
             issue("control", None, f"manifest status is {m.get('status')}")
@@ -234,18 +274,21 @@ class Episode:
         cameras = {}
         for name, frames in self.frames.items():
             camera = m["cameras"][name]
+            folder = self.root / name
+            size = camera["width"], camera["height"]
             if name in self.index_errors:
                 issue(name, None, f"camera index unreadable: {self.index_errors[name]}")
             if not frames or m.get("camera_frames", {}).get(name) != len(frames):
                 issue(name, None, "empty camera index or count mismatch")
             timestamps = {}
+            references = {}
             previous = -1
             previous_sequence = None
             for index, row in enumerate(frames):
                 try:
                     frame = row["frame"]
                     stamp = row["capture_ns"]
-                    if frame != index:
+                    if not _timestamp(frame) or frame != index:
                         issue(name, index, f"camera frame gap: expected {index}, found {frame}")
                     if not _timestamp(stamp, minimum=previous + 1):
                         raise ValueError("camera timestamp is missing or non-increasing")
@@ -257,11 +300,23 @@ class Episode:
                         issue(name, index, "camera timestamp gap exceeds 1.5 nominal frame periods")
                     previous, previous_sequence = stamp, sequence
                     timestamps[index] = stamp
-                    folder = self.root / name
-                    size = camera["width"], camera["height"]
-                    _check_png(folder, row["rgb"], size)
-                    if camera.get("depth") or "depth" in row:
-                        _check_png(folder, row["depth"], size)
+                    image_kinds = ("rgb", "depth") if camera.get("depth") or "depth" in row else ("rgb",)
+                    for kind in image_kinds:
+                        expected = _image_name(frame if _timestamp(frame) else index, depth=kind == "depth")
+                        actual = row.get(kind)
+                        if actual != expected:
+                            issue(name, index, f"{kind.upper()} filename mismatch: expected {expected}, found {actual!r}",
+                                  image=kind, expected=expected, actual=actual)
+                        if isinstance(actual, str):
+                            first_reference = references.setdefault(actual, (index, kind))
+                            if first_reference != (index, kind):
+                                first_index, first_kind = first_reference
+                                issue(name, index, f"duplicate image reference {actual!r}, first used by "
+                                      f"{first_kind.upper()} at index {first_index}")
+                        try:
+                            _check_png(folder, actual, size)
+                        except (OSError, ValueError) as error:
+                            issue(name, index, f"{kind.upper()} {actual!r}: {error}")
                 except (KeyError, OSError, TypeError, ValueError) as error:
                     issue(name, index, str(error))
             if timestamps and self.rows:
@@ -279,7 +334,9 @@ class Episode:
             }
         first = self.rows[0].get("timestamp_ns") if self.rows else None
         last = self.rows[-1].get("timestamp_ns") if self.rows else None
+        control_timing, warnings = _control_timing(self.rows, m["control_hz"])
         return {"ok": not issues, "episode_id": m["episode_id"], "source": m["source"],
                 "arms": list(m["arms"]), "control_frames": len(self.rows),
                 "first_ns": first, "last_ns": last, "observed_control_hz": _observed_hz(len(self.rows), first, last),
+                "control_timing": control_timing, "warnings": warnings,
                 "takeovers": takeovers, "cameras": cameras, "issues": issues}

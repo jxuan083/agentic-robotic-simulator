@@ -4,19 +4,25 @@ from contextlib import contextmanager
 import json
 from pathlib import Path
 import shutil
+from struct import pack
 import subprocess
 import sys
 from types import SimpleNamespace
+from zlib import compress
 
 import pytest
 
 from agentic_sim.real_control import JOINTS, ControlRouter, open_pairs
-from agentic_sim.real_episode import Episode
-from agentic_sim.real_fake import FakeRig, fake_pose, record_fake
+from agentic_sim.real_episode import Episode, EpisodeWriter, PNG_SIGNATURE
+from agentic_sim.real_fake import FakeRig, _chunk, fake_pose, record_fake
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TELEOP = ROOT / "tools" / "real_teleop.py"
+
+
+def _write_rows(path, rows):
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
 
 
 @pytest.mark.parametrize("arms", [("right",), ("left", "right")])
@@ -27,6 +33,10 @@ def test_named_devices_receive_only_their_commands(tmp_path, arms):
     report = episode.validate()
     assert report["ok"] and report["arms"] == list(arms)
     assert report["control_frames"] == 12
+    assert report["warnings"] == []
+    assert report["control_timing"]["configured_hz"] == 20
+    assert report["control_timing"]["expected_period_ns"] == 50_000_000
+    assert report["control_timing"]["max_interval"]["interval_ns"] == 50_000_000
     assert trace["opened"] == [[role, name] for name in arms for role in ("leader", "follower")]
     assert trace["closed"] == list(reversed(trace["opened"]))
     assert trace["commands"] == [
@@ -110,6 +120,108 @@ def test_reader_reports_missing_camera_index_and_frame_number(tmp_path):
     assert not report["ok"]
     assert any(issue["stream"] == "wrist" and "index unreadable" in issue["reason"] for issue in report["issues"])
     assert any(issue["stream"] == "global" and issue["frame"] == 4 for issue in report["issues"])
+
+
+@pytest.mark.parametrize("swap", [False, True])
+def test_read_cli_rejects_wrong_rgb_filename_even_when_png_is_valid(tmp_path, swap):
+    target = tmp_path / "sample"
+    record_fake(target, ["right"], {})
+    rows = Episode(target).frames["wrist"]
+    if swap:
+        rows[1]["rgb"] = "000002.png"
+    rows[2]["rgb"] = "000001.png"
+    _write_rows(target / "wrist" / "frames.jsonl", rows)
+
+    result = subprocess.run([sys.executable, "-S", str(TELEOP), "read", str(target)],
+                            capture_output=True, text=True)
+    assert result.returncode == 1
+    report = json.loads(result.stdout)
+    assert not report["ok"]
+    mismatches = [issue for issue in report["issues"] if issue.get("image") == "rgb"]
+    assert [(issue["stream"], issue["frame"], issue["expected"], issue["actual"]) for issue in mismatches] == (
+        ([("wrist", 1, "000001.png", "000002.png")] if swap else [])
+        + [("wrist", 2, "000002.png", "000001.png")]
+    )
+    duplicates = [issue for issue in report["issues"] if "duplicate image reference" in issue["reason"]]
+    assert [issue["frame"] for issue in duplicates] == ([] if swap else [2])
+
+
+def test_reader_rejects_wrong_depth_filename_with_correct_rgb(tmp_path):
+    record_fake(tmp_path / "rgb", ["right"], {})
+    original = Episode(tmp_path / "rgb")
+    manifest = original.manifest
+    cameras = manifest["cameras"]
+    cameras["wrist"]["depth"] = True
+    width, height = cameras["wrist"]["width"], cameras["wrist"]["height"]
+    depth_header = _chunk(b"IHDR", pack(">IIBBBBB", width, height, 16, 0, 0, 0, 0))
+    writer = EpisodeWriter(tmp_path / "rgbd", source="fake", arms=manifest["arms"],
+                           cameras=cameras, provenance={}, hz=20)
+    for row in original.rows:
+        writer.add_control(row)
+    for camera, frames in original.frames.items():
+        for frame in frames:
+            pixels = (b"\x00" + pack(">H", frame["frame"] + 1) * width) * height
+            depth = PNG_SIGNATURE + depth_header + _chunk(b"IDAT", compress(pixels)) + _chunk(b"IEND", b"")
+            rgb = (original.root / camera / frame["rgb"]).read_bytes()
+            writer.add_image(camera, rgb, frame["capture_ns"], depth=depth if camera == "wrist" else None)
+    writer.close()
+    episode = Episode(writer.root)
+    assert episode.validate()["ok"]
+    rows = episode.frames["wrist"]
+    rows[2]["depth"] = "000001_depth.png"
+    _write_rows(episode.root / "wrist" / "frames.jsonl", rows)
+
+    report = Episode(episode.root).validate()
+    assert not report["ok"]
+    mismatch, = [issue for issue in report["issues"] if issue.get("image")]
+    assert (mismatch["stream"], mismatch["frame"], mismatch["image"]) == ("wrist", 2, "depth")
+    assert (mismatch["expected"], mismatch["actual"]) == ("000002_depth.png", "000001_depth.png")
+
+
+def test_read_cli_warns_about_an_omitted_and_renumbered_control_row(tmp_path):
+    target = tmp_path / "sample"
+    record_fake(target, ["right"], {})
+    episode = Episode(target)
+    rows = episode.rows
+    del rows[5]
+    for index, row in enumerate(rows):
+        row["frame"] = index
+    _write_rows(target / "control.jsonl", rows)
+    episode.manifest["control_frames"] = len(rows)
+    (target / "manifest.json").write_text(json.dumps(episode.manifest))
+
+    result = subprocess.run([sys.executable, "-S", str(TELEOP), "read", str(target), "--html"],
+                            capture_output=True, text=True, check=True)
+    report = json.loads(result.stdout)
+    interval = {"before_frame": 4, "before_ns": 203_000_000, "after_frame": 5, "after_ns": 303_000_000,
+                "interval_ns": 100_000_000}
+    assert report["ok"] and not report["issues"]
+    assert report["control_timing"] == {
+        "configured_hz": 20, "expected_period_ns": 50_000_000,
+        "gap_threshold_ns": 75_000_000, "max_interval": interval,
+    }
+    warning, = report["warnings"]
+    assert warning["stream"] == "control" and warning["frame"] == 5
+    assert {key: warning[key] for key in interval} == interval
+    assert (target / "replay.html").is_file()
+
+
+@pytest.mark.parametrize("adjustment_ns", [2_000_000, -50_000_000, -51_000_000])
+def test_reader_handles_jitter_and_still_rejects_non_increasing_control_time(tmp_path, adjustment_ns):
+    target = tmp_path / "sample"
+    record_fake(target, ["right"], {})
+    rows = Episode(target).rows
+    rows[5]["timestamp_ns"] += adjustment_ns
+    _write_rows(target / "control.jsonl", rows)
+
+    report = Episode(target).validate()
+    if adjustment_ns > 0:
+        assert report["ok"] and not report["warnings"]
+        assert report["control_timing"]["max_interval"]["interval_ns"] == 52_000_000
+    else:
+        assert not report["ok"]
+        assert any(issue["frame"] == 5 and "non-increasing timestamp" in issue["reason"]
+                   for issue in report["issues"])
 
 
 def test_explicit_physical_replay_rejects_fake_without_drivers(tmp_path):
