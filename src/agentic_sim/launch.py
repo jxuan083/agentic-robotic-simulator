@@ -83,6 +83,7 @@ class RunOptions:
     wrist_lens: str | None = None   # wrist camera image: "real" (raw-looking, distorted) | "pinhole"; None = scene default
     video: bool = True              # acceptance only: record the app window
     screen_video_dir: str | None = None   # teleop: right-column screen video control directory (agentic_sim.screen_video)
+    task: str | None = None         # server: task scenario run in the loaded scene (finals: tools/finals.py chat)
 
     def merged(self, forced: dict) -> "RunOptions":
         """Options with a scenario's forced options applied."""

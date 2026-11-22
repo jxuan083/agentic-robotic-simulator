@@ -60,7 +60,7 @@
 |---|---|
 | `sort_basic` | 三色單層抓放，固定托盤，改變積木位置 |
 | `sort_distractors` | 少量非目標色與過量同色，先每輪 6–12 顆 |
-| `sort_shortage` | 待命時移料，重新觀察後修改剩餘任務；流程見 [agent.md](agent.md#缺料流程) |
+| `sort_shortage` | 待命時移料，重新觀察後修改剩餘任務；流程見 [agent.md](agent.md#缺料流程)，MuJoCo 整合見 [finals-shortage.md](finals-shortage.md) |
 
 辨色測例：粉盤上的紅積木、米色盤上的黃積木。整盤可放上桌不代表每個角落都可抓到，可達範圍需另測。
 

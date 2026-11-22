@@ -273,9 +273,13 @@ class Skill:
 
 
 class Pick(Skill):
-    """Pick block `block` from wherever it lies: approach at the safe height, descend, close, lift."""
+    """Pick block `block` from wherever it lies: approach at the safe height, descend, close, lift.
+
+    With a camera (executor.camera) and an observed `target` pose ({xy, yaw}) the approach goes over the observed
+    pose and the wrist aligns the grasp before the descent (agentic_sim.task.camera.align_target); otherwise the
+    block's simulated pose is used. The lift check reads the simulated block (sim_truth) in both cases."""
     name = "pick"
-    cancel_phases = ("rise", "approach", "descend", "close", "lift")
+    cancel_phases = ("rise", "approach", "align", "descend", "close", "lift")
 
     def body(self):
         b = self.params["block"]
@@ -283,18 +287,35 @@ class Pick(Skill):
         safe = float(m["safe_z"])
         self.set_phase("rise")
         yield from self.up_to_safe(cancellable=True)
-        bp, byaw = self.obs.blocks[b].copy(), float(self.obs.block_yaw[b])
+        target = self.params.get("target")
+        camera = target is not None and getattr(self.ctx, "camera", None) is not None
+        if camera:
+            floor = self.world.trays["storage"]["floor_top"]
+            bp = np.array([target["xy"][0], target["xy"][1], floor + self.world.edge / 2])
+            byaw = float(target["yaw"])
+        else:
+            bp, byaw = self.obs.blocks[b].copy(), float(self.obs.block_yaw[b])
         off = self.yaw_offset_for(bp, byaw)
         g = self.grasp_xy(bp, off)
         self.evidence["block_start"] = [round(float(x), 5) for x in bp]
+        self.evidence["target_source"] = target.get("source") if camera else "sim_truth"
         self.set_phase("approach")
         yield from self.move([g[0], g[1], safe], off)
+        if camera:
+            from agentic_sim.task.camera import align_target
+            self.set_phase("align")
+            pose = yield from align_target(self, target, self.params.get("color"))
+            bp[:2] = pose["xy"]
+            off = self.yaw_offset_for(bp, float(pose["yaw"]))
+            g = self.grasp_xy(bp, off)
+            self.evidence["grasp_pose"] = {"xy": [round(float(x), 5) for x in bp[:2]],
+                                           "yaw_deg_mod_90": round(math.degrees(float(pose["yaw"])) % 90, 2)}
         self.set_phase("descend")
         yield from self.move([g[0], g[1], bp[2] + float(m["grasp_dz"])], off)
         self.set_phase("close")
         yield from self.gripper(False)
         self.set_phase("lift")
-        z0 = float(bp[2])
+        z0 = float(self.obs.blocks[b][2]) if camera else float(bp[2])
         self.holding = b          # from here a cancel keeps the block in the gripper
         self.ctx.on_grasp(b)
         yield from self.move([g[0], g[1], safe], off)

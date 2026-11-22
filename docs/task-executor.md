@@ -175,6 +175,19 @@ checks: [...]
 DISPLAY= ISAAC_CONTAINER_NAME=ars-plot docker/isaac/run.sh /isaac-sim/python.sh tools/plot_task.py
 ```
 
+## 決賽整單（待命、觀測快照）
+
+決賽缺料情境（[finals-shortage.md](finals-shortage.md)）加了三項，預設關閉，原有場景的行為不變：
+
+- **待命**：`ex.standby()` 讓空手的手臂回待命點（home）。停穩、夾爪張開後，送出 `standby_reached` 事件，等 `standby.observe_after_s` 之後重新觀測來源盤，才再選料。
+- **觀測快照**：`observation.snapshot`。執行器只從最後一次觀測選料，不讀即時場景。觀測的時機有三個：
+  - 每次選料前；
+  - 待命後；
+  - 等補料時，每 `shortage.recheck_s` 一次。
+
+  `executor.camera` 設定時，觀測改由 `Observe` 技能用相機完成，抓取也改由相機定位（`agentic_sim.task.camera`）。看不清時送出 `observation_unclear` 事件，不提缺料問題。
+- **缺料選項**：`shortage.options` 可以限制選項，例如只有改色與等待。問題另外帶 `substitute_candidates`（來源盤內不在訂單裡的顏色）與 `delivery_sequence`（交付順序），聊天就能說「一藍一紅已放好…」。
+
 ## 已知問題與限制
 
 - **只用模擬真值**：積木位置、交付核對都直接讀模擬器，沒有感知誤差、遮擋或辨色錯誤。

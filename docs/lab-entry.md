@@ -9,7 +9,11 @@ uv run tools/lab.py                                       # MuJoCo、Q4 模型�
 uv run tools/lab.py --backend isaac --model bf16 --block-colors red,blue,blue,yellow
 uv run tools/lab.py --wrist-lens pinhole                  # 腕部畫面用理想針孔
 uv run tools/lab.py --no-chat                             # 只開模擬器
+uv run tools/lab.py --task <場景檔> --chat-transcript <檔案>   # 在載入的場景執行任務場景；聊天逐行記錄
 ```
+
+- `--task` 讓常駐伺服器在場景中執行任務場景。決賽整單用 `tools/finals.py chat` 產生場景檔再啟動入口，見 [finals-shortage.md](finals-shortage.md)。訂單完成時，事件紀錄與結果寫在場景檔旁邊。
+- 模擬伺服器連續 5 次探測都沒回應才結束整套環境；單一較慢的影格（例如相機第一次渲染）不算。
 
 `tools/lab.py` 依序啟動下列元件，每一步都等前一步回應才繼續；任一步失敗就停下並說明原因：
 
