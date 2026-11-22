@@ -82,7 +82,8 @@ class MjLivePerception:
             dist = np.zeros(5)
         return CameraGeometry(spec["width"], spec["height"], k, dist, pose, key)
 
-    def _capture(self, key, data, now):
+    def capture_rgb(self, key, data):
+        """Render an RGB frame and return its synchronized camera geometry."""
         import mujoco
         spec = self.specs[key]
         lens = spec.get("lens") if key == "wrist" else None
@@ -105,7 +106,10 @@ class MjLivePerception:
                 self.maps[key] = maps
             rgb = lens.apply(rgb, maps)
         rgb = np.ascontiguousarray(rgb, dtype=np.uint8)
-        geometry = self._geometry(key, data)
+        return rgb, self._geometry(key, data)
+
+    def _capture(self, key, data, now):
+        rgb, geometry = self.capture_rgb(key, data)
         number = self.frame_numbers[key]
         self.frame_numbers[key] += 1
         return self.pool.submit(self.work[key], rgb, geometry, number, now), rgb

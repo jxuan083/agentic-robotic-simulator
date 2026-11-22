@@ -47,7 +47,7 @@ class LiveEstimator:
         self.edge = edge_m
         self.floor = floor_z_m
 
-    def _fits(self, rgb, camera, captured_at):
+    def fit_detections(self, rgb, camera, captured_at):
         """(detection, geometry) per candidate. Wrist: a silhouette that does not fit is replaced by its parts in the
         next finer segmentation that do fit (touching blocks of different colours), level by level; a block whose
         shaded side falls in another band keeps its whole silhouette, which fits."""
@@ -101,7 +101,7 @@ class LiveEstimator:
     def predict(self, rgb, camera, frame_number, captured_at):
         from .vertices import annotate_vertices
         records, fits = [], []
-        for i, (d, geometry) in enumerate(self._fits(rgb, camera, captured_at)):
+        for i, (d, geometry) in enumerate(self.fit_detections(rgb, camera, captured_at)):
             fits.append((i, geometry))
             records.append({'detection_id': i, 'color': d.color, 'bbox_xyxy': list(d.bbox_xyxy),
                             'area_px': int(d.mask.sum()), 'geometry': geometry})

@@ -1,0 +1,18 @@
+base: configs/benchmarks/finals_alignment.yaml
+cases:
+  - {name: pink_regression, start: 73000, count: 42}
+  - {name: pink_new, start: 84000, count: 48}
+  - name: pink_small_clearance
+    start: 85000
+    count: 48
+    layout: {boundary_margin_m: 0.005, gap_m: 0.007}
+  - name: pink_larger_coarse_error
+    start: 86000
+    count: 48
+    bench: {coarse_xy_error_mm: 22.0, coarse_yaw_error_deg: 30.0}
+  - name: beige_new
+    start: 87000
+    count: 48
+    bench: {source_region: placement}
+    layout: {workspace_xy: [[0.12, 0.41], [-0.31, -0.005]]}
+
