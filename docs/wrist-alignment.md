@@ -59,3 +59,27 @@ python tools/benchmark_verified_overhead.py --out outputs/verified_overhead_run
 選定後保存目標與同色鄰塊的估計位置。新的腕部估計須在配對距離內，且至少比其他同色候選更接近鎖定目標 3 mm。一般換視角仍無法辨識時，利用 10 cm 內的已知鄰塊估計投影，在可達姿態中最多再取兩個視角。排序依序是：目標與同色鄰塊的投影輪廓是否分開（間隙 ≥8 px，同色相接會被分割成同一個輪廓）、與任一鄰塊的重疊、同色鄰塊是否也完整在畫面內、目標離畫面邊緣的距離。確認後才回到目標正上方，辨不清就停止。
 
 要重播相鄰紅塊專測，執行 `python tools/benchmark_verified_overhead.py --suite configs/benchmarks/adjacent_red_holdout.yaml --out outputs/adjacent_red_repro`。這 24 個場景另從新種子依序挑出，兩紅塊中心距離 ≤65 mm。以每次實際穩定離盤的物件 ID 核對選擇，若提起遠顆或連同鄰塊一起提起，另記錯抓。加入全域候選帶入與同色輪廓分離排序後，以原擺位重跑：相鄰紅塊由 19/24 提高到 21/24（恢復 90012、90015），主測仍為首次 233/234、含一次重抓 234/234，零退步、零錯抓。米盤 91006、91010、91026 的兩紅在全域已合併，掃描視角也未拍到分開的近顆，仍在下降前停止。
+
+### Isaac Sim 重播：換視角後回到近顆正上方
+
+`tools/isaac_nearest_hover.py` 在 Isaac Sim 內原樣執行同一個 `trial()`。四顆的位置、yaw、顏色和注入的粗定位偏差都依種子取自 [nearest-color-5060.jsonl](nearest-color-5060.jsonl)。控制只讀現有全域／腕部相機畫面（使用同一幀的相機矩陣）和實測關節；方塊真值只用於評分與疊圖。在 repo 根目錄用 Isaac 容器執行，有視窗時開 GUI，加 `--headless` 則不開。每次指定新的輸出目錄。
+
+~~~bash
+docker/isaac/run.sh /isaac-sim/python.sh tools/isaac_nearest_hover.py --seeds 85000 --lift_comp_mm 6 --out outputs/isaac_nearest_85000
+docker/isaac/run.sh /isaac-sim/python.sh tools/isaac_nearest_hover.py --seeds 90010 --lift_comp_mm 6 --out outputs/isaac_nearest_90010
+docker/isaac/run.sh /isaac-sim/python.sh tools/isaac_nearest_hover.py --seeds 91053 --lift_comp_mm 6 --out outputs/isaac_nearest_91053
+~~~
+
+三場（85000 粉盤近顆 ID 0、90010 粉盤 ID 1、91053 米盤 ID 0）都會換視角後重新確認近顆。原增益下，Isaac 懸停穩定在 73～74 mm，低於 80 mm 目標 6～7 mm（肩抬、肘關節的重力穩態誤差，保持 1 秒不變），下降前判定不放行。
+
+`--lift_comp_mm 6` 是 Isaac 端的選用實驗，不改 `trial()`。只有在原判定未通過、已停穩、目標已確認且 XY ≤3 mm、只差高度偏低時，才補一次：補償量取「80 mm − 實測高度」與 6 mm 的較小值，從實測關節解 IK，無解就停。下降門檻仍以 80 mm 為準：實測高度 77～83 mm、EE 對影像估計 XY ≤3 mm、最大關節速率 ≤0.15 rad/s，三項須同一幀成立。
+
+| 種子 | 補償前 | 補償量 | 補償後 | 真值 EE 對近顆 XY | 提起 ID |
+|---|---:|---:|---:|---:|---|
+| 85000 | 74.01 mm | 5.99 mm | 80.02 mm | 2.59 mm | 0（近顆） |
+| 90010 | 73.04 mm | 6.00 mm | 79.06 mm | 2.54 mm | 1（近顆） |
+| 91053 | 73.28 mm | 6.00 mm | 79.30 mm | 2.67 mm | 0（近顆） |
+
+三場的腕部俯仰命令都在模型上限 95°，補償由肩抬與肘關節完成。這是模擬結果；是否把高度補償納入抓取流程，待同姿態的真機量測對照後再決定。
+
+輸出目錄的 `summary.json` 逐場列出狀態、是否換視角、補償前後高度、是否下降及提起的 ID。`<seed>/trial.json` 是完整試驗紀錄；`hovers[-1].compensation` 含補償前後的關節命令與回讀，以及到關節限位的餘量。`<seed>/frames.json` 和各腕圖 PNG 記錄每張腕圖的模擬時間、實測關節、EE 位置及影像估計。`--hold_s 1.0`（不可與補償同用）會改為記錄懸停 1 秒內每一控制步的高度曲線。
