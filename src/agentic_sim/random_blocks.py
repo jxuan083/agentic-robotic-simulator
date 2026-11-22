@@ -1,6 +1,6 @@
 """Seeded, bounded block spawning shared by both engines (mount frame, metres).
 
-A conservative footprint circle contains each upright cube at every yaw. Sampling
+Sampling uses bounding circles by default or rotated footprints when configured. It
 checks support boundaries, tray obstacles, base clearance, pair separation and,
 when enabled by the session adapter, grasp/approach IK. It is not path planning.
 """
@@ -25,7 +25,23 @@ def _local(xy, center, yaw):
     return c * dx + s * dy, -s * dx + c * dy
 
 
-def legal_position(scene, xy, placed, region, settings):
+def _footprint_half_extent(edge, yaw):
+    return edge / 2 * (abs(math.cos(yaw)) + abs(math.sin(yaw)))
+
+
+def _separated_cubes(xy, yaw, other, other_yaw, edge, gap):
+    # A separating axis with this much interval clearance gives at least that
+    # much Euclidean clearance for the two rotated footprints.
+    dx, dy = xy[0] - other[0], xy[1] - other[1]
+    for angle in (yaw, yaw + math.pi / 2, other_yaw, other_yaw + math.pi / 2):
+        projected = abs(dx * math.cos(angle) + dy * math.sin(angle))
+        widths = _footprint_half_extent(edge, angle - yaw) + _footprint_half_extent(edge, angle - other_yaw)
+        if projected >= widths + gap:
+            return True
+    return False
+
+
+def legal_position(scene, xy, placed, region, settings, *, yaw_deg=None, placed_yaws=None):
     """Conservative support / obstacle checks; every cube corner fits the support."""
     edge = float(v(scene["block"]["edge"]))
     radius = edge / math.sqrt(2)
@@ -43,12 +59,18 @@ def legal_position(scene, xy, placed, region, settings):
     bounds = settings["workspace_xy"]
     if not all(bounds[k][0] + radius <= xy[k] <= bounds[k][1] - radius for k in (0, 1)):
         return False
-    if any(math.dist(xy, other) < 2 * radius + gap for other in placed):
+    yaw = None if yaw_deg is None else math.radians(yaw_deg)
+    if yaw is None:
+        if any(math.dist(xy, other) < 2 * radius + gap for other in placed):
+            return False
+    elif any(not _separated_cubes(xy, yaw, other, math.radians(angle), edge, gap)
+             for other, angle in zip(placed, placed_yaws, strict=True)):
         return False
     if region == "storage":
         info = tray_parts(scene["trays"]["storage_pink"])[1]
         local = _local(xy, info["center"], info["yaw"])
-        if any(abs(local[k]) + radius + margin > info["inner_half"][k] for k in (0, 1)):
+        half = radius if yaw is None else _footprint_half_extent(edge, yaw - info["yaw"])
+        if any(abs(local[k]) + half + margin > info["inner_half"][k] for k in (0, 1)):
             return False
         # If trays overlap, do not assume their floors/walls form a valid support.
         obstacles = ("placement_beige",)
@@ -99,8 +121,16 @@ def sample_scene(scene, settings, *, seed, episode=0, region="storage", reachabl
     if not isinstance(allowed, list) or any(c not in names for c in allowed):
         raise ValueError("colors must be a list of palette names")
     rng = random.Random(f"{seed}:{episode}")
-    count = rng.randint(lo, hi)
-    colors = [rng.choice(allowed) for _ in range(count)]
+    fixed = settings.get("fixed_colors")
+    if fixed is None:
+        count = rng.randint(lo, hi)
+        colors = [rng.choice(allowed) for _ in range(count)]
+    else:
+        if not isinstance(fixed, list) or not lo <= len(fixed) <= hi or any(c not in names for c in fixed):
+            raise ValueError("fixed_colors must name one palette color per block and fit count_range")
+        colors = list(fixed)
+        count = len(colors)
+    rotated = settings.get("yaw_aware_footprints", False)
     edge = float(v(scene["block"]["edge"]))
     floor = tray_parts(scene["trays"]["storage_pink"])[1]["floor_top"] if region == "storage" else 0.0
     for _ in range(restarts):
@@ -114,10 +144,12 @@ def sample_scene(scene, settings, *, seed, episode=0, region="storage", reachabl
                 xy = (info["center"][0] + c * lx - s * ly, info["center"][1] + s * lx + c * ly)
             else:
                 xy = tuple(rng.uniform(*b) for b in bounds)
-            if not legal_position(scene, xy, positions, region, settings):
+            yaw = rng.uniform(float(yaw_range[0]), float(yaw_range[1])) if rotated else None
+            if not legal_position(scene, xy, positions, region, settings, yaw_deg=yaw, placed_yaws=yaws):
                 continue
             z = floor + edge / 2 + 0.0005
-            yaw = rng.uniform(float(yaw_range[0]), float(yaw_range[1]))
+            if yaw is None:
+                yaw = rng.uniform(float(yaw_range[0]), float(yaw_range[1]))
             if reachable is not None:
                 try:
                     can_reach = reachable((*xy, z), yaw)
