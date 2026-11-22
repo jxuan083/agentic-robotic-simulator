@@ -1,5 +1,7 @@
 # 決賽配置的 MuJoCo 首次提起比較
 
+B 是這次選用的抓前定位方法。單獨執行、技能分層與跨引擎復現見 [腕部定位與 ACT 接手](wrist-alignment.md)。
+
 在 Windows 5060 專用 checkout 根目錄執行。以下命令沿用既有 5060 Python 環境和 Menagerie 模型。
 
 ~~~powershell
@@ -46,7 +48,7 @@ Windows 原生 MuJoCo 4.0.1 搭配 RTX 5060 Laptop GPU。訓練用種子 47000�
 
 全樣本限制平均把未成功抓取的場景計到 8 個模擬秒和 6 個主機秒。B、C 都救回 A 的 10 個失敗場景，兩者的唯一失敗同為藍色種子 73031，兩次腕部影像都未取得通過門檻的姿態。C 在 32 個場景選了額外抓點偏移，與 B 的成功場景完全相同。D 的深度在 42 個場景均可用，相較 A 多成功一個場景。加入擾動前的全域 XY 誤差中位數是 A 0.634 mm、D 0.478 mm。共用擾動後分別是 8.875 mm、9.084 mm。
 
-四法的 [摘要](../outputs/finals_alignment_abcd/summary.json) 和 [逐場紀錄](../outputs/finals_alignment_abcd/trials.jsonl) 相對 checkout 路徑是 `outputs/finals_alignment_abcd/`。此次評估載入 [凍結策略](../outputs/finals_alignment/fitted_q_policy.npz)，其 [訓練紀錄](../outputs/finals_alignment/training.jsonl) 同在 `outputs/finals_alignment/`。
+各次執行的輸出寫入指定的本機目錄。只有重跑完整比較時才需要重新訓練或載入擬合 Q 權重。
 
 ~~~powershell
 & $python5060 tools/benchmark_finals_alignment.py --policy outputs/finals_alignment/fitted_q_policy.npz --out outputs/finals_alignment_abcd_repro

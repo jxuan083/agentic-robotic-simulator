@@ -26,6 +26,7 @@ from agentic_sim.perception.vertices import cube_vertices
 from agentic_sim.random_blocks import grasp_ik_checker, sample_scene
 from agentic_sim.scene_layout import block_in_tray, yaw_quat
 from agentic_sim.teleop.ee_target import load_controller
+from agentic_sim.task.wrist_alignment import align_from_hover
 
 MOD = math.pi / 2
 METHODS = ("A_coarse", "B_wrist", "C_rl", "D_rgbd")
@@ -389,13 +390,22 @@ def run_trial(sim, episode, method, policy):
         timeline["approach"] = {"wall_s": time.perf_counter() - start, "sim_s": float(sim.data.time)}
         final = coarse
         if method in (METHODS[1], METHODS[2]):
-            wrist0 = sim.wrist(coarse, episode.target_color)
-            timeline["wrist_1"] = {"wall_s": time.perf_counter() - start, "sim_s": float(sim.data.time)}
-            action0 = int(np.argmax(features(coarse, wrist0, 0.0) @ policy[0])) if method == METHODS[2] else 0
-            sim.next_view(coarse, wrist0, action0)
-            wrist1 = sim.wrist(wrist0 or coarse, episode.target_color)
-            timeline["wrist_2"] = {"wall_s": time.perf_counter() - start, "sim_s": float(sim.data.time)}
-            final = wrist1 or wrist0 or coarse
+            captures = []
+
+            def observe(anchor):
+                observation = sim.wrist(anchor, episode.target_color)
+                captures.append({"wall_s": time.perf_counter() - start, "sim_s": float(sim.data.time)})
+                return observation
+
+            def reposition(first):
+                nonlocal action0
+                action0 = 0  # Fixed full correction in method B.
+                if method == METHODS[2]:
+                    action0 = int(np.argmax(features(coarse, first, 0.0) @ policy[0]))
+                sim.next_view(coarse, first, action0)
+
+            wrist0, wrist1, final = align_from_hover(coarse, observe, reposition)
+            timeline["wrist_1"], timeline["wrist_2"] = captures
             if method == METHODS[2]:
                 action1 = int(np.argmax(features(coarse, wrist1 or wrist0, VIEW_GAINS[action0]) @ policy[1]))
         outcome, _ = sim.grasp(episode, final, action1, start)
@@ -406,7 +416,7 @@ def run_trial(sim, episode, method, policy):
     return result
 
 
-def evaluate(sim, split, policy, out):
+def evaluate(sim, split, policy, out, methods):
     episodes = []
     with (out / "trials.jsonl").open("w", encoding="utf-8") as log:
         for i, seed in enumerate(seeds(split)):
@@ -415,25 +425,25 @@ def evaluate(sim, split, policy, out):
                    "target_index": episode.target_index, "injected_xy_m": episode.offset_xy.tolist(),
                    "injected_yaw_deg": math.degrees(episode.offset_yaw), "trials": {}}
             # Rotate run order to distribute warm-up and cache effects across methods.
-            first = i % len(METHODS)
-            for method in METHODS[first:] + METHODS[:first]:
+            first = i % len(methods)
+            for method in methods[first:] + methods[:first]:
                 row["trials"][method] = run_trial(sim, episode, method, policy)
-            if len({json.dumps(row["trials"][m]["coarse"], sort_keys=True) for m in METHODS[:3]}) != 1:
+            if len({json.dumps(row["trials"][m]["coarse"], sort_keys=True) for m in methods if m != "D_rgbd"}) > 1:
                 raise RuntimeError(f"Unpaired coarse perceptions at seed {seed}")
             if len({json.dumps(t["raw_global"], sort_keys=True) for t in row["trials"].values()}) != 1:
                 raise RuntimeError(f"Unpaired RGB target selection at seed {seed}")
             episodes.append(row)
             log.write(json.dumps(row) + "\n")
             log.flush()
-            status = ", ".join(f"{m[0]}={row['trials'][m]['status']}" for m in METHODS)
+            status = ", ".join(f"{m[0]}={row['trials'][m]['status']}" for m in methods)
             print(f"eval {i + 1}/{split['count']} seed {seed} {episode.target_color} {status}", flush=True)
     return episodes
 
 
-def summarize(episodes, cfg):
+def summarize(episodes, cfg, methods):
     horizon = cfg["sim_horizon_s"]
     summary = {}
-    for method in METHODS:
+    for method in methods:
         trials = [row["trials"][method] for row in episodes]
         successes = [t for t in trials if t["success"]]
         stats = {"n": len(trials), "successes": len(successes), "success_rate": len(successes) / len(trials),
@@ -461,13 +471,15 @@ def summarize(episodes, cfg):
         summary[method] = stats
     paired = {f"{a[0]}_vs_{b[0]}": dict(Counter(f"{int(r['trials'][a]['success'])}{int(r['trials'][b]['success'])}"
                                                for r in episodes))
-              for a, b in combinations(METHODS, 2)}
+              for a, b in combinations(methods, 2)}
     return {"engine": f"MuJoCo {mujoco.__version__}", "config": cfg, "methods": summary,
             "paired_success": paired}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--method", choices=("B", "all"), default="all",
+                        help="Run the fixed wrist policy alone (B), or the paired four-method experiment")
     parser.add_argument("--config", default="configs/benchmarks/finals_alignment.yaml")
     parser.add_argument("--out", type=Path, default=Path("outputs/finals_alignment"))
     parser.add_argument("--policy", type=Path, help="Evaluate a previously fitted policy, skipping training")
@@ -484,15 +496,21 @@ def main():
     cv2.setNumThreads(1)
     sim = Benchmark(cfg)
     try:
+        methods = ("B_wrist",) if args.method == "B" else METHODS
+        policy = None
+        if args.method == "B" and args.policy:
+            parser.error("method B uses fixed corrections and takes no --policy")
         if args.policy:
             with np.load(args.policy) as weights:
                 policy = weights["view"], weights["final"]
-        else:
+        elif args.method == "all":
             policy = train(sim, cfg["train_seeds"], args.out)
-        sim.init_depth_renderer()
-        episodes = evaluate(sim, cfg["eval_seeds"], policy, args.out)
-        summary = summarize(episodes, cfg)
-        summary["policy_file"] = str((args.policy or args.out / "fitted_q_policy.npz").resolve())
+        if "D_rgbd" in methods:
+            sim.init_depth_renderer()
+        episodes = evaluate(sim, cfg["eval_seeds"], policy, args.out, methods)
+        summary = summarize(episodes, cfg, methods)
+        if policy is not None:
+            summary["policy_file"] = str((args.policy or args.out / "fitted_q_policy.npz").resolve())
         (args.out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
         for m, stats in summary["methods"].items():
             print(f"{m}: {stats['successes']}/{stats['n']} stable correct lifts", flush=True)
