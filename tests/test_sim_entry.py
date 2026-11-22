@@ -135,9 +135,10 @@ def test_readback_without_a_recording_never_guesses(tmp_path, monkeypatch, capsy
     (tmp_path / "outputs/demos/old_yellow/manifest.json").write_text("{}")
     monkeypatch.setattr(sim, "ROOT", str(tmp_path))
     monkeypatch.setattr("builtins.input", lambda *_: "1")
-    assert sim.pick_episode("outputs/demos") == "outputs/demos/old_yellow"
+    expected = os.path.join("outputs/demos", "old_yellow")
+    assert sim.pick_episode("outputs/demos") == expected
     out = capsys.readouterr().out
-    assert "這次還沒有錄製" in out and "既有：outputs/demos/old_yellow" in out
+    assert "這次還沒有錄製" in out and f"既有：{expected}" in out
     # after a recording, the episode the recorder reported is the one read back
     monkeypatch.setattr(sim.Session, "saved", [{"episode": "outputs/demos/new_yellow", "success": True, "frames": 30}])
     assert sim.pick_episode("outputs/demos") == "outputs/demos/new_yellow"
@@ -159,13 +160,13 @@ def test_record_output_must_be_inside_the_repo():
     """The Isaac container mounts only the repo: another directory would be written inside the container and lost."""
     from agentic_sim.launch import REPO_ROOT, record_dir
     assert record_dir("outputs/demos") == "outputs/demos"
-    assert record_dir(os.path.join(REPO_ROOT, "outputs", "x")) == os.path.join("outputs", "x")   # mapped back
+    assert record_dir(os.path.join(REPO_ROOT, "outputs", "x")) == "outputs/x"   # mapped back
     for bad in ("/tmp/demos", "../demos", ".", "outputs/../.."):
         with pytest.raises(LaunchError, match="必須在 repo"):
             record_dir(bad)
         assert any("必須在 repo" in m for m in check_record(EXP, RecordOptions(out_dir=bad)))
     argv = build_record("isaac", EXP, RecordOptions(out_dir=os.path.join(REPO_ROOT, "outputs", "x"))).argv
-    assert argv[argv.index("--record") + 1] == os.path.join("outputs", "x")
+    assert argv[argv.index("--record") + 1] == "outputs/x"
 
 
 def test_zero_rate_is_refused_and_the_actual_rate_is_shown(capsys):

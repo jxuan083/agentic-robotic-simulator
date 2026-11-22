@@ -198,6 +198,16 @@ def _wait(cond, timeout=10.0):
     return False
 
 
+@pytest.fixture
+def linux_recording_host(monkeypatch):
+    if not sys.platform.startswith("linux"):
+        pytest.skip("recording helper uses Linux process signals and bash")
+    # These tests supply a fake recorder and window ID; no real X server is needed.
+    monkeypatch.setenv("DISPLAY", ":1")
+    monkeypatch.delenv("ARS_SCREEN_VIDEO", raising=False)
+
+
+@pytest.mark.usefixtures("linux_recording_host")
 def test_screen_video_start_stop_gives_a_new_file_each_time(tmp_path, monkeypatch):
     from agentic_sim import screen_video as sv
     monkeypatch.setattr(sv, "ROOT", str(tmp_path))
@@ -226,6 +236,7 @@ def test_screen_video_start_stop_gives_a_new_file_each_time(tmp_path, monkeypatc
     assert saved == paths
 
 
+@pytest.mark.usefixtures("linux_recording_host")
 def test_screen_video_tool_that_cannot_start_reports_the_reason(tmp_path, monkeypatch):
     from agentic_sim import screen_video as sv
     monkeypatch.setattr(sv, "ROOT", str(tmp_path))
@@ -252,6 +263,7 @@ def test_screen_video_tool_that_cannot_start_reports_the_reason(tmp_path, monkey
         agent.close()
 
 
+@pytest.mark.usefixtures("linux_recording_host")
 def test_closing_the_simulator_ends_the_recording_and_keeps_the_file(tmp_path, monkeypatch):
     from agentic_sim import screen_video as sv
     monkeypatch.setattr(sv, "ROOT", str(tmp_path))

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import shlex
+from pathlib import Path
 from dataclasses import dataclass, field
 
 from agentic_sim.experiments import Experiment
@@ -52,11 +53,11 @@ def record_rate(hz: float) -> tuple:
 def record_dir(path: str, root: str = REPO_ROOT) -> str:
     """The capture output directory relative to the repo. The Isaac container mounts only the repo (at its working
     directory), so a directory outside it would be written inside the container and lost; refused."""
-    full = os.path.realpath(os.path.join(root, path))
-    rel = os.path.relpath(full, os.path.realpath(root))
-    if rel == os.curdir or rel.startswith(os.pardir + os.sep) or rel == os.pardir:
+    base = Path(root).resolve()
+    full = (base / path).resolve()
+    if full == base or not full.is_relative_to(base):
         raise LaunchError(f"錄製輸出 {path} 必須在 repo 裡的子目錄（Isaac 容器只掛載 repo {root}）")
-    return rel
+    return full.relative_to(base).as_posix()
 
 
 @dataclass

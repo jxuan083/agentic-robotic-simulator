@@ -54,11 +54,17 @@ def backend_text(b: str) -> str:
     return f"{b:7s}  {server_text(b)}"
 
 
+def require_host_launcher(program: str):
+    if sys.platform == "win32" and program.endswith(".sh"):
+        raise LaunchError("此入口使用 Linux shell。請在 Linux 環境啟動；Windows 原生可使用 MuJoCo 手動操作與離線讀回。")
+
+
 def server_cmd(backend: str, action: str) -> int:
     script = SERVER_SCRIPTS.get(backend)
     if script is None:
         print(f"{backend} 沒有常駐伺服器", file=sys.stderr)
         return 2
+    require_host_launcher(script)
     return subprocess.call([os.path.join(ROOT, script), action], cwd=ROOT)
 
 
@@ -117,7 +123,7 @@ def interactive(dry_run: bool) -> tuple:
             if k == 1:
                 raise SystemExit(server_cmd(backend, "down"))
             use_server = True
-        elif ask_yes("啟動常駐伺服器？（之後不必重新載入；選 n 則只執行這一次）", True):
+        elif sys.platform != "win32" and ask_yes("啟動常駐伺服器？（之後不必重新載入；選 n 則只執行這一次）", True):
             if server_cmd(backend, "up") != 0:
                 raise SystemExit(1)
             use_server = True
@@ -222,6 +228,7 @@ def record_flow(exp, rec: RecordOptions, dry_run: bool, interactive_ask: bool) -
         return 0
     if interactive_ask and not ask_yes("開始錄製？", True):
         return 0
+    require_host_launcher(cmd.argv[0])
     if probe("isaac") is not None:
         print("注意：Isaac 常駐伺服器也在執行；錄製會另開一個 Isaac，兩個同時跑會很慢")
     env = dict(os.environ, **cmd.env)
@@ -283,17 +290,19 @@ def readback_flow(episode: str, figures: bool, dry_run: bool, interactive_ask: b
     return rc
 
 
-def menu(dry_run: bool) -> tuple | None:
-    """Top menu. Returns the simulate choice (as interactive()) or None after a record / readback action."""
+def menu(dry_run: bool) -> None:
+    """Run each selected operation, then show the menu again."""
     while True:
         last = f"（這次錄的：{Session.saved[-1]['episode']}）" if Session.saved else "（這次還沒錄；可選既有 episode）"
         op = ask("選擇操作：", ["sim", "record", "readback"],
                  ["模擬：手動操作或自動驗收", f"錄示範：Isaac、{RECORD_EXPERIMENT}、keyboard／mouse",
                   "檢查上一筆示範：從磁碟讀回" + last], default=0)
-        if op == 0:
-            return interactive(dry_run)
         try:
-            if op == 1:
+            if op == 0:
+                rc = run_simulation(*interactive(dry_run), dry_run=dry_run)
+                if rc:
+                    print(f"模擬結束，退出碼 {rc}", file=sys.stderr)
+            elif op == 1:
                 record_flow(load_experiment(RECORD_EXPERIMENT), RecordOptions(), dry_run, True)
             else:
                 ep = pick_episode(RecordOptions().out_dir)
@@ -365,6 +374,45 @@ def print_screen_videos(agent):
             print(f"  {p}")
 
 
+def run_simulation(backend, exp, mode, opts, scenario, use_server, dry_run) -> int:
+    if use_server:
+        if not exp.supports(backend):
+            raise LaunchError(f"experiment {exp.name!r} does not support backend {backend!r}")
+        print(f"使用執行中的 {backend} 伺服器")
+        return run_on_server(backend, exp, mode, opts, scenario)
+    if mode == "teleop" and not opts.screen_video_dir:
+        from agentic_sim.demo_entry import new_run_id
+        from agentic_sim.screen_video import control_dir
+        opts.screen_video_dir = control_dir(new_run_id())
+    cmd = build(backend, exp, mode, opts, scenario)
+
+    for n in cmd.notes:
+        print(f"注意：{n}")
+    print(f"\n$ {cmd.shell()}\n", flush=True)
+    if opts.screen_video_dir and not dry_run:
+        from agentic_sim.screen_video import platform_support
+        if platform_support()[0]:
+            print(SCREEN_NOTE + "\n", flush=True)
+    if dry_run:
+        return 0
+    require_host_launcher(cmd.argv[0])
+    env = dict(os.environ, **cmd.env)
+    if sys.platform.startswith("linux") and not env.get("DISPLAY"):
+        print("注意：沒有設定 DISPLAY，模擬器視窗可能無法開啟（例如 export DISPLAY=:1）")
+    if not opts.screen_video_dir:
+        try:
+            return subprocess.call(cmd.argv, cwd=ROOT, env=env)
+        except KeyboardInterrupt:
+            return 130
+    with screen_agent(opts.screen_video_dir) as agent:
+        try:
+            rc = subprocess.call(cmd.argv, cwd=ROOT, env=env)
+        except KeyboardInterrupt:
+            rc = 130
+    print_screen_videos(agent)
+    return rc
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     from agentic_sim.perception_cli import add_arguments as add_perception_arguments
@@ -427,46 +475,13 @@ def main(argv=None) -> int:
         else:
             if not sys.stdin.isatty():
                 ap.error("no TTY: use --backend/--experiment/--mode (or --list)")
-            chosen = menu(a.dry_run)
-            backend, exp, mode, opts, scenario, use_server = chosen
-        if use_server:
-            if not exp.supports(backend):
-                raise LaunchError(f"experiment {exp.name!r} does not support backend {backend!r}")
-            print(f"使用執行中的 {backend} 伺服器")
-            return run_on_server(backend, exp, mode, opts, scenario)
-        if mode == "teleop" and not opts.screen_video_dir:
-            from agentic_sim.demo_entry import new_run_id
-            from agentic_sim.screen_video import control_dir
-            opts.screen_video_dir = control_dir(new_run_id())
-        cmd = build(backend, exp, mode, opts, scenario)
+            menu(a.dry_run)
+            return 0
+        return run_simulation(backend, exp, mode, opts, scenario, use_server, a.dry_run)
     except (ExperimentError, LaunchError, KeyError, RemoteError, ConnectionError, TimeoutError) as e:
         print(f"錯誤：{e}", file=sys.stderr)
         return 2
 
-    for n in cmd.notes:
-        print(f"注意：{n}")
-    print(f"\n$ {cmd.shell()}\n", flush=True)
-    if opts.screen_video_dir and not a.dry_run:
-        from agentic_sim.screen_video import platform_support
-        if platform_support()[0]:
-            print(SCREEN_NOTE + "\n", flush=True)
-    if a.dry_run:
-        return 0
-    env = dict(os.environ, **cmd.env)
-    if not env.get("DISPLAY"):
-        print("注意：沒有設定 DISPLAY，模擬器視窗可能無法開啟（例如 export DISPLAY=:1）")
-    if not opts.screen_video_dir:
-        try:
-            return subprocess.call(cmd.argv, cwd=ROOT, env=env)
-        except KeyboardInterrupt:
-            return 130
-    with screen_agent(opts.screen_video_dir) as agent:
-        try:
-            rc = subprocess.call(cmd.argv, cwd=ROOT, env=env)
-        except KeyboardInterrupt:
-            rc = 130
-    print_screen_videos(agent)
-    return rc
 
 
 if __name__ == "__main__":

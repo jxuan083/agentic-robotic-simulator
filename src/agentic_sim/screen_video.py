@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import platform
 import signal
 import subprocess
@@ -56,7 +57,7 @@ def platform_support() -> tuple:
 
 def control_dir(run_id: str) -> str:
     """Repo-relative control directory of one simulator run."""
-    return os.path.join(CONTROL_ROOT, run_id)
+    return (Path(CONTROL_ROOT) / run_id).as_posix()
 
 
 def _abs(path: str) -> str:

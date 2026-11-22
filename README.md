@@ -87,3 +87,5 @@ flowchart LR
 ### VS Code Remote：瀏覽器操作
 
 執行 `docker/isaac/remote.sh run`，在 VS Code **Ports** 轉發 **6080**，開啟 `http://localhost:6080/vnc.html?autoconnect=1&resize=scale`。預設顯示隨機積木場景與即時八頂點預覽；詳見 [遠端桌面](docs/remote-desktop.md)。
+
+開發與交接請見[開發規則](AGENTS.md)。
