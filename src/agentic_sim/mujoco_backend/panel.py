@@ -83,6 +83,7 @@ class MjPanel:
         self._content_h = 0.0
         self._seed_rect = None
         self.task_lines = None           # task executor lines (text, kind) while a task runs
+        self.screen = ("Record screen", "", True)   # screen video button text, state line, enabled
 
     # ---- scene settings (same API as the Isaac panel) ------------------------------------
     def settings(self) -> dict:
@@ -110,6 +111,9 @@ class MjPanel:
     def set_task(self, lines):
         """Task card content: [(text, kind)] with kind text / dim / ask; None hides the card."""
         self.task_lines = lines
+
+    def set_screen(self, button_text: str, line: str, enabled: bool = True):
+        self.screen = (button_text, line, enabled)
 
     def set_colors(self, text: str):
         self.colors_text = text
@@ -320,7 +324,8 @@ class MjPanel:
 
         # controls
         bh = 30
-        ctrl_h = 6 + lh + 3 * (bh + 4) + 6
+        screen_lines = cv.wrap(self.screen[1], w - 16) if self.screen[1] else []
+        ctrl_h = 6 + lh + 4 * (bh + 4) + lh * len(screen_lines) + 6
         cv.rect(x, y, w, ctrl_h, BG_CARD)
         yy = y + 6
         cv.text(x + 8, yy, "CONTROLS", SECTION)
@@ -337,6 +342,16 @@ class MjPanel:
         button("pause", x + 8, yy, third, bh, "Resume" if v.get("paused") else "Pause", "pause")
         button("reset", x + 12 + third, yy, third, bh, "Reset", "reset", color=AMBER if pend else BLUE)
         button("view", x + 16 + 2 * third, yy, third, bh, "Reset view", "reset_view")
+        yy += bh + 4
+        if self.screen[2]:
+            button("screen_video", x + 8, yy, w - 16, bh, self.screen[0], "screen_video")   # agentic_sim.screen_video
+        else:   # not available on this platform: drawn dimmed, no click target
+            cv.label(x + 8, yy, w - 16, bh, self.screen[0], BG_CARD, DIM)
+            self.buttons["screen_video"] = (x + 8, yy, w - 16, bh)
+        yy += bh + 4
+        for ln in screen_lines:
+            cv.text(x + 8, yy, ln, DIM)
+            yy += lh
         y += ctrl_h + 8
 
         # scene settings

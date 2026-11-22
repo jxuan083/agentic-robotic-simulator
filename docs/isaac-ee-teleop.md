@@ -137,6 +137,10 @@ Keyboard 與 mouse 寫入同一個 EE 目標，經同一個受限 IK 解算，�
 - **舊輸入**：放開、失焦、暫停、reset 會結束拖曳並丟掉累積的滾輪量。
 - **不會選到物件**：3D 畫面中的場景物件設為不可點選，框選也已關閉，拖曳不會選到物件或叫出變換 gizmo。Stage 面板仍可選取。
 
+### 畫面錄影
+
+面板 CONTROLS 最下面的 **Record screen**／**Stop screen video**，會把這個模擬器視窗錄成 MP4，存在 `outputs/screen_video/`。下方會顯示錄影狀態和存檔路徑。細節見 [operator-workspace.md](operator-workspace.md#畫面錄影右欄)。
+
 ### 專注模式
 
 - 按 M 或面板的 Focus view 切換。2026-11-22 起，專注模式就是全螢幕的操作工作區，見 [operator-workspace.md](operator-workspace.md)。

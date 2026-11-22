@@ -193,6 +193,13 @@ class Viewer:
         fwd = np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)])
         return np.array(self.cam.lookat, float) - self.cam.distance * fwd
 
+    def x11_window_id(self) -> int:
+        """X window id of this window (the screen video records exactly this window)."""
+        wid = glfw.get_x11_window(self.window)
+        if not wid:
+            raise RuntimeError("no X11 window")
+        return int(wid)
+
     def focused(self) -> bool:
         return bool(glfw.get_window_attrib(self.window, glfw.FOCUSED))
 

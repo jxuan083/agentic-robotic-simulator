@@ -5,6 +5,7 @@
 # -(heading from the pan axis) so the fingers face the cube sides).
 # Physical waits and timeouts are in simulated seconds (settle, sim_timeout): the run passes however slowly the
 # simulation goes (e.g. about 0.2 x real time with live perception on). The first wait is host time (app start).
+# Injected keys move by simulated time (one control step per frame), so the waypoints do not depend on the frame rate.
 - {wait: 4.0}
 - {hold: [O], until: "gripper >= 0.5", sim_timeout: 3}
 - {hold: [W], until: "target[0] >= 0.230", sim_timeout: 5}
@@ -12,6 +13,7 @@
 - {hold: [Z], until: "yaw_offset <= -0.60", sim_timeout: 3}
 - {hold: [Q], until: "target[2] <= 0.029", sim_timeout: 5}
 - {settle: 1.2}
+- {mark: grasp}                      # where the gripper closes (compared across frame rates)
 - {hold: [C], until: "gripper <= -0.17", sim_timeout: 3}
 - {settle: 1.0}
 - {check: "jaw > 0.05", label: "grasp: jaw stopped by the block"}

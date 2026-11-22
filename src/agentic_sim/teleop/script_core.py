@@ -10,8 +10,11 @@ Steps handled here:
   - {wait: seconds}                                 host time (monotonic): UI waits, e.g. while paused
   - {settle: seconds}                               simulated time (ns["t_sim"]): let the physics act, e.g. after
                                                    closing the gripper; holds however slowly the simulation runs
-  - {hold: [W, A], until: "target[0] >= 0.17", timeout: 8}   keys down until the condition holds (or timeout)
-    timeout is host seconds; sim_timeout: N instead gives up after N simulated seconds (physical motion)
+  - {hold: [W, A], until: "target[0] >= 0.17", timeout: 8}   keys down until the condition holds (or timeout);
+    injected keys move by simulated time (input_dt): one control step per frame, whatever the frame rate, so a
+    hold with keys counts its timeout in simulated seconds too (the same motion at any speed); a hold with no
+    keys ({hold: [], until: ...}, waiting on the UI or perception) counts host seconds. sim_timeout: N is always
+    simulated seconds
   - {tap: P}                                       press + release on the next frame
   - {press: W} / {release: W}                      key down / up that stays held across steps
   - {focus_loss: 1.0, hold: [W]}                   hold keys, then report the window unfocused for N seconds
@@ -31,6 +34,28 @@ import numpy as np
 CORE_STEPS = ("note", "wait", "settle", "press", "release", "set", "mark", "check", "tap", "focus_loss", "hold")
 EVAL_BUILTINS = {"abs": abs, "min": min, "max": max, "len": len, "sorted": sorted, "zip": zip, "all": all, "any": any,
                  "round": round, "range": range, "set": set, "tuple": tuple}
+
+
+def input_dt(host_dt: float, control_dt: float, scripted: bool) -> float:
+    """Increment for held keys this frame. A person's keys move by host time (the speed they feel at any frame
+    rate); keys injected by a script move by one control step of simulated time, so a script commands the same
+    motion whatever the frame rate (at 13 fps a host-time step overshoots an `until` threshold by ~6 mm).
+    Paused frames advance nothing either way (the caller does not step input while paused)."""
+    return control_dt if scripted else host_dt
+
+
+MARK_KEYS = ("t_sim", "target", "ee", "block", "blocks", "gripper", "jaw", "yaw_offset", "status")
+
+
+def marks_summary(marks: dict) -> dict:
+    """The script's marks for the result JSON: positions and gripper of each marked frame (JSON-safe)."""
+    def plain(v):
+        if hasattr(v, "tolist"):
+            return plain(v.tolist())
+        if isinstance(v, (list, tuple)):
+            return [plain(x) for x in v]
+        return round(v, 5) if isinstance(v, float) else v
+    return {name: {k: plain(m[k]) for k in MARK_KEYS if k in m} for name, m in marks.items()}
 
 
 STEP_MODIFIERS = ("until", "timeout", "sim_timeout", "label", "tol", "seconds")
@@ -188,7 +213,12 @@ class ScriptCore:
                 self._held = list(s["hold"])
                 self._phase = "holding"
             else:
-                out = el_sim >= s["sim_timeout"] if "sim_timeout" in s else el >= timeout
+                if "sim_timeout" in s:
+                    out = el_sim >= s["sim_timeout"]
+                elif s["hold"] and el_sim is not None:   # keys move by simulated time: so does their timeout
+                    out = el_sim >= timeout
+                else:
+                    out = el >= timeout
                 if self._cond(s["until"], ns) or out:
                     if out:
                         self.log(f"script: hold timeout {s}")

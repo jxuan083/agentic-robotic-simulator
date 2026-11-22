@@ -183,7 +183,9 @@ def record_setup_text(exp, rec: RecordOptions) -> str:
         f"  錄製：{rate}，global 與腕部 RGB，腕部鏡頭 {lens}",
         f"  即時感知：{perc}",
         f"  輸出：{rec.out_dir}/<日期_時間>_<顏色>/",
-        "  成功（積木放進米色盤、夾爪打開、停 1 秒）時自動存檔；按 R 開始下一筆；關閉 Isaac 視窗結束。"])
+        "  成功（積木放進米色盤、夾爪打開、停 1 秒）時自動存檔；按 R 開始下一筆；關閉 Isaac 視窗結束。",
+        "  畫面錄影：右欄 Record screen／Stop screen video，只錄模擬器視窗，MP4 存在 outputs/screen_video/"
+        "（和示範資料分開）"])
 
 
 def record_flow(exp, rec: RecordOptions, dry_run: bool, interactive_ask: bool) -> int:
@@ -211,6 +213,8 @@ def record_flow(exp, rec: RecordOptions, dry_run: bool, interactive_ask: bool) -
         from agentic_sim.perception_cli import DEFAULTS
         rec.perception = {k: v for k, v in DEFAULTS.items()} | {"live_perception": True}
     rec.run_id = rec.run_id or new_run_id()
+    from agentic_sim.screen_video import control_dir
+    rec.screen_video_dir = rec.screen_video_dir or control_dir(rec.run_id)
     cmd = build_record("isaac", exp, rec)
     print("\n採集命令（可複製到另一個終端單獨執行，需要 DISPLAY）：")
     print(f"$ {cmd.shell()}\n", flush=True)
@@ -225,7 +229,9 @@ def record_flow(exp, rec: RecordOptions, dry_run: bool, interactive_ask: bool) -
         print("注意：沒有設定 DISPLAY，Isaac 視窗可能無法開啟（例如 export DISPLAY=:1）")
     from agentic_sim.demo_entry import run_recording
     from agentic_sim.launch import record_dir
-    res = run_recording(cmd, ROOT, record_dir(rec.out_dir), rec.target_color, env, LOG_DIR, rec.run_id)
+    with screen_agent(rec.screen_video_dir) as agent:
+        res = run_recording(cmd, ROOT, record_dir(rec.out_dir), rec.target_color, env, LOG_DIR, rec.run_id)
+    print_screen_videos(agent)
     Session.saved += [ev for ev in res["saved"] if ev.get("frames")]
     print("\n這次存檔的 episode：" if res["saved"] else "\n這次沒有存檔任何 episode。")
     for ev in res["saved"]:
@@ -322,6 +328,43 @@ def run_on_server(backend, exp, mode, opts, scenario) -> int:
         return 0 if ok else 1
 
 
+SCREEN_NOTE = ("右欄的 Record screen 可以錄模擬器視窗的 MP4（存在 outputs/screen_video/）；單獨執行上面的命令時，"
+               "Isaac 要另開終端執行 uv run tools/screen_video.py agent <--screen_video_dir 的目錄>")
+
+
+SCREEN_UNSUPPORTED = "此平台未提供視窗錄影（右欄的錄影按鈕停用，不啟動錄影 helper）：{reason}"
+
+
+class _NoAgent:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def saved(self):
+        return []
+
+
+def screen_agent(ctl_dir):
+    """The host agent of the right-column screen video, for the simulator this launcher runs (Linux / X11 only;
+    elsewhere nothing is started and the window shows the button disabled)."""
+    from agentic_sim.screen_video import HostAgent, platform_support
+    ok, reason = platform_support()
+    if not ok:
+        print(SCREEN_UNSUPPORTED.format(reason=reason), flush=True)
+        return _NoAgent()
+    return HostAgent(ctl_dir)
+
+
+def print_screen_videos(agent):
+    saved = agent.saved()
+    if saved:
+        print("這次的畫面錄影：")
+        for p in saved:
+            print(f"  {p}")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     from agentic_sim.perception_cli import add_arguments as add_perception_arguments
@@ -391,6 +434,10 @@ def main(argv=None) -> int:
                 raise LaunchError(f"experiment {exp.name!r} does not support backend {backend!r}")
             print(f"使用執行中的 {backend} 伺服器")
             return run_on_server(backend, exp, mode, opts, scenario)
+        if mode == "teleop" and not opts.screen_video_dir:
+            from agentic_sim.demo_entry import new_run_id
+            from agentic_sim.screen_video import control_dir
+            opts.screen_video_dir = control_dir(new_run_id())
         cmd = build(backend, exp, mode, opts, scenario)
     except (ExperimentError, LaunchError, KeyError, RemoteError, ConnectionError, TimeoutError) as e:
         print(f"錯誤：{e}", file=sys.stderr)
@@ -399,15 +446,27 @@ def main(argv=None) -> int:
     for n in cmd.notes:
         print(f"注意：{n}")
     print(f"\n$ {cmd.shell()}\n", flush=True)
+    if opts.screen_video_dir and not a.dry_run:
+        from agentic_sim.screen_video import platform_support
+        if platform_support()[0]:
+            print(SCREEN_NOTE + "\n", flush=True)
     if a.dry_run:
         return 0
     env = dict(os.environ, **cmd.env)
     if not env.get("DISPLAY"):
         print("注意：沒有設定 DISPLAY，模擬器視窗可能無法開啟（例如 export DISPLAY=:1）")
-    try:
-        return subprocess.call(cmd.argv, cwd=ROOT, env=env)
-    except KeyboardInterrupt:
-        return 130
+    if not opts.screen_video_dir:
+        try:
+            return subprocess.call(cmd.argv, cwd=ROOT, env=env)
+        except KeyboardInterrupt:
+            return 130
+    with screen_agent(opts.screen_video_dir) as agent:
+        try:
+            rc = subprocess.call(cmd.argv, cwd=ROOT, env=env)
+        except KeyboardInterrupt:
+            rc = 130
+    print_screen_videos(agent)
+    return rc
 
 
 if __name__ == "__main__":

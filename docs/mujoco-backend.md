@@ -101,6 +101,10 @@ tools/run_acceptance_mujoco.sh keyboard_pick_place            # 不經伺服器�
 
 **為什麼自己開 GLFW 視窗**：MuJoCo 內建 viewer 的按鍵回呼只回報按下、不回報放開，做不出「按住才移動」與失焦處理，而且它自己的快捷鍵佔用了 W/S/A/D/E/Q/C。面板與俯視圖都用 MuJoCo 自己的 2D 繪圖（`mjr_label`、`mjr_text`、`mjr_rectangle`）與第二次 `mjr_render` 畫出，沒有新增套件。
 
+### 畫面錄影
+
+面板 CONTROLS 最下面的 **Record screen**／**Stop screen video**，會把這個模擬器視窗錄成 MP4，存在 `outputs/screen_video/`。下方會顯示錄影狀態和存檔路徑。細節見 [operator-workspace.md](operator-workspace.md#畫面錄影右欄)。
+
 ## 模型與對齊
 
 `configs/mujoco_so101.yaml` 記錄模型來源、對齊數值與物理設定。

@@ -44,6 +44,8 @@ from agentic_sim.isaac.so101 import WORKSHOP_COMMIT
 from agentic_sim.isaac.viewport_handle import EEHandle
 from agentic_sim.kinematics import ARM_JOINTS, GRIPPER_JOINT
 from agentic_sim.teleop.ee_target import REASONS, load_controller
+from agentic_sim.teleop.script_core import input_dt, marks_summary
+from agentic_sim.workspace_status import perception_items
 
 CONTROL_DT = 1.0 / 60.0
 PHYSICS_DT = 1.0 / 240.0
@@ -90,8 +92,11 @@ class SessionConfig:
     perception_json: str | None = None
     perception_stage: str = "estimate"   # "capture": capture only, no estimation (benchmark)
     perception_delay: float = 0.0        # test only: extra seconds before each estimate completes
+    perception_fault: str | None = None  # test only: CAMERA:AFTER:DURATION, estimates of CAMERA fail for a while
     annotations: str = "on"              # camera cells start annotated ("on") or raw ("off")
     metrics_log: str | None = None       # one JSON line per host second: UI FPS, RTF, perception age
+    metrics_run_id: str | None = None    # written into every metrics line (a benchmark binds its report to it)
+    screen_video_dir: str | None = None  # control directory of the right-column screen video (agentic_sim.screen_video)
     record: str | None = None          # demonstration capture (issue #13): episodes are written under this directory
     target_color: str | None = None    # colour of the block to pick (capture); default: the first block's colour
     record_hz: float = 20.0            # recorded control rate (images and rows), like the lab captures
@@ -182,7 +187,9 @@ class TeleopSession:
         self.focus_mode.cells(cfg.annotations == "on").annotate_default = cfg.annotations == "on"
         from agentic_sim.workspace_status import Clocks, MetricsLog
         self.clocks = Clocks()
-        self.metrics_log = MetricsLog(cfg.metrics_log)
+        self.metrics_log = MetricsLog(cfg.metrics_log, run_id=cfg.metrics_run_id)
+        from agentic_sim.screen_video import ScreenVideoClient, isaac_window_id
+        self.screen_video = ScreenVideoClient(cfg.screen_video_dir, isaac_window_id, "isaac", log)
         self.block_colors = [abgr(c) for c in h.block_colors]
         self.script = None
         set_camera = lambda eye, tgt: sim.set_camera_view(eye, tgt)  # noqa: E731
@@ -218,10 +225,12 @@ class TeleopSession:
         self.live_perception = None
         if cfg.live_perception:
             from agentic_sim.isaac.live_perception import LivePerception
+            from agentic_sim.perception.live import InjectedFault
             self.live_perception = LivePerception(scene_cfg, self.sensor_views,
                                                   cfg.perception_camera, cfg.perception_hz, log,
                                                   cfg.perception_json, stage=cfg.perception_stage,
-                                                  delay_s=cfg.perception_delay)
+                                                  delay_s=cfg.perception_delay,
+                                                  fault=InjectedFault.parse(cfg.perception_fault))
         self.log_f = self.log_w = None
         if cfg.log:
             os.makedirs(os.path.dirname(cfg.log) or ".", exist_ok=True)
@@ -468,6 +477,8 @@ class TeleopSession:
                 self.focus_mode.toggle()
             elif a in ("annotate_global", "annotate_wrist"):   # display only: perception keeps running
                 self.focus_mode.cells().toggle(a.split("_")[1])
+            elif a == "screen_video":   # the window's MP4 (host agent); the demo recorder is not affected
+                self.screen_video.toggle()
             elif a == "pause":
                 self.paused = not self.paused
                 kb.clear()
@@ -513,9 +524,12 @@ class TeleopSession:
                 panel.cancel()
                 handle.cancel()
                 self.task.step(self.task_obs())
+            # a person's keys move by host time (the operator's feel); injected script keys by simulated time, so
+            # the same script commands the same motion however fast the window draws
+            dt_in = input_dt(dt, CONTROL_DT, script is not None)
             lin, yaw, grip = kb.directions()
-            ctrl.step_velocity(lin, yaw, dt, "keyboard")
-            ctrl.step_gripper(grip, dt, "keyboard")
+            ctrl.step_velocity(lin, yaw, dt_in, "keyboard")
+            ctrl.step_gripper(grip, dt_in, "keyboard")
             # mouse: viewport handle (primary) + top view (auxiliary), both relative, one IK update per frame
             d1, t1 = handle.pop_drag()
             d2, t2 = panel.pop_drag()
@@ -528,7 +542,7 @@ class TeleopSession:
                 ctrl.wheel(w1["coarse"] + w2["coarse"])
             if w1["fine"] + w2["fine"]:
                 ctrl.wheel(w1["fine"] + w2["fine"], fine=True)
-            ctrl.step_goals(dt)
+            ctrl.step_goals(dt_in)
             times = t1 + t2
             if times:
                 input_lat_ms = (time.monotonic() - min(times)) * 1000.0
@@ -591,6 +605,7 @@ class TeleopSession:
         if self.task is not None:
             mode = "task executor"
         panel.set_task(self.task.ex.panel_lines() if self.task is not None else None)
+        panel.set_screen(self.screen_video.button_text(), self.screen_video.text(), self.screen_video.enabled)
         panel.update(mode, self.paused, kb.shift, s.status, s.message, s.pos, s.yaw_offset, ee, all_pos, s.gripper,
                      self.block_colors, tilt_deg=tilt_deg, in_placement=n_placed)
         follow_mm = float(np.linalg.norm(s.pos - ee)) * 1000.0
@@ -657,6 +672,11 @@ class TeleopSession:
                                if w is not None and w.visible and getattr(w, "dock_tab_bar_enabled", False)],
                   "dup_windows": _duplicate_windows(),
                   "ui_fps": self.clocks.ui_fps, "rtf": self.clocks.rtf,
+                  "screen": dict(self.screen_video.status() or {}), "screen_text": self.screen_video.text(),
+                  "demo_recording": bool(self.recorder is not None and self.recorder.w is not None
+                                         and self.recorder.step0 is not None),
+                  "demo_frames": self.recorder.w.n if self.recorder is not None and self.recorder.w is not None else 0,
+                  "perception": perception_items(self.live_perception, time.monotonic()),
                   "dr": color_dr.current, "dr_records": len(color_dr.records),
                   "block_mat_rgb": [round(float(x), 6) for x in
                                     usd_ctx.get_stage().GetPrimAtPath("/World/Block/geometry/material/Shader")
@@ -752,7 +772,7 @@ class TeleopSession:
             os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
             passed = sum(r["ok"] for r in self.script.results)
             with open(self.cfg.result, "w") as f:
-                json.dump({"checks": self.script.results, "stats": self.stats, "metrics": summary,
+                json.dump({"checks": self.script.results, "marks": marks_summary(self.script.marks), "stats": self.stats, "metrics": summary,
                            "script": self.cfg.script, "settings": self.settings(),
                            "color_dr": {"enabled": self.color_dr.enabled, "seed": self.color_dr.seed,
                                         "records": self.color_dr.records}}, f, indent=2)

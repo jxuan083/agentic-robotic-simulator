@@ -7,8 +7,8 @@ PyYAML only. The perception code is imported only when live perception actually 
 from __future__ import annotations
 
 DEFAULTS = {"live_perception": False, "perception_camera": "both", "perception_hz": 2.0, "perception_json": None,
-            "perception_stage": "estimate", "perception_delay": 0.0, "annotations": "on"}
-EXTRA = ("perception_stage", "perception_delay", "annotations")   # passed on only when not the default
+            "perception_stage": "estimate", "perception_delay": 0.0, "perception_fault": None, "annotations": "on"}
+EXTRA = ("perception_stage", "perception_delay", "perception_fault", "annotations")   # passed on only when not the default
 
 
 def add_arguments(parser):
@@ -24,9 +24,26 @@ def add_arguments(parser):
     parser.add_argument('--perception-delay', type=float, default=DEFAULTS['perception_delay'],
                         help='test only: extra seconds before each estimate completes (late results must show as '
                              'dated snapshots, never on newer frames)')
+    parser.add_argument('--perception-fault', default=DEFAULTS['perception_fault'], metavar='CAMERA:AFTER:DURATION',
+                        help='test only: the estimates of CAMERA fail for DURATION s, starting AFTER s after its first '
+                             'valid result (the cell must fall back to the raw image until a new valid result)')
     parser.add_argument('--annotations', choices=('on', 'off'), default=DEFAULTS['annotations'],
                         help='camera cells start with the annotated snapshot (on) or the raw image (off); toggled '
                              'per camera in the window. Independent of --live-perception')
+
+
+def parse_fault(text):
+    """--perception-fault CAMERA:AFTER:DURATION -> (camera, after_s, duration_s), None when unset; ValueError if bad."""
+    if not text:
+        return None
+    try:
+        camera, after, duration = str(text).split(":")
+        after, duration = float(after), float(duration)
+    except ValueError:
+        raise ValueError(f"--perception-fault {text!r}: expected CAMERA:AFTER_S:DURATION_S, e.g. global:0.5:3")
+    if camera not in ("global", "wrist") or not 0 <= after < 1e6 or not 0 < duration < 1e6:
+        raise ValueError(f"--perception-fault {text!r}: camera global|wrist, AFTER_S >= 0, DURATION_S > 0")
+    return camera, after, duration
 
 
 def options(ns) -> dict:
@@ -52,6 +69,8 @@ def args(opts) -> list:
         out += ["--perception-stage", opts.perception_stage]
     if getattr(opts, "perception_delay", 0.0):
         out += ["--perception-delay", str(opts.perception_delay)]
+    if getattr(opts, "perception_fault", None):
+        out += ["--perception-fault", opts.perception_fault]
     if getattr(opts, "annotations", "on") != "on":
         out += ["--annotations", opts.annotations]
     return out

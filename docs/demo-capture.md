@@ -25,6 +25,7 @@ uv run tools/sim.py        # 選「錄示範」或「檢查上一筆示範」
     - 開始錄製，並顯示目標顏色與已錄幀數；
     - 已存檔，並顯示結果、幀數、時長與 episode 的實際路徑。
   - Isaac 的輸出另外寫在 `outputs/sim_entry/record_<時間>.log`。
+  - **畫面錄影**：錄示範時也可以按右欄的 Record screen，把 Isaac 視窗錄成 MP4（`outputs/screen_video/`）。它和示範資料分開：episode 照樣只存原始影像與關節資料，MP4 停止後 episode 仍繼續錄。見 [operator-workspace.md](operator-workspace.md#畫面錄影右欄)。
   - 結束時請關閉 Isaac 視窗；按 Ctrl+C 中斷時，當下那一筆不會存成結果。
 - **檢查上一筆示範**：
   - 讀這次選單裡錄製端回報存檔的 episode。這次存了好幾筆時，可以選一筆，預設是最後一筆成功的。

@@ -196,3 +196,17 @@ def test_the_launch_passes_its_run_id_to_the_recorder():
     argv = build_record("isaac", EXP, RecordOptions(run_id="r123")).argv
     assert argv[argv.index("--record_run_id") + 1] == "r123"
     assert "--record_run_id" not in build_record("isaac", EXP, RecordOptions()).argv
+
+
+def test_the_launcher_gives_every_simulator_a_screen_video_control_directory(capsys):
+    """Sim (both engines) and record runs carry --screen_video_dir; the launcher runs the host agent for it."""
+    import sim
+    assert sim.main(["--mode", "record", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "--screen_video_dir outputs/screen_video/control/" in out and "畫面錄影" in out
+    for backend in ("isaac", "mujoco"):
+        assert sim.main(["--backend", backend, "--experiment", "lab_20261120", "--mode", "teleop", "--direct",
+                         "--dry-run"]) == 0
+        assert "--screen_video_dir outputs/screen_video/control/" in capsys.readouterr().out
+    argv = build_record("isaac", EXP, RecordOptions()).argv
+    assert "--screen_video_dir" not in argv                 # only when the launcher gives one

@@ -1,0 +1,45 @@
+# Right-column screen video (PR #17 round 3), clicked like an operator: record, move the EE, go fullscreen and back,
+# stop; the simulator stays usable; a second recording is a new file; a third one is still running when the
+# simulator closes (exit_after_script) and must be saved by the agent. Needs an agent on the control directory:
+#   uv run tools/screen_video.py agent outputs/screen_video/control/acc &        # (tools/sim.py starts its own)
+#   <engine command> --screen_video_dir outputs/screen_video/control/acc --script configs/acceptance/screen_video.yaml \
+#     --exit_after_script --result outputs/acceptance/screen_video_<engine>.json
+- {wait: 4.0}
+- {hold: [], until: "screen.get('pid') is not None", timeout: 10}
+- {check: "'helper not running' not in screen_text", label: "agent: the right column sees the host agent"}
+
+- {note: "1st recording: record, move, fullscreen and back, stop"}
+- {click: screen_video}
+- {hold: [], until: "screen.get('state') == 'recording'", timeout: 10}
+- {mark: rec1}
+- {check: "'REC' in screen_text", label: "rec 1: the right column shows REC and the file"}
+- {hold: [W], until: "False", sim_timeout: 1.0}
+- {tap: M}
+- {wait: 3.0}
+- {check: "focus_mode", label: "rec 1: operator workspace (fullscreen) while recording"}
+- {hold: [A], until: "False", sim_timeout: 1.0}
+- {wait: 1.0}
+- {tap: M}
+- {wait: 3.0}
+- {click: screen_video}
+- {hold: [], until: "screen.get('state') == 'saved'", timeout: 60}
+- {mark: saved1}
+- {check: "screen.get('path') == m['rec1']['screen']['path'] and 'saved ' + screen['path'] in screen_text", label: "rec 1: saved, the right column shows the saved path"}
+
+- {note: "still usable after the stop"}
+- {mark: before_move}
+- {hold: [S], until: "False", sim_timeout: 0.5}
+- {check: "m['before_move']['target'][0] - target[0] > 0.03", label: "after stop: the arm still moves (S, 0.5 simulated s)"}
+
+- {note: "2nd recording: a new file"}
+- {click: screen_video}
+- {hold: [], until: "screen.get('state') == 'recording' and screen.get('path') != m['saved1']['screen']['path']", timeout: 10}
+- {wait: 3.0}
+- {click: screen_video}
+- {hold: [], until: "screen.get('state') == 'saved'", timeout: 60}
+- {check: "screen['path'] != m['saved1']['screen']['path'] and len(screen['saved']) == 2", label: "rec 2: a different file"}
+
+- {note: "3rd recording left running: closing the simulator must save it"}
+- {click: screen_video}
+- {hold: [], until: "screen.get('state') == 'recording' and len(screen['saved']) == 2", timeout: 10}
+- {wait: 3.0}

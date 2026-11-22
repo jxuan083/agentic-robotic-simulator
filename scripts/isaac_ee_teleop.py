@@ -50,6 +50,10 @@ parser.add_argument("--record_hz", type=float, default=20.0, help="capture: reco
                     "(every round(60 / hz)-th control step; the actual rate is in the manifest)")
 parser.add_argument("--metrics_log", default=None, help="one JSON line per host second: UI FPS, RTF (simulated / "
                     "host time), perception result age and latency (benchmarks)")
+parser.add_argument("--screen_video_dir", default=None, help="control directory of the right-column screen video "
+                    "(tools/sim.py passes one and runs its host agent; default: outputs/screen_video/control/<new id>)")
+parser.add_argument("--metrics_run_id", default=None, help="id written into every --metrics_log line (benchmarks bind "
+                    "their report to this run; Isaac defaults to --record_run_id)")
 parser.add_argument("--record_run_id", default=None, help="capture: id written into every recorder event and the "
                     "manifest (tools/sim.py passes its own to follow this run)")
 AppLauncher.add_app_launcher_args(parser)
@@ -57,6 +61,20 @@ AppLauncher.add_app_launcher_args(parser)
 # vsync / the 60 Hz main-loop limiter (measured: 16 -> 40 fps on the tested machine, see docs/isaac-ee-teleop.md).
 parser.set_defaults(device="cpu", kit_args="--/app/vsync=false --/app/runLoops/main/rateLimitEnabled=false")
 args = parser.parse_args()
+try:
+    from agentic_sim.perception_cli import parse_fault
+    parse_fault(args.perception_fault)
+except ValueError as e:
+    parser.error(str(e))
+
+
+def screen_video_dir(_d=[]):
+    """Control directory of the right-column screen video, the same for every session of this run."""
+    if not _d:
+        import uuid
+        from agentic_sim.screen_video import control_dir
+        _d.append(args.screen_video_dir or control_dir(uuid.uuid4().hex[:12]))
+    return _d[0]
 if args.record:  # checked before Kit starts: the container mounts only the repo, and 0 Hz records nothing
     _rec = os.path.realpath(args.record)
     _repo = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -85,7 +103,9 @@ def main():
         scene=args.scene, teleop=args.teleop,
         live_perception=args.live_perception, perception_camera=args.perception_camera, perception_hz=args.perception_hz,
         perception_json=args.perception_json, perception_stage=args.perception_stage,
-        perception_delay=args.perception_delay, annotations=args.annotations, metrics_log=args.metrics_log,
+        perception_delay=args.perception_delay, perception_fault=args.perception_fault, annotations=args.annotations,
+        metrics_log=args.metrics_log, metrics_run_id=args.metrics_run_id or args.record_run_id,
+        screen_video_dir=screen_video_dir(),
         random_blocks=args.random_blocks, random_seed=args.random_seed,
         random_region=args.random_region, random_config=args.random_config, color_dr_config=args.color_dr_config, focus=args.focus,
         color_dr=args.color_dr, color_dr_seed=args.color_dr_seed, color_dr_log=args.color_dr_log, blocks=args.blocks, wrist_lens=args.wrist_lens,

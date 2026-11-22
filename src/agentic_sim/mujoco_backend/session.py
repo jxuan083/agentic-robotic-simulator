@@ -29,6 +29,8 @@ from agentic_sim.kinematics import ARM_JOINTS, So101Chain
 from agentic_sim.mujoco_backend.model import ROBOT_CONFIG, build
 from agentic_sim.scene_layout import block_count_range, block_in_tray
 from agentic_sim.teleop.ee_target import REASONS, load_controller
+from agentic_sim.teleop.script_core import input_dt, marks_summary
+from agentic_sim.workspace_status import perception_items
 from agentic_sim.mujoco_backend.handle import Handle
 from agentic_sim.mujoco_backend.panel import MjPanel
 from agentic_sim.teleop.keys import HELP, MJ_ACTION_KEYS, KeyState
@@ -70,8 +72,11 @@ class SessionConfig:
     perception_json: str | None = None
     perception_stage: str = "estimate"   # "capture": capture only, no estimation (benchmark)
     perception_delay: float = 0.0        # test only: extra seconds before each estimate completes
+    perception_fault: str | None = None  # test only: CAMERA:AFTER:DURATION, estimates of CAMERA fail for a while
     annotations: str = "on"              # camera cells start annotated ("on") or raw ("off")
     metrics_log: str | None = None       # one JSON line per host second: UI FPS, RTF, perception age
+    metrics_run_id: str | None = None    # written into every metrics line (a benchmark binds its report to it)
+    screen_video_dir: str | None = None  # control directory of the right-column screen video (agentic_sim.screen_video)
 
 
 class MjColorRandomizer:
@@ -224,9 +229,11 @@ class MjSession:
         self.live_perception = None
         if cfg.live_perception:
             from agentic_sim.mujoco_backend.live_perception import MjLivePerception
+            from agentic_sim.perception.live import InjectedFault
             self.live_perception = MjLivePerception(self.scene_cfg, self.m, cfg.perception_hz, log,
                                                     cfg.perception_camera, cfg.perception_json,
-                                                    stage=cfg.perception_stage, delay_s=cfg.perception_delay)
+                                                    stage=cfg.perception_stage, delay_s=cfg.perception_delay,
+                                                    fault=InjectedFault.parse(cfg.perception_fault))
 
         self.log_f = self.log_w = None
         if cfg.log:
@@ -240,7 +247,14 @@ class MjSession:
         # operator workspace (the viewer draws it): M toggles, keys 1 / 2 or a click switch a camera cell
         from agentic_sim.workspace_status import Clocks, MetricsLog
         self.clocks = Clocks()
-        self.metrics_log = MetricsLog(cfg.metrics_log)
+        self.metrics_log = MetricsLog(cfg.metrics_log, run_id=cfg.metrics_run_id)
+        from agentic_sim.screen_video import ScreenVideoClient
+
+        def window_id():
+            if viewer is None:
+                raise RuntimeError("no window (headless)")
+            return viewer.x11_window_id()
+        self.screen_video = ScreenVideoClient(cfg.screen_video_dir, window_id, "mujoco", log)
         self.workspace_toggle = False         # set by M; the viewer applies it
         self.workspace_active = False         # reported back by the viewer
         self.fullscreen = False
@@ -428,6 +442,8 @@ class MjSession:
             elif a in ("annotate_global", "annotate_wrist"):   # display only: perception keeps running
                 k = a.split("_")[1]
                 self.annotate[k] = not self.annotate[k]
+            elif a == "screen_video":   # the window's MP4 (agent on the host); no simulation state changes
+                self.screen_video.toggle()
             elif a in ("open", "close") and not self.paused:
                 ctrl.set_gripper(a == "open", "mouse")
             elif a == "toggle_gripper" and not self.paused:
@@ -461,9 +477,12 @@ class MjSession:
                 panel.cancel()
                 handle.cancel()
                 self.task.step(self.task_obs())
+            # a person's keys move by host time (the operator's feel); injected script keys by simulated time, so
+            # the same script commands the same motion however fast the window draws
+            dt_in = input_dt(dt, self.control_dt, self.script is not None)
             lin, yaw, grip = keys.directions()
-            ctrl.step_velocity(lin, yaw, dt, "keyboard")
-            ctrl.step_gripper(grip, dt, "keyboard")
+            ctrl.step_velocity(lin, yaw, dt_in, "keyboard")
+            ctrl.step_gripper(grip, dt_in, "keyboard")
             # mouse: 3D handle (primary) + top view (auxiliary), both relative, one IK update per frame
             d1, t1 = handle.pop_drag()
             d2, t2 = panel.pop_drag()
@@ -476,7 +495,7 @@ class MjSession:
                 ctrl.wheel(w1["coarse"] + w2["coarse"])
             if w1["fine"] + w2["fine"]:
                 ctrl.wheel(w1["fine"] + w2["fine"], fine=True)
-            ctrl.step_goals(dt)
+            ctrl.step_goals(dt_in)
             times = t1 + t2
             if times:
                 input_lat_ms = (time.monotonic() - min(times)) * 1000.0
@@ -535,6 +554,7 @@ class MjSession:
         panel.update(mode, self.paused, keys.shift, s.status, s.message, s.pos, s.yaw_offset, ee, all_pos, s.gripper,
                      self.color_dr.block_rgbs(self.sc.block_colors), tilt_deg=tilt_deg, in_placement=n_placed)
         panel.set_task(self.task.ex.panel_lines() if self.task is not None else None)
+        panel.set_screen(self.screen_video.button_text(), self.screen_video.text(), self.screen_video.enabled)
         if self.script is not None:
             ns = {"t_sim": self.t_sim, "target": s.pos, "ee": ee, "block": bpos, "status": s.status,
                   "gripper": s.gripper, "jaw": jaw,
@@ -555,6 +575,8 @@ class MjSession:
                   "selection": [],  # MuJoCo has no scene selection: a drag can never select anything
                   "focus_mode": self.workspace_active, "fullscreen": self.fullscreen, "cells": dict(self.cells),
                   "ui_fps": self.clocks.ui_fps, "rtf": self.clocks.rtf,
+                  "screen": dict(self.screen_video.status() or {}), "screen_text": self.screen_video.text(),
+                  "perception": perception_items(self.live_perception, time.monotonic()),
                   "reasons": {r: self.carry["reasons"][r] + s.reject_counts[r] for r in REASONS}}
             self.script.step(ns)
         self.frames += 1
@@ -579,7 +601,8 @@ class MjSession:
             task = lines[0] if lines else "task executor"
         return {"clocks": self.clocks, "target_color": None, "task": task, "jaw": self.last_frame.get("jaw"),
                 "gripper_cmd": s.gripper, "gripper_open": s.gripper > 0.5 * (p.gripper_open + p.gripper_closed),
-                "recording": None, "paused": self.paused, "perception": self.perception_items(now),
+                "recording": None, "screen_video": self.screen_video.text(), "paused": self.paused,
+                "perception": self.perception_items(now),
                 "perception_stage": getattr(self.live_perception, "stage", "estimate")}
 
     def block_in_placement(self) -> bool:
@@ -656,7 +679,7 @@ class MjSession:
             os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
             passed = sum(x["ok"] for x in self.script.results)
             with open(self.cfg.result, "w") as f:
-                json.dump({"backend": "mujoco", "mujoco": mujoco.__version__, "checks": self.script.results,
+                json.dump({"backend": "mujoco", "mujoco": mujoco.__version__, "checks": self.script.results, "marks": marks_summary(self.script.marks),
                            "stats": self.stats, "metrics": summary, "script": self.cfg.script,
                            "settings": self.settings(),
                            "color_dr": {"enabled": self.color_dr.enabled, "seed": self.color_dr.seed,

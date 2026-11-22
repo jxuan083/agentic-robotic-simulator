@@ -49,10 +49,11 @@ class _Capture(ByteCapture):
 
 class LivePerception:
     def __init__(self, scene, views, camera='wrist', hz=2.0, log=print, json_path=None, stage='estimate',
-                 delay_s=0.0):
+                 delay_s=0.0, fault=None):
         self.stage = stage
         if camera == 'both':
-            self.children = {name: LivePerception(scene, views, name, hz, log, stage=stage, delay_s=delay_s)
+            self.children = {name: LivePerception(scene, views, name, hz, log, stage=stage, delay_s=delay_s,
+                                                  fault=fault)
                              for name in ('global', 'wrist')}
             self.json_path = None if json_path is None else Path(json_path)
             self._write_json()
@@ -67,7 +68,8 @@ class LivePerception:
         self.base = CameraGeometry.from_scene(scene, camera, [0.]*5 if camera == 'wrist' else None)
         self.estimator = LiveEstimator(float(v(scene['block']['edge'])),
                                        block_support_top(scene))
-        self.work = self.estimator.worker(stage, delay_s)
+        self.work = self.estimator.worker(stage, delay_s, fault if fault is not None and fault.camera == camera
+                                          else None)
         self.snapshot_rgb = None          # the annotated image of `latest` (boxes drawn on the image they came from)
         self.display = False              # someone shows the annotated image (workspace cell or this window)
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='block-perception')

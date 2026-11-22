@@ -22,7 +22,7 @@ def camera_selection(camera):
 
 class MjLivePerception:
     def __init__(self, scene, model, hz=2.0, log=print, camera="both", json_path=None, stage="estimate",
-                 delay_s=0.0):
+                 delay_s=0.0, fault=None):
         if not np.isfinite(hz) or not 0 < hz <= 30:
             raise ValueError("perception_hz must be finite and in (0, 30]")
         self.scene_cfg, self.model = scene, model
@@ -48,7 +48,8 @@ class MjLivePerception:
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mujoco-perception")
         self.estimators = {key: LiveEstimator(self.edge, self.floor) for key in self.specs}
         self.stage = stage
-        self.work = {key: est.worker(stage, delay_s) for key, est in self.estimators.items()}
+        self.work = {key: est.worker(stage, delay_s, fault if fault is not None and fault.camera == key else None)
+                     for key, est in self.estimators.items()}
         self.renderers = {}
         self.latest, self.futures, self.last_capture = {}, {}, {}
         self.generation = {key: 0 for key in self.specs}

@@ -1,0 +1,19 @@
+# Screen video on a platform that cannot record (PR #17 round 3 re-review; Windows: no X11 window ids). On Linux the
+# same state is forced with ARS_SCREEN_VIDEO=off. The button is disabled (a click does nothing), the right column
+# says why, no helper / control directory is used, and the operator workspace works as usual.
+- {wait: 3.0}
+- {check: "'Screen video:' in screen_text and ('platform' in screen_text or 'turned off' in screen_text)", label: "unavailable: the right column says screen video is not available"}
+- {click: screen_video}
+- {wait: 1.0}
+- {check: "not screen and 'REC' not in screen_text and 'saved' not in screen_text", label: "unavailable: the disabled button starts nothing"}
+- {mark: start}
+- {hold: [W], until: "False", sim_timeout: 0.5}
+- {check: "target[0] - m['start']['target'][0] > 0.03", label: "keyboard moves the EE"}
+- {tap: M}
+- {wait: 2.0}
+- {check: "focus_mode and fullscreen", label: "workspace: fullscreen"}
+- {vdrag_to: [0.22, 0.06], tol: 0.003, timeout: 10}
+- {check: "abs(target[0] - 0.22) < 0.004 and abs(target[1] - 0.06) < 0.004", label: "mouse drag moves the EE target"}
+- {tap: M}
+- {wait: 2.0}
+- {check: "not focus_mode and not fullscreen", label: "workspace: back to the window"}

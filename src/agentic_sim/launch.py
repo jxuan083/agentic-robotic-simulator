@@ -35,6 +35,7 @@ class RecordOptions:
     wrist_lens: str | None = None   # None = the scene default ("real" in lab_20261120)
     perception: dict = field(default_factory=dict)   # agentic_sim.perception_cli.options(): {} = off
     run_id: str | None = None       # labels this launch's recorder events (the launcher reads only its own)
+    screen_video_dir: str | None = None   # right-column screen video control directory (the launcher runs its agent)
 
 
 RECORD_EXPERIMENT = "lab_20261120"
@@ -71,6 +72,7 @@ class RunOptions:
     perception_json: str | None = None
     perception_stage: str = "estimate"   # "capture": capture only (benchmark)
     perception_delay: float = 0.0        # test only: late estimates
+    perception_fault: str | None = None  # test only: CAMERA:AFTER:DURATION failing estimates
     annotations: str = "on"              # camera cells start annotated ("on") or raw ("off")
     focus: bool = False
     color_dr: bool = False
@@ -79,6 +81,7 @@ class RunOptions:
     block_colors: list | None = None  # colour name per block (task scenes); sets the block count
     wrist_lens: str | None = None   # wrist camera image: "real" (raw-looking, distorted) | "pinhole"; None = scene default
     video: bool = True              # acceptance only: record the app window
+    screen_video_dir: str | None = None   # teleop: right-column screen video control directory (agentic_sim.screen_video)
 
     def merged(self, forced: dict) -> "RunOptions":
         """Options with a scenario's forced options applied."""
@@ -168,6 +171,8 @@ def build_record(backend: str, exp: Experiment, rec: RecordOptions) -> Command:
     args += ["--target_color", rec.target_color, "--record_hz", f"{rec.record_hz:g}", "--record", record_dir(rec.out_dir)]
     if rec.run_id:
         args += ["--record_run_id", rec.run_id]
+    if rec.screen_video_dir:
+        args += ["--screen_video_dir", rec.screen_video_dir]
     return Command(["docker/isaac/run.sh", "/isaac-sim/python.sh", "scripts/isaac_ee_teleop.py"] + args)
 
 
@@ -184,10 +189,11 @@ def build(backend: str, exp: Experiment, mode: str, opts: RunOptions | None = No
     if mode == "teleop":
         if scenario:
             raise LaunchError("a scenario is only used in acceptance mode")
+        sv = ["--screen_video_dir", opts.screen_video_dir] if opts.screen_video_dir else []
         if backend == "mujoco":
-            return Command(["uv", "run", "scripts/mujoco_ee_teleop.py"] + _app_args(exp, opts, backend))
+            return Command(["uv", "run", "scripts/mujoco_ee_teleop.py"] + _app_args(exp, opts, backend) + sv)
         return Command(["docker/isaac/run.sh", "/isaac-sim/python.sh", "scripts/isaac_ee_teleop.py"]
-                       + _app_args(exp, opts))
+                       + _app_args(exp, opts) + sv)
 
     if not scenario:
         raise LaunchError(f"acceptance mode needs a scenario "

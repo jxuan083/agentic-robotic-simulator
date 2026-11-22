@@ -133,6 +133,7 @@ def status_info(session, now: float) -> dict:
                 session.block_color_names[0] if session.recorder is not None and session.block_color_names else None),
             "task": task, "jaw": session.last_frame.get("jaw"), "gripper_cmd": s.gripper,
             "gripper_open": s.gripper > mid, "recording": rec, "paused": session.paused, "perception": perc,
+            "screen_video": session.screen_video.text(),
             "perception_stage": getattr(session.live_perception, "stage", "estimate")}
 
 

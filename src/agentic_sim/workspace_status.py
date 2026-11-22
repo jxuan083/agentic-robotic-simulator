@@ -9,6 +9,8 @@ Clocks (kept apart, never mixed):
   - Perception result age: host monotonic now minus the capture time of the image the result was computed from
     (a late result keeps its original capture time). No result: "no result yet" (尚無結果).
   - Perception latency: completion minus capture time of the latest result (how long the estimate took).
+  - A capture or estimate error of a camera (the engine clears it only when that camera's next estimate succeeds)
+    takes its cell back to the live raw image with the reason until then; the other camera is not affected.
 Physical waits in the scripted operator use simulated time (agentic_sim.teleop.script_core: settle, sim_timeout);
 UI waits and service timeouts use host monotonic time.
 """
@@ -70,14 +72,29 @@ def fmt(x, spec=".1f", none="—") -> str:
 def perception_item(state: dict | None, now: float) -> dict:
     """Age / latency / staleness of one camera's latest result (state: the engine's per-camera perception state)."""
     latest = (state or {}).get("latest")
+    error = (state or {}).get("error")
     if not latest:
-        return {"age_s": None, "latency_s": None, "stale": True, "frame": None, "error": (state or {}).get("error")}
+        return {"age_s": None, "latency_s": None, "stale": True, "frame": None, "error": error}
     cap = latest.get("captured_at_monotonic_s")
     done = latest.get("completed_at_monotonic_s")
     age = None if cap is None else now - cap
     return {"age_s": age, "latency_s": None if (cap is None or done is None) else done - cap,
-            "stale": age is None or age > STALE_S, "frame": latest.get("frame_number"),
-            "error": (state or {}).get("error")}
+            "stale": age is None or age > STALE_S or bool(error), "frame": latest.get("frame_number"),
+            "error": error}
+
+
+def short_error(error, n: int = 60) -> str:
+    text = " ".join(str(error).split())
+    return text if len(text) <= n else text[:n - 3] + "..."
+
+
+def perception_items(live_perception, now: float) -> dict | None:
+    """camera key -> perception_item of an engine's live perception (either state shape), None when it is off."""
+    if live_perception is None:
+        return None
+    st = live_perception.state()
+    cams = st["cameras"] if "cameras" in st else {st["camera"]: st}
+    return {k: perception_item(v, now) for k, v in cams.items()}
 
 
 def cell_view(annotate: bool, item: dict | None) -> tuple:
@@ -86,6 +103,8 @@ def cell_view(annotate: bool, item: dict | None) -> tuple:
     frame); a stale or missing result shows the raw camera with the reason."""
     if not annotate:
         return "raw", "raw"
+    if item is not None and item.get("error"):
+        return "raw", f"raw (perception error: {short_error(item['error'])})"
     if item is None or item.get("age_s") is None:
         return "raw", f"raw (annotation: {NO_RESULT})"
     if item["stale"]:
@@ -94,8 +113,9 @@ def cell_view(annotate: bool, item: dict | None) -> tuple:
 
 
 def status_lines(info: dict) -> list:
-    """The status column. info: target_color, task, gripper_cmd, jaw, gripper_open, recording (dict or None),
-    paused, clocks (Clocks), perception {camera: perception_item} or None, perception_stage."""
+    """The status column. info: target_color, task, gripper_cmd, jaw, gripper_open, recording (dict or None: the
+    demo data recorder), screen_video (line of agentic_sim.screen_video, or None), paused, clocks (Clocks),
+    perception {camera: perception_item} or None, perception_stage."""
     c = info["clocks"]
     lines = [f"Target colour: {info.get('target_color') or '-'}", f"Task: {info.get('task') or 'manual teleop'}"]
     jaw, cmd = info.get("jaw"), info.get("gripper_cmd")
@@ -103,12 +123,14 @@ def status_lines(info: dict) -> list:
         state = "open" if info.get("gripper_open") else "closed"
         lines.append(f"Gripper: {state} (cmd {fmt(cmd, '.2f')}, measured {fmt(jaw, '.2f')} rad)")
     rec = info.get("recording")
+    if info.get("screen_video"):
+        lines.append(info["screen_video"])
     if rec is None:
-        lines.append("Recording: off")
+        lines.append("Demo data: off")
     else:
         text = {"waiting_cameras": "waiting for cameras", "recording": "RECORDING",
                 "saved": "saved - press R for the next one"}.get(rec.get("state"), rec.get("state"))
-        lines.append(f"Recording: {text}" + (f"  {rec['frames']} frames" if rec.get("state") == "recording" else ""))
+        lines.append(f"Demo data: {text}" + (f"  {rec['frames']} frames" if rec.get("state") == "recording" else ""))
         if rec.get("episode"):
             lines.append(f"  {os.path.basename(str(rec['episode']).rstrip('/'))}")
     lines.append("PAUSED (simulated time stopped)" if info.get("paused") else "")
@@ -125,14 +147,16 @@ def status_lines(info: dict) -> list:
             else:
                 lines.append(f"  {cam}: {it['age_s']:.1f} s old, took {fmt(it['latency_s'], '.2f')} s"
                              + ("  STALE" if it["stale"] else ""))
+                if it.get("error"):
+                    lines.append(f"    ERROR: {short_error(it['error'], 48)}")
     return [x for x in lines if x != ""]
 
 
 class MetricsLog:
     """One JSON line per host second (benchmarks): UI FPS, RTF, perception age / latency per camera."""
 
-    def __init__(self, path: str | None, period_s: float = 1.0):
-        self.path, self.period_s = path, period_s
+    def __init__(self, path: str | None, period_s: float = 1.0, run_id: str | None = None):
+        self.path, self.period_s, self.run_id = path, period_s, run_id
         self._next = None
         self._f = None
         if path:
@@ -150,6 +174,8 @@ class MetricsLog:
         self._next = now + self.period_s
         row = {"t_host": round(now, 4), "t_sim": round(t_sim, 4), "ui_fps": clocks.ui_fps, "rtf": clocks.rtf,
                "paused": clocks.paused}
+        if self.run_id:
+            row["run_id"] = self.run_id
         if perception is not None:
             row["perception"] = {k: {"age_s": v["age_s"], "latency_s": v["latency_s"], "frame": v["frame"]}
                                  for k, v in perception.items()}

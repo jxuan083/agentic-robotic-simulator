@@ -72,7 +72,7 @@ def test_status_lines_and_metrics_log(tmp_path):
                           "paused": False, "perception": {"global": perception_item(None, 1.0)}})
     text = "\n".join(lines)
     assert "Target colour: yellow" in text and "Task: manual teleop" in text and "Gripper: closed" in text
-    assert "Recording: RECORDING  42 frames" in text and "RTF 0.50" in text and f"global: {NO_RESULT}" in text
+    assert "Demo data: RECORDING  42 frames" in text and "RTF 0.50" in text and f"global: {NO_RESULT}" in text
     log = MetricsLog(str(tmp_path / "m.jsonl"), period_s=0.5)
     for i in range(5):
         log.sample(i * 0.3, i * 0.1, c, {"global": perception_item(None, 0.0)})
