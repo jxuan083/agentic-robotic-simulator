@@ -17,6 +17,8 @@ gripper:
 grasp_check:
   lifted_dz: 0.03           # m; block centre risen this much after the lift = holding
   max_block_ee: 0.035       # m; block centre within this of the EE while holding (otherwise: dropped)
+  jaw_hold_min_rad: 0.10    # measured jaw at least this = something between the fingers (PickAt). MuJoCo, 117
+                            # picks: holding 0.127-0.234, empty or slipped <= 0.113 at the close, <= 0.071 at the drop
 verify:
   settle_s: 1.5             # wait up to this long for the placed block to come to rest
   rest_speed: 0.01          # m/s

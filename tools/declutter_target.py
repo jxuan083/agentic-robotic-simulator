@@ -35,7 +35,7 @@ from agentic_sim.mujoco_backend.session import MjSession, SessionConfig
 from agentic_sim.perception.exploration import score_target_confirmation
 from agentic_sim.perception.height import backproject, height_check, polygon_gap
 from agentic_sim.random_blocks import grasp_ik_checker
-from agentic_sim.scene_layout import trays
+from agentic_sim.scene_layout import block_in_tray, trays
 from agentic_sim.task.declutter import (free_spot, grasp_yaw_offset, item_gap, item_key, items_from,
                                         localize_candidate, plan, push_path)
 from agentic_sim.task.skills import Home, Motion, PickAt, Place, Push, World, wrap_quarter
@@ -159,7 +159,9 @@ def run_episode(ep, args, cfg, task_cfg, reachable, random_path, out):
         target, scenario = choose_target(colors, truth0, rng, args.target, hc["close_gap_m"])
         status(f"Target {target} ({scenario})")
 
-        world = World(trays={"storage": tray}, edge=edge, colors=colors, init_pos=list(session.sc.block_init_pos),
+        placement = trays(session.scene_cfg)["placement_beige"]
+        world = World(trays={"storage": tray, "placement": placement}, edge=edge, colors=colors,
+                      init_pos=list(session.sc.block_init_pos),
                       home=np.asarray(session.ctrl.p.home_ee, float), slots=[])
         events = []
         ctx = SimpleNamespace(ctrl=session.ctrl, world=world, cfg=task_cfg,
@@ -234,6 +236,11 @@ def run_episode(ep, args, cfg, task_cfg, reachable, random_path, out):
             # the moved block's own place stays blocked: a hidden block may lie under it
             spot = free_spot(items, tray, edge, reachable, base_xy, avoid, dc["place_clearance_m"],
                              dc["place_avoid_target_m"])
+            # the confirmed target itself: once it is in the gripper, carry it on to the placement tray instead of
+            # setting it down to be localized and grasped again
+            deliver = decision["item"] == decision["target"] and item_key(items[decision["item"]]) in confirmed
+            if deliver:
+                spot = free_spot([], placement, edge, reachable, base_xy)
             status(f"Target {target} | move {it['color']} ({decision['reason']})")
             acts = []
             pick = None
@@ -256,7 +263,8 @@ def run_episode(ep, args, cfg, task_cfg, reachable, random_path, out):
                                                          yaw_offset=off), status)
                 acts.append(pick)
                 if pick["status"] == "succeeded":
-                    acts.append(run_skill(session, driver, Place(ctx, block=truth_b, xy=spot, tray="storage"), status))
+                    acts.append(run_skill(session, driver, Place(ctx, block=truth_b, xy=spot,
+                                                                 tray="placement" if deliver else "storage"), status))
             if pick is not None and pick["status"] != "succeeded":
                 acts.append(run_skill(session, driver, Home(ctx), status))   # a failed pick can leave the wrist turned
             if pick is None or pick["status"] != "succeeded":
@@ -275,10 +283,14 @@ def run_episode(ep, args, cfg, task_cfg, reachable, random_path, out):
                 key = (round(it["xy"][0], 2), round(it["xy"][1], 2))
                 failed[key] = failed.get(key, 0) + 1
             acts.append(run_skill(session, driver, Home(ctx), status))
-            row.update(spot=spot, actions=acts)
+            row.update(spot=spot, actions=acts, deliver=deliver)
+            if deliver and pick is not None and pick["status"] == "succeeded":
+                result = {"status": "delivered", "reason": "confirmed target carried to the placement tray",
+                          "placement_xy_m": spot}
+                break
         session.task = None
         declutter_s = session.t_sim - t0
-        if result is None or result["status"] not in ("found", "unreachable"):
+        if result is None or result["status"] not in ("found", "unreachable", "delivered"):
             gave_up = decision["action"] in ("gave_up", "move")    # "move": the rounds ran out after a move
             result = {"status": "gave_up" if gave_up else "not_found",
                       "reason": decision["reason"] if decision["action"] != "move" else "rounds ran out after a move",
@@ -310,6 +322,11 @@ def run_episode(ep, args, cfg, task_cfg, reachable, random_path, out):
         success = bool(result["status"] == "found" and score.get("pose_ok") and ok_block
                        and ok_block["label"] == "upright" and not ok_block["covered"]
                        and ok_block["min_gap_mm"] >= hc["close_gap_m"] * 1000 and ok_block["reachable"])
+        if result["status"] == "delivered":   # a block of the target colour now rests in the placement tray
+            pos_now = session.block_positions()
+            in_place = [c for c, p in zip(colors, pos_now) if block_in_tray(p, placement, edge)]
+            success = bool(in_place) and all(c == target for c in in_place)
+            score["delivered_colors"] = in_place
         out_of_tray = sum(1 for t in truth_after if t["label"] == "off_tray")
         acts = [a for rw in rounds for a in rw.get("actions", []) if a["skill"] != "home"]
         episode = {"episode": ep, "target_color": target, "scenario": scenario, "ops": ops, "result": result,
