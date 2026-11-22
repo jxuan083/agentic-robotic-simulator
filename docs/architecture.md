@@ -2,6 +2,8 @@
 
 ## 分層
 
+下圖是目標架構。目前可執行的模擬流程、獨立定位基準與待整合的實機項目見 [status.md](status.md)。
+
 ```mermaid
 flowchart TD
     IN[Leader／Keyboard／Mouse／Controller] --> OWN[控制權與輸入映射]
@@ -44,23 +46,11 @@ flowchart TD
 | `mujoco` | MuJoCo 場景（同一份場景設定），在不能跑 Isaac 的電腦上做物理與流程驗證（[mujoco-backend.md](mujoco-backend.md)） | 程式重置場景與隨機種子 |
 | `real` | SO-101 實機 | 現場復位流程，不假裝提供與模擬相同的重置 |
 
-模擬真值只用於評分與除錯；正式 agent 執行使用感知結果，評估報表分開標示兩者。
+現行整單腳本使用模擬真值核對交付；抓前定位基準以影像配對目標，用真值獨立評分。實機整單規劃採用感知結果。
 
-## 模組（建議，尚未建立）
+## 現有模組與待整合部分
 
-| 模組 | 內容 |
-|---|---|
-| `core` | 共用資料型別、設定載入、命令契約、控制權 |
-| `backends` | `mock`、`isaac`、`mujoco`、`real` |
-| `teleop` | keyboard／mouse EE、leader 本機輸入 adapter、controller |
-| `perception` | 辨色、位置轉換、結果核對 |
-| `policies` | ACT adapter 與其他政策 adapter |
-| `data` | episode recorder、檢查、分割、manifest |
-| `training` | 訓練入口與設定 |
-| `evaluation` | rollout 評估與報表 |
-| `agent` | agent、任務執行器、需求帳本 |
-
-目錄與套件名稱在第一份 issue 確認後才建立。
+`src/agentic_sim/` 內的 `isaac/`、`mujoco_backend/` 與 `teleop/` 負責模擬和操作，`capture/` 負責示範錄製，`perception/` 負責影像感知。`chat/`、`server/`、`task/` 分別處理聊天、模擬服務及任務執行。定位基準從 `tools/` 單獨啟動。ACT adapter、訓練及完整實機後端待整合。
 
 ## 依賴環境
 
@@ -68,11 +58,11 @@ flowchart TD
 
 | 環境 | 主要依賴 | 備註 |
 |---|---|---|
-| 模擬端 | Isaac Sim／Isaac Lab、SO-101 資產 | 版本與 NVIDIA SO-101 Workshop 配套核對後記錄 |
+| 模擬端 | Isaac Sim／Isaac Lab 或 MuJoCo，各自的 SO-101 資產 | 依所選引擎使用對應環境 |
 | 訓練端 | LeRobot、PyTorch | 與資料格式版本一致 |
 | 實機執行端 | LeRobot（Feetech 驅動）、相機驅動 | 沿用既有可運作環境，不為整合而升級 |
 
-`core` 應能在三個環境中載入；只有 backend 與特定 adapter 依賴各自環境。具體版本見 [status.md](status.md#待確認)。
+共用型別與設定應能在三個環境中載入；只有 backend 與特定 adapter 依賴各自環境。具體版本見 [status.md](status.md#待確認)。
 
 ## 設定與資料的存放
 
