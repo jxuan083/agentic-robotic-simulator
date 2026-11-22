@@ -16,6 +16,8 @@ from dataclasses import replace
 from agentic_sim.config import load, v
 from agentic_sim.scene_layout import TRAYS, palette_by_name, table_box, tray_parts
 
+REGION_TRAY = {"storage": "storage_pink", "placement": "placement_beige"}
+
 DEFAULT_CONFIG = "configs/random_blocks.yaml"
 
 
@@ -66,18 +68,18 @@ def legal_position(scene, xy, placed, region, settings, *, yaw_deg=None, placed_
     elif any(not _separated_cubes(xy, yaw, other, math.radians(angle), edge, gap)
              for other, angle in zip(placed, placed_yaws, strict=True)):
         return False
-    if region == "storage":
-        info = tray_parts(scene["trays"]["storage_pink"])[1]
+    if region in REGION_TRAY:
+        info = tray_parts(scene["trays"][REGION_TRAY[region]])[1]
         local = _local(xy, info["center"], info["yaw"])
         half = radius if yaw is None else _footprint_half_extent(edge, yaw - info["yaw"])
         if any(abs(local[k]) + half + margin > info["inner_half"][k] for k in (0, 1)):
             return False
         # If trays overlap, do not assume their floors/walls form a valid support.
-        obstacles = ("placement_beige",)
+        obstacles = (name for name in TRAYS if name != REGION_TRAY[region])
     elif region == "table":
         obstacles = TRAYS
     else:
-        raise ValueError("random region must be storage or table")
+        raise ValueError("random region must be storage, placement or table")
     for name in obstacles:
         spec = scene["trays"][name]
         local = _local(xy, v(spec["center_xy"]), math.radians(float(v(spec["yaw_deg"]))))
@@ -92,8 +94,8 @@ def sample_scene(scene, settings, *, seed, episode=0, region="storage", reachabl
 
     Never returns a partial layout: infeasible requests raise after bounded attempts.
     """
-    if region not in ("storage", "table"):
-        raise ValueError("random region must be storage or table")
+    if region not in REGION_TRAY and region != "table":
+        raise ValueError("random region must be storage, placement or table")
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ValueError("random seed must be a nonnegative integer")
     if isinstance(episode, bool) or not isinstance(episode, int) or episode < 0:
@@ -132,13 +134,13 @@ def sample_scene(scene, settings, *, seed, episode=0, region="storage", reachabl
         count = len(colors)
     rotated = settings.get("yaw_aware_footprints", False)
     edge = float(v(scene["block"]["edge"]))
-    floor = tray_parts(scene["trays"]["storage_pink"])[1]["floor_top"] if region == "storage" else 0.0
+    floor = tray_parts(scene["trays"][REGION_TRAY[region]])[1]["floor_top"] if region in REGION_TRAY else 0.0
     for _ in range(restarts):
         positions = []
         yaws = []
         for _ in range(attempts):
-            if region == "storage":
-                info = tray_parts(scene["trays"]["storage_pink"])[1]
+            if region in REGION_TRAY:
+                info = tray_parts(scene["trays"][REGION_TRAY[region]])[1]
                 lx, ly = (rng.uniform(-half, half) for half in info["inner_half"])
                 c, s = math.cos(info["yaw"]), math.sin(info["yaw"])
                 xy = (info["center"][0] + c * lx - s * ly, info["center"][1] + s * lx + c * ly)

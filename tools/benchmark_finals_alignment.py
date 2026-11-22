@@ -21,9 +21,9 @@ from agentic_sim.config import load, v
 from agentic_sim.kinematics import So101Chain
 from agentic_sim.mujoco_backend.live_perception import MjLivePerception
 from agentic_sim.mujoco_backend.model import build
-from agentic_sim.perception.localize import global_candidates, refine_with_wrist
+from agentic_sim.perception.localize import global_candidates, plan_wrist_view, refine_with_wrist
 from agentic_sim.perception.vertices import cube_vertices
-from agentic_sim.random_blocks import grasp_ik_checker, sample_scene
+from agentic_sim.random_blocks import REGION_TRAY, grasp_ik_checker, sample_scene
 from agentic_sim.scene_layout import block_in_tray, yaw_quat
 from agentic_sim.teleop.ee_target import load_controller
 from agentic_sim.task.wrist_alignment import align_from_hover
@@ -123,11 +123,15 @@ class Benchmark:
         self.state_size = mujoco.mj_stateSize(self.model, STATE)
         self.perception = MjLivePerception(self.scene_config, self.model, log=lambda _: None)
         self.depth_renderer = None
-        self.floor = self.scene.trays["storage_pink"]["floor_top"]
+        self.region = cfg.get("source_region", "storage")
+        self.source_tray = self.scene.trays[REGION_TRAY[self.region]]
+        self.floor = self.source_tray["floor_top"]
+        for estimator in self.perception.estimators.values():
+            estimator.floor = self.floor
         self.jaw_open, self.jaw_closed = ctrl.p.gripper_open, ctrl.p.gripper_closed
 
     def episode(self, seed, cycle_index):
-        _, _, layout = sample_scene(self.scene_config, self.layout_config, seed=seed, reachable=self.reachable)
+        _, _, layout = sample_scene(self.scene_config, self.layout_config, seed=seed, region=self.region, reachable=self.reachable)
         color = self.cfg["target_cycle"][cycle_index % len(self.cfg["target_cycle"])]
         target = min((i for i, c in enumerate(self.colors) if c == color),
                      key=lambda i: np.linalg.norm(np.asarray(layout["positions_m"][i][:2]) - self.pan))
@@ -196,15 +200,21 @@ class Benchmark:
         _, record = self.perception.estimators[key].predict(rgb, geometry, 0, now)
         return record
 
-    def coarse(self, episode, use_depth=False):
+    def coarse(self, episode, use_depth=False, *, scene_candidates=None):
         now = time.perf_counter()
         rgb, geometry = self.perception.capture_rgb("global", self.data)
         fits = self.perception.estimators["global"].fit_detections(rgb, geometry, now)
         record = {"detections": [{"detection_id": i, "color": item.color, "geometry": fit}
                                  for i, (item, fit) in enumerate(fits) if fit["status"] == "estimated"
-                                 and block_in_tray(fit["center_xyz_m"], self.scene.trays["storage_pink"],
+                                 and block_in_tray(fit["center_xyz_m"], self.source_tray,
                                                    self.scene.edge)]}
         candidates = global_candidates(record, episode.target_color, {}, base_xy=self.pan)
+        if scene_candidates is not None:
+            for detection in record["detections"]:
+                pose = Estimate.from_record(detection["geometry"])
+                # All candidates share the same injected camera-frame translation.
+                scene_candidates.append((detection["color"], Estimate(pose.xy + episode.offset_xy,
+                                                                       pose.yaw + episode.offset_yaw, pose.fit)))
         if not candidates:
             return None, None, None
         rgb_pose = Estimate.from_record(candidates[0])
@@ -277,14 +287,25 @@ class Benchmark:
         q = self.solve(pose.xy, self.cfg["hover_z_m"], self.heading(pose))
         self.motion(0.55, q=q)
 
-    def grasp(self, episode, pose, action, start):
+    def recenter_wrist(self, coarse, *, height=None):
+        """Move the camera over the image-derived candidate at the original hover height."""
+        current_q = self.data.qpos[self.scene.arm_qpos] - self.scene.arm_offset
+        target = [*coarse.xy, self.floor + self.scene.edge / 2]
+        plan = plan_wrist_view(self.chain, self.ctrl.p, self.scene_config, target,
+                               self.cfg["hover_z_m"] if height is None else height, current_q)
+        if plan is not None:
+            self.motion(0.55, q=np.asarray(plan["q"]))
+        return plan
+
+    def grasp(self, episode, pose, action, start, *, from_hover=False):
         # Common script: align over the cube, descend, close, lift and hold.
         offset = FINAL_OFFSETS[action]
         yaw = self.heading(pose)
         axis = np.array([math.cos(yaw), math.sin(yaw)])
         cross = np.array([-axis[1], axis[0]])
         xy = pose.xy + (offset[0] - self.cfg["finger_offset_m"]) * axis + offset[1] * cross
-        q = self.solve(xy, self.cfg["hover_z_m"], yaw)
+        q = (self.data.qpos[self.scene.arm_qpos] - self.scene.arm_offset if from_hover else
+             self.solve(xy, self.cfg["hover_z_m"], yaw))
         stages = []
         dz = 0.0 if pose.z is None else pose.z - (self.floor + self.scene.edge / 2)
         for z in (0.053, self.cfg["grasp_z_m"] + dz, self.cfg["lift_z_m"]):
@@ -296,7 +317,8 @@ class Benchmark:
             return {"status": "grasp_ik_failed", "success": False}, -0.55
         over, mid, low = stages
         score = Score(episode, self.cfg, start)
-        self.motion(0.55, q=over)
+        if not from_hover:
+            self.motion(0.55, q=over)
         self.motion(0.45, q=mid)
         self.motion(0.55, q=low)
         self.motion(0.80, jaw=self.jaw_closed)
@@ -402,6 +424,11 @@ def run_trial(sim, episode, method, policy):
                 action0 = 0  # Fixed full correction in method B.
                 if method == METHODS[2]:
                     action0 = int(np.argmax(features(coarse, first, 0.0) @ policy[0]))
+                if first is None and method == "B_wrist" and sim.cfg.get("retry_wrist_view"):
+                    plan = sim.recenter_wrist(coarse)
+                    result["view_retry"] = {"reachable": plan is not None, "plan": plan}
+                    if plan is not None:
+                        return
                 sim.next_view(coarse, first, action0)
 
             wrist0, wrist1, final = align_from_hover(coarse, observe, reposition)
@@ -480,12 +507,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--method", choices=("B", "all"), default="all",
                         help="Run the fixed wrist policy alone (B), or the paired four-method experiment")
+    parser.add_argument("--retry-wrist-view", action="store_true",
+                        help="For B, re-center the camera on the coarse estimate if the first wrist fit fails")
     parser.add_argument("--config", default="configs/benchmarks/finals_alignment.yaml")
     parser.add_argument("--out", type=Path, default=Path("outputs/finals_alignment"))
     parser.add_argument("--policy", type=Path, help="Evaluate a previously fitted policy, skipping training")
     parser.add_argument("--smoke", action="store_true", help="Use separate pilot ranges with three scenes each")
     args = parser.parse_args()
     cfg = load(args.config)
+    if args.retry_wrist_view:
+        if args.method != "B":
+            parser.error("--retry-wrist-view requires --method B")
+        cfg["retry_wrist_view"] = True
     if args.smoke:
         cfg.update(train_seeds={"start": 43000, "count": 3}, eval_seeds={"start": 44000, "count": 3})
     if set(seeds(cfg["train_seeds"])) & set(seeds(cfg["eval_seeds"])):

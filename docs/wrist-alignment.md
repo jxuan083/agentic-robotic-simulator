@@ -1,5 +1,7 @@
 # B 方案：腕部定位與 ACT 接手
 
+本輪使用 `tools/benchmark_verified_overhead.py` 重播 234 場及 24 場相鄰紅塊。5060 分別為 234/234（首次 233）與 19/24（5 場停止），兩組抓錯鄰塊均為 0。[逐場對照資料](nearest-color-5060.jsonl) 含四顆的場景座標、顏色、yaw、注入偏差及首次／重抓穩定提起的物件 ID，供 Linux 與 Isaac Sim 復現。下方 42 場單獨入口保留最初的 B 基準。
+
 ## 抓一顆積木時誰做什麼
 
 | 階段 | 輸入與輸出 | 執行位置 |
@@ -32,3 +34,28 @@ MUJOCO_GL=egl python tools/benchmark_finals_alignment.py --method B --out output
 - Gym-Anything 將場景、任務和評分明確化；ENPIRE 將策略執行、評估與改善串成循環。本案保留固定場景和獨立評分，用同一組條件比較策略。[Gym-Anything](https://gym-anything.github.io/robotics/) · [ENPIRE](https://research.nvidia.com/labs/gear/enpire/)
 - ACT 原作從遙操作示範學習動作段；LeHome 提供 SO-ARM101 跨模擬與實機的參考。本案的單臂積木資料、接手幀與成功條件需獨立驗證。[ACT](https://tonyzhaozh.github.io/aloha/) · [LeHome](https://ilialarchenko.com/projects/lehome2026/)
 
+
+## 擴增擺位與下降前的正上方驗證
+
+在 MuJoCo 專用環境的 repo 根目錄執行。輸出使用新的目錄。
+
+~~~bash
+python tools/benchmark_verified_overhead.py --out outputs/verified_overhead_run
+~~~
+
+場景表在 `configs/benchmarks/finals_overhead_suite.yaml`。原粉盤 42 場作回歸；另設四組各 48 場，各組紅、藍、黃每色 16 場。四顆方塊各自隨機放置並旋轉。小間距組把設定的盤邊留白／鄰塊間距從 16／27 mm 降至 5／7 mm，這些數字是抽樣下限。大誤差組將初始全域姿態擾動上限由 14 mm／20° 提高至 22 mm／30°。米盤組改從米盤選料，仍採同一套估姿與抬升判定。
+
+1. 全域粗定位後接近指定方塊。若全域沒有候選，以腕部查看來源盤的已知區域；本基準配置固定為兩紅一藍一黃，找紅時要看到兩顆再比到基座的距離。此搜尋條件只適用這個配置。
+2. 腕部估姿失敗或第一次懸停不到位時，改變觀看位置、用新腕圖重新定位。換視角後仍找不到可靠姿態就結束本次嘗試。
+3. 用確認後的估計命令手臂張爪移回目標正上方（EE 高度 80 mm，以場景座標為準）。讀實際關節值做正向運動學；控制點對影像估計的水平誤差、高度誤差各須 ≤3 mm，手臂各關節速率 ≤0.15 rad/s。通過後才下降。在下降階段沿用原腳本的固定指側 5 mm 抓點補償。量測點是手臂控制點；手腕允許傾斜。
+4. 抬升後若爪位接近空爪閉合端（距閉合命令 ≤0.05 rad），再換視角確認目標仍在盤內。只有重新認得目標，才張爪回正上方，允許一次重抓。原始與重抓結果分開紀錄。
+
+讀 `trials.jsonl` 的 `views` 看腕圖是否取得姿態，`retry` 看換視角原因，`hovers` 看實際到位情形，`first_grasp` 和 `empty_grasp_retry` 看接觸結果。`scored_xy_error_mm` 是事後用 MuJoCo 方塊真值核對的水平誤差，控制端只使用影像姿態與關節回讀。穩定提起用同一門檻：指定方塊中心升高至少 35 mm 並保持 0.40 模擬秒。
+
+### 相鄰色塊與同色選取
+
+先依訂單篩來源盤與顏色，再按候選中心到基座旋轉軸的桌面 XY 距離排序。初始全域影像只看出部分同色候選時，先用腕部複查。本基準事先知道兩紅一藍一黃，這項數量檢查用於此次試驗。現場應以當下已核對的庫存為準。
+
+選定後保存目標與同色鄰塊的估計位置。新的腕部估計須在配對距離內，且至少比其他同色候選更接近鎖定目標 3 mm。一般換視角仍無法辨識時，利用 10 cm 內的已知鄰塊估計投影重疊、離畫面邊緣的距離，在可達姿態中最多再取兩個視角。確認後才回到目標正上方，辨不清就停止。
+
+要重播相鄰紅塊專測，執行 `python tools/benchmark_verified_overhead.py --suite configs/benchmarks/adjacent_red_holdout.yaml --out outputs/adjacent_red_repro`。這 24 個場景另從新種子依序挑出，兩紅塊中心距離 ≤65 mm。以每次實際穩定離盤的物件 ID 核對選擇，若提起遠顆或連同鄰塊一起提起，另記錯抓。
