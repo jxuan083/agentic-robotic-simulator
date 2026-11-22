@@ -27,7 +27,7 @@ from agentic_sim.teleop.keys import KeyState  # noqa: E402
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 from agentic_sim.random_blocks import add_arguments
 add_arguments(parser)
-from agentic_sim.perception.live import add_arguments as add_perception_arguments
+from agentic_sim.perception_cli import add_arguments as add_perception_arguments
 add_perception_arguments(parser)
 parser.add_argument("--scene", default="configs/scenes/lab_current_minimal.yaml")
 parser.add_argument("--teleop", default="configs/teleop.yaml")

@@ -9,6 +9,8 @@ It depends on each arm's calibration file and stays provisional until a joint-by
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 # (min, max) degrees of each USD joint that LeRobot -100 / +100 map to (Workshop lerobot_interface.py)
@@ -25,3 +27,14 @@ def lerobot_to_shared(readings) -> tuple:
     g0, g1 = GRIPPER_RANGE_DEG
     jaw = g0 + r[5] / 100.0 * (g1 - g0)
     return np.radians(arm), float(np.radians(jaw))
+
+
+def shared_to_lerobot(arm_rad, jaw_rad: float) -> list:
+    """Inverse of lerobot_to_shared: (5 arm angles rad, jaw angle rad) -> LeRobot [pan, lift, elbow, wrist_flex,
+    wrist_roll, gripper %] (same provisional Workshop map)."""
+    lo = np.array([a for a, _ in WORKSHOP_RANGE_DEG], float)
+    hi = np.array([b for _, b in WORKSHOP_RANGE_DEG], float)
+    arm = (np.degrees(np.asarray(arm_rad, float)) - lo) / (hi - lo) * 200.0 - 100.0
+    g0, g1 = GRIPPER_RANGE_DEG
+    grip = (math.degrees(float(jaw_rad)) - g0) / (g1 - g0) * 100.0
+    return [float(x) for x in arm] + [float(grip)]

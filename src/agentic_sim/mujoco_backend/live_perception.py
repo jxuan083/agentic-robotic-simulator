@@ -11,7 +11,7 @@ import numpy as np
 from agentic_sim.perception.live import LiveEstimator
 from agentic_sim.perception.vertices import CameraGeometry
 from agentic_sim.config import v
-from agentic_sim.scene_layout import sensor_cameras, tray_parts
+from agentic_sim.scene_layout import block_support_top, sensor_cameras
 
 
 def camera_selection(camera):
@@ -42,7 +42,7 @@ class MjLivePerception:
         model.vis.global_.offwidth = max(int(model.vis.global_.offwidth), min_w)
         model.vis.global_.offheight = max(int(model.vis.global_.offheight), min_h)
         self.edge = float(v(scene["block"]["edge"]))
-        self.floor = float(tray_parts(scene["trays"]["storage_pink"])[1]["floor_top"])
+        self.floor = block_support_top(scene)
         self.hz, self.period = hz, 1.0 / hz
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mujoco-perception")
         self.estimators = {key: LiveEstimator(self.edge, self.floor) for key in self.specs}

@@ -7,9 +7,9 @@ from agentic_sim.config import load
 from agentic_sim.perception.vertices import CameraGeometry,cube_vertices,estimate_vertices
 
 
-def _camera(distorted=False):
+def _camera(distorted=False,target=(.24,.2,.02)):
     # Camera tilted from vertical, OpenCV +Z forward.
-    position=np.array([.38,-.1,.45]);target=np.array([.24,.2,.02])
+    target=np.asarray(target,float);position=target+[.14,-.3,.43]
     z=target-position;z/=np.linalg.norm(z)
     x=np.cross(z,[0,0,1.]);x/=np.linalg.norm(x)
     y=np.cross(z,x)
@@ -59,3 +59,26 @@ def test_wrist_pose_is_derived_from_joint_state_and_requires_measured_input():
     b=CameraGeometry.from_scene(scene,'wrist',[.2,0,0,0,0],lens_mode='pinhole')
     assert not np.allclose(a.mount_from_cv,b.mount_from_cv)
     assert np.allclose(a.dist,0)
+
+
+@pytest.mark.parametrize('region,support',[('storage',.004),('table',0.)])
+def test_support_height_follows_the_sampled_region(region,support):
+    """Random blocks on the pink tray floor or on the bare table: the spawn and the perception take the same support
+    height (agentic_sim.scene_layout.block_support_top), so the estimated cube centre is support + edge / 2."""
+    from agentic_sim.random_blocks import sample_scene
+    from agentic_sim.scene_layout import block_layout,block_support_top
+    from agentic_sim.config import v
+    scene=load('configs/scenes/lab_20261120.yaml')
+    edge=float(v(scene['block']['edge']))
+    sampled,_,_=sample_scene(scene,load('configs/random_blocks.yaml'),seed=7,region=region)
+    assert block_support_top(sampled)==pytest.approx(support)
+    spawned=np.array(block_layout(sampled).init_pos[0])
+    assert spawned[2]==pytest.approx(support+edge/2+.0005)       # spawned 0.5 mm above the support, settles on it
+    cam=_camera(target=(*spawned[:2],support))
+    xyz=cube_vertices(spawned[:2],.3,edge,support)                # resting on the support
+    mask=np.zeros((480,640),np.uint8)
+    cv2.fillConvexPoly(mask,cv2.convexHull(np.rint(cam.project(xyz)).astype(np.int32)),1)
+    result=estimate_vertices(mask,cam,edge_m=edge,floor_z_m=block_support_top(sampled))
+    assert result['status']=='estimated',result
+    assert result['center_xyz_m'][2]==pytest.approx(support+edge/2,abs=1e-6)
+    assert np.linalg.norm(np.array(result['center_xyz_m'])-xyz.mean(0))<.0015

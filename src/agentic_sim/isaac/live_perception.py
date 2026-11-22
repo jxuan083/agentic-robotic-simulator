@@ -14,7 +14,7 @@ import omni.ui as ui
 from omni.kit.widget.viewport.capture import ByteCapture
 
 from agentic_sim.config import v
-from agentic_sim.scene_layout import tray_parts
+from agentic_sim.scene_layout import block_support_top
 from agentic_sim.perception.live import LiveEstimator, rendered_camera
 from agentic_sim.perception.vertices import CameraGeometry
 
@@ -64,7 +64,7 @@ class LivePerception:
         self.api = views.windows[camera].viewport_api
         self.base = CameraGeometry.from_scene(scene, camera, [0.]*5 if camera == 'wrist' else None)
         self.estimator = LiveEstimator(float(v(scene['block']['edge'])),
-                                       tray_parts(scene['trays']['storage_pink'])[1]['floor_top'])
+                                       block_support_top(scene))
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='block-perception')
         self.inbox = queue.SimpleQueue()
         self.period = 1/hz
@@ -86,7 +86,8 @@ class LivePerception:
                 with ui.ScrollingFrame():
                     self.coordinates = ui.Label('Mount XYZ in metres; corners inferred; IDs belong to this frame.',
                                                 alignment=ui.Alignment.LEFT_TOP, word_wrap=True)
-        log(f'live perception: {camera}, up to {hz:g} Hz; upright cubes on storage floor only')
+        log(f'live perception: {camera}, up to {hz:g} Hz; upright cubes on the scene support '
+            f'(z {self.estimator.floor * 1000:.1f} mm)')
         # A newly constructed session supersedes any previous scene in the same
         # output file, even before its first viewport capture completes.
         self._write_json()
