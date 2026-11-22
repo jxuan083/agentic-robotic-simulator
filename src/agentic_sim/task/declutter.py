@@ -137,8 +137,9 @@ def plan(items: list, target_color: str, cfg: dict, base_xy=(0.0, 0.0), failed: 
 
 def free_spot(items: list, tray: dict, edge: float, reachable, base_xy=(0.0, 0.0), avoid_xy=(),
               clearance_m: float = 0.025, avoid_m: float = 0.06, step_m: float = 0.01, ignore=(),
-              reach_margin_m: float = 0.015):
-    """A tray-floor spot for a block set down square to the mount frame: inside the tray interior, at least
+              reach_margin_m: float = 0.015, inset_m: float = 0.0):
+    """A tray-floor spot for a block set down square to the mount frame: inside the tray interior (inset_m further
+    from the walls), at least
     clearance_m from every other item's top, avoid_m from avoid_xy (the target), and graspable there and
     reach_margin_m further out (a set-down block lands a few mm off). Spots with twice the clearance first, then the
     one nearest the arm. None if there is none."""
@@ -153,7 +154,8 @@ def free_spot(items: list, tray: dict, edge: float, reachable, base_xy=(0.0, 0.0
     for lx in np.arange(-hx, hx + 1e-9, step_m):
         for ly in np.arange(-hy, hy + 1e-9, step_m):
             xy = np.array([cx + c * lx - s * ly, cy + s * lx + c * ly])
-            if not block_in_tray([xy[0], xy[1], z], tray, edge):
+            if not block_in_tray([xy[0], xy[1], z], tray, edge) or \
+                    max(abs(lx) - hx, abs(ly) - hy) > -edge / 2 - inset_m:
                 continue
             if any(float(np.linalg.norm(xy - np.asarray(a[:2]))) < avoid_m for a in avoid_xy):
                 continue

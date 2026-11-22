@@ -90,6 +90,38 @@ def perceive(session, manager, hc, noise_m, rng, tray):
     return [it for it in items if _in_tray_xy(it["xy"], tray)], rgb
 
 
+def held_color(manager, session, block_from_ee, yaw_rad, edge, out_dir: Path, shrink: float = 0.5):
+    """Colour of the block in the gripper from one wrist capture: the cube expected at the EE (FK of the measured
+    joints) plus its offset at the grasp, projected into the wrist image, shrunk toward its centre (fingers)."""
+    import time
+    import cv2
+    from agentic_sim.perception.classical import ClassicalConfig
+    from agentic_sim.perception.color import estimate_color
+    from agentic_sim.perception.localize import CLASSICAL_CONFIG, _record_camera
+    future, rgb = manager._capture("wrist", session.d, time.monotonic())
+    overlay, record = future.result(timeout=45)
+    manager.latest["wrist"] = {"record": record, "overlay_rgb": overlay}
+    ee = session.ctrl.chain.ee_pose_mount(session.arm_q())[:3, 3]
+    c = ee + np.asarray(block_from_ee, float)
+    h = edge / 2
+    rot = np.array([[math.cos(yaw_rad), -math.sin(yaw_rad), 0], [math.sin(yaw_rad), math.cos(yaw_rad), 0], [0, 0, 1]])
+    corners = c + np.array([[x, y, z] for x in (-h, h) for y in (-h, h) for z in (-h, h)]) @ rot.T
+    px = np.asarray(_record_camera(record).project(corners), np.float32)
+    hull = cv2.convexHull(px).reshape(-1, 2)
+    hull = hull.mean(0) + (1 - shrink) * (hull - hull.mean(0))
+    hh, ww = rgb.shape[:2]
+    mask = np.zeros((hh, ww), np.uint8)
+    cv2.fillConvexPoly(mask, np.round(hull).astype(np.int32), 1)
+    color = estimate_color(rgb, mask.astype(bool), ClassicalConfig.from_yaml(CLASSICAL_CONFIG).color) \
+        if mask.any() else None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dbg = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    cv2.polylines(dbg, [np.round(hull).astype(np.int32)], True, (255, 255, 255), 2)
+    cv2.putText(dbg, str(color), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.imwrite(str(out_dir / "held.png"), dbg)
+    return color
+
+
 def run_skill(session, driver, skill, status, timeout_s=40.0):
     driver.skill = skill
     t_end = session.t_sim + timeout_s
@@ -236,11 +268,11 @@ def run_episode(ep, args, cfg, task_cfg, reachable, random_path, out):
             # the moved block's own place stays blocked: a hidden block may lie under it
             spot = free_spot(items, tray, edge, reachable, base_xy, avoid, dc["place_clearance_m"],
                              dc["place_avoid_target_m"])
-            # the confirmed target itself: once it is in the gripper, carry it on to the placement tray instead of
-            # setting it down to be localized and grasped again
-            deliver = decision["item"] == decision["target"] and item_key(items[decision["item"]]) in confirmed
-            if deliver:
-                spot = free_spot([], placement, edge, reachable, base_xy)
+            # the target itself: once it is in the gripper and the wrist sees the target colour there, carry it on to
+            # the placement tray instead of setting it down to be localized and grasped again
+            is_target, deliver = decision["item"] == decision["target"], False
+            deliver_spot = free_spot([], placement, edge, reachable, base_xy, inset_m=dc["deliver_inset_m"]) \
+                if is_target else None
             status(f"Target {target} | move {it['color']} ({decision['reason']})")
             acts = []
             pick = None
@@ -262,9 +294,15 @@ def run_episode(ep, args, cfg, task_cfg, reachable, random_path, out):
                 pick = run_skill(session, driver, PickAt(ctx, block=truth_b, pos=pos, yaw=it["yaw_rad"],
                                                          yaw_offset=off), status)
                 acts.append(pick)
+                if pick["status"] == "succeeded" and is_target and deliver_spot is not None:
+                    status(f"Target {target} | wrist: colour of the block in the gripper")
+                    row["held_color"] = held_color(manager, session, pick["evidence"]["block_from_ee_m"],
+                                                   it["yaw_rad"], edge, ep_dir / f"round_{r}")
+                    deliver = row["held_color"] == target
                 if pick["status"] == "succeeded":
-                    acts.append(run_skill(session, driver, Place(ctx, block=truth_b, xy=spot,
-                                                                 tray="placement" if deliver else "storage"), status))
+                    place = Place(ctx, block=truth_b, xy=deliver_spot if deliver else spot,
+                                  tray="placement" if deliver else "storage")
+                    acts.append(run_skill(session, driver, place, status))
             if pick is not None and pick["status"] != "succeeded":
                 acts.append(run_skill(session, driver, Home(ctx), status))   # a failed pick can leave the wrist turned
             if pick is None or pick["status"] != "succeeded":
@@ -284,9 +322,9 @@ def run_episode(ep, args, cfg, task_cfg, reachable, random_path, out):
                 failed[key] = failed.get(key, 0) + 1
             acts.append(run_skill(session, driver, Home(ctx), status))
             row.update(spot=spot, actions=acts, deliver=deliver)
-            if deliver and pick is not None and pick["status"] == "succeeded":
-                result = {"status": "delivered", "reason": "confirmed target carried to the placement tray",
-                          "placement_xy_m": spot}
+            if deliver:
+                result = {"status": "delivered", "reason": "wrist saw the target colour in the gripper: carried to the "
+                          "placement tray", "placement_xy_m": deliver_spot}
                 break
         session.task = None
         declutter_s = session.t_sim - t0
@@ -329,6 +367,9 @@ def run_episode(ep, args, cfg, task_cfg, reachable, random_path, out):
             score["delivered_colors"] = in_place
         out_of_tray = sum(1 for t in truth_after if t["label"] == "off_tray")
         acts = [a for rw in rounds for a in rw.get("actions", []) if a["skill"] != "home"]
+        for rw in rounds:   # the held-colour check against the truth colour of the block that was picked
+            if "held_color" in rw:
+                rw["held_truth_color"] = colors[rw["actions"][0]["params"]["block"]]
         episode = {"episode": ep, "target_color": target, "scenario": scenario, "ops": ops, "result": result,
                    "rounds": rounds, "score": score, "target_block": ok_block, "success": success,
                    "declutter_sim_s": round(declutter_s, 2),

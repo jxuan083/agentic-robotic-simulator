@@ -78,3 +78,9 @@ def test_free_spot_keeps_clear_and_reachable_and_push_stays_in_tray():
     edge_items = [_item("red", (0.25 + 0.10 - E, 0.20)), _item("blue", (0.25 + 0.10 - 2.2 * E, 0.20))]
     start, end = push_path(edge_items, 0, TRAY, E, target=1)
     assert abs(end[0] - 0.25) <= 0.10 - E / 2 + 1e-9                            # turned away from the tray wall
+
+
+def test_free_spot_inset_keeps_away_from_the_walls():
+    reach = lambda p, yaw: True
+    spot = free_spot([], TRAY, E, reach, (0.0, 0.0), inset_m=0.02)
+    assert abs(spot[0] - 0.25) <= 0.10 - E / 2 - 0.02 + 1e-9 and abs(spot[1] - 0.20) <= 0.12 - E / 2 - 0.02 + 1e-9

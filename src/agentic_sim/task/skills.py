@@ -443,6 +443,8 @@ class PickAt(Pick):
         self.set_phase("close")
         yield from self.gripper(False)
         self.evidence["jaw_closed"] = round(float(self.obs.jaw), 4)   # measured, as a servo would report it
+        # where the block sits relative to the EE (FK of the measured joints): the held block's place in the wrist view
+        self.evidence["block_from_ee_m"] = [round(float(x), 5) for x in bp - self.obs.ee]
         self.set_phase("lift")
         z0, ee_z0 = float(self.obs.blocks[b][2]), float(self.obs.ee[2])
         self.holding = b

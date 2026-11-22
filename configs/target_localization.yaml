@@ -48,3 +48,4 @@ declutter:
   place_avoid_target_m: 0.06 # and at least this far from the target
   push_distance_m: 0.04      # push the block this far past its centre (when the pick fails)
   finger_room_m: 0.018       # room beside the block for the opening finger (53 mm open - 29.5 mm block - 5 mm offset)
+  deliver_inset_m: 0.02      # a target carried to the placement tray is set down this far inside its walls
