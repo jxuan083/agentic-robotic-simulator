@@ -39,10 +39,12 @@ flowchart TD
 
 ## 後端
 
+目前 main 提供 Isaac 與 MuJoCo。表中的 mock 與 real 是整合規劃。
+
 | 後端 | 用途 | Reset |
 |---|---|---|
 | `mock` | 無物理，驗證任務流程、agent、資料格式 | 立即重置 |
-| `isaac` | Isaac Sim 場景，遙操作採集、政策推論與評估 | 程式重置場景與隨機種子 |
+| `isaac` | Isaac Sim 場景、遙操作採集與抓前定位評估；ACT 推論待整合 | 程式重置場景與隨機種子 |
 | `mujoco` | MuJoCo 場景（同一份場景設定），在不能跑 Isaac 的電腦上做物理與流程驗證（[mujoco-backend.md](mujoco-backend.md)） | 程式重置場景與隨機種子 |
 | `real` | SO-101 實機 | 現場復位流程，不假裝提供與模擬相同的重置 |
 
