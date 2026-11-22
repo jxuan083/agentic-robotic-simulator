@@ -103,7 +103,8 @@ Keyboard 與 mouse 寫入同一個 EE 目標，經同一個受限 IK 解算，�
 | O／C | 按住時夾爪張開／閉合 |
 | P | 暫停／繼續 |
 | R | Reset |
-| M | 切換專注模式（只改版面） |
+| M | 切換專注模式＝操作工作區（全螢幕，只改版面） |
+| 1／2 | global／wrist 相機格切換原圖或標註（只改顯示） |
 | Shift（按住） | 滑鼠細調；鍵盤本身不受影響 |
 
 - 移動量 = 速度 × 經過時間（0.08 m/s、yaw 1 rad/s），與 fps 無關；單幀最多計 0.1 s，卡頓後不會突然大跳。
@@ -138,8 +139,12 @@ Keyboard 與 mouse 寫入同一個 EE 目標，經同一個受限 IK 解算，�
 
 ### 專注模式
 
-- 按 M 或面板的 Focus view 切換。
-- 開啟時隱藏 Stage、Layer、Render Settings、Property、Semantics Schema Editor、Content、Console，面板停靠在 viewport 右側（約 28%），viewport 佔滿其餘空間。
+- 按 M 或面板的 Focus view 切換。2026-11-22 起，專注模式就是全螢幕的操作工作區，見 [operator-workspace.md](operator-workspace.md)。
+- 開啟時：
+  - app 視窗全螢幕；
+  - 隱藏 Stage、Layer、Render Settings、Property、Semantics Schema Editor、Content、Console、Main ToolBar、Status Bar，以及主選單列和各視窗的分頁標籤；
+  - 面板停靠在 viewport 右側（約 28%），`Operator status` 停靠在面板上方；
+  - viewport 佔滿其餘空間，場景有相機時並排在下方。
 - 夾爪、yaw、暫停、reset、狀態顯示與鍵盤操作都照常可用。
 - 再切一次會還原原本開著的視窗、原本在前面的分頁，以及浮動面板的位置。
 - 切換不影響相機與 teleop 狀態。

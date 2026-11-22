@@ -26,7 +26,7 @@ from agentic_sim.mujoco_backend.model import ROBOT_CONFIG  # noqa: E402
 from agentic_sim.mujoco_backend.session import MjSession, SessionConfig, session_config_with  # noqa: E402
 from agentic_sim.server.core import SimServer  # noqa: E402
 from agentic_sim.task.server_cmds import TaskCommands  # noqa: E402
-from agentic_sim.teleop.keys import KeyState  # noqa: E402
+from agentic_sim.teleop.keys import MJ_ACTION_KEYS, KeyState  # noqa: E402
 
 BACKEND = "mujoco"
 
@@ -234,7 +234,7 @@ class MujocoServer(TaskCommands):
 
 def main():
     host, port = (lambda s: (s["host"], int(s["port"])))(load("configs/sim_server.yaml")["servers"][BACKEND])
-    keys = KeyState(actions={"P": "pause", "R": "reset"})
+    keys = KeyState(actions=MJ_ACTION_KEYS)
     viewer = None
     if not args.headless:
         from agentic_sim.mujoco_backend.viewer import Viewer

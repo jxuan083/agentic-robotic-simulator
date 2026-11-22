@@ -48,6 +48,8 @@ parser.add_argument("--record", default=None, metavar="DIR",
 parser.add_argument("--target_color", default=None, help="capture: colour of the block to pick (default: first block)")
 parser.add_argument("--record_hz", type=float, default=20.0, help="capture: recorded rate of images and rows "
                     "(every round(60 / hz)-th control step; the actual rate is in the manifest)")
+parser.add_argument("--metrics_log", default=None, help="one JSON line per host second: UI FPS, RTF (simulated / "
+                    "host time), perception result age and latency (benchmarks)")
 parser.add_argument("--record_run_id", default=None, help="capture: id written into every recorder event and the "
                     "manifest (tools/sim.py passes its own to follow this run)")
 AppLauncher.add_app_launcher_args(parser)
@@ -82,7 +84,8 @@ def main():
     session = TeleopSession(SessionConfig(
         scene=args.scene, teleop=args.teleop,
         live_perception=args.live_perception, perception_camera=args.perception_camera, perception_hz=args.perception_hz,
-        perception_json=args.perception_json,
+        perception_json=args.perception_json, perception_stage=args.perception_stage,
+        perception_delay=args.perception_delay, annotations=args.annotations, metrics_log=args.metrics_log,
         random_blocks=args.random_blocks, random_seed=args.random_seed,
         random_region=args.random_region, random_config=args.random_config, color_dr_config=args.color_dr_config, focus=args.focus,
         color_dr=args.color_dr, color_dr_seed=args.color_dr_seed, color_dr_log=args.color_dr_log, blocks=args.blocks, wrist_lens=args.wrist_lens,

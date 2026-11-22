@@ -6,7 +6,9 @@ PyYAML only. The perception code is imported only when live perception actually 
 
 from __future__ import annotations
 
-DEFAULTS = {"live_perception": False, "perception_camera": "both", "perception_hz": 2.0, "perception_json": None}
+DEFAULTS = {"live_perception": False, "perception_camera": "both", "perception_hz": 2.0, "perception_json": None,
+            "perception_stage": "estimate", "perception_delay": 0.0, "annotations": "on"}
+EXTRA = ("perception_stage", "perception_delay", "annotations")   # passed on only when not the default
 
 
 def add_arguments(parser):
@@ -16,6 +18,15 @@ def add_arguments(parser):
                         help='maximum inference updates per second (default: 2)')
     parser.add_argument('--perception-json', default=DEFAULTS['perception_json'],
                         help='optional path periodically overwritten with latest full estimates')
+    parser.add_argument('--perception-stage', choices=('estimate', 'capture'), default=DEFAULTS['perception_stage'],
+                        help='estimate (default): capture and estimate; capture: capture only, no estimation '
+                             '(benchmarks the capture cost)')
+    parser.add_argument('--perception-delay', type=float, default=DEFAULTS['perception_delay'],
+                        help='test only: extra seconds before each estimate completes (late results must show as '
+                             'dated snapshots, never on newer frames)')
+    parser.add_argument('--annotations', choices=('on', 'off'), default=DEFAULTS['annotations'],
+                        help='camera cells start with the annotated snapshot (on) or the raw image (off); toggled '
+                             'per camera in the window. Independent of --live-perception')
 
 
 def options(ns) -> dict:
@@ -24,5 +35,23 @@ def options(ns) -> dict:
     get = lambda k: getattr(ns, k, DEFAULTS[k])  # noqa: E731
     if not get("live_perception"):
         return {}
-    return {"live_perception": True, "perception_camera": get("perception_camera"),
-            "perception_hz": get("perception_hz"), "perception_json": get("perception_json")}
+    out = {"live_perception": True, "perception_camera": get("perception_camera"),
+           "perception_hz": get("perception_hz"), "perception_json": get("perception_json")}
+    out.update({k: get(k) for k in EXTRA if get(k) != DEFAULTS[k]})
+    return out
+
+
+def args(opts) -> list:
+    """Command-line arguments of the perception options of a RunOptions-like object (only what is on)."""
+    if not getattr(opts, "live_perception", False):
+        return []
+    out = ["--live-perception", "--perception-camera", opts.perception_camera, "--perception-hz", str(opts.perception_hz)]
+    if opts.perception_json:
+        out += ["--perception-json", opts.perception_json]
+    if getattr(opts, "perception_stage", "estimate") != "estimate":
+        out += ["--perception-stage", opts.perception_stage]
+    if getattr(opts, "perception_delay", 0.0):
+        out += ["--perception-delay", str(opts.perception_delay)]
+    if getattr(opts, "annotations", "on") != "on":
+        out += ["--annotations", opts.annotations]
+    return out

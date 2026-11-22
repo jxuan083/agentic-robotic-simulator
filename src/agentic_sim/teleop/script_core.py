@@ -7,8 +7,11 @@ or the block.
 
 Steps handled here:
   - {note: text}                                   log a phase label
-  - {wait: seconds}
+  - {wait: seconds}                                 host time (monotonic): UI waits, e.g. while paused
+  - {settle: seconds}                               simulated time (ns["t_sim"]): let the physics act, e.g. after
+                                                   closing the gripper; holds however slowly the simulation runs
   - {hold: [W, A], until: "target[0] >= 0.17", timeout: 8}   keys down until the condition holds (or timeout)
+    timeout is host seconds; sim_timeout: N instead gives up after N simulated seconds (physical motion)
   - {tap: P}                                       press + release on the next frame
   - {press: W} / {release: W}                      key down / up that stays held across steps
   - {focus_loss: 1.0, hold: [W]}                   hold keys, then report the window unfocused for N seconds
@@ -25,12 +28,12 @@ import time
 
 import numpy as np
 
-CORE_STEPS = ("note", "wait", "press", "release", "set", "mark", "check", "tap", "focus_loss", "hold")
+CORE_STEPS = ("note", "wait", "settle", "press", "release", "set", "mark", "check", "tap", "focus_loss", "hold")
 EVAL_BUILTINS = {"abs": abs, "min": min, "max": max, "len": len, "sorted": sorted, "zip": zip, "all": all, "any": any,
                  "round": round, "range": range, "set": set, "tuple": tuple}
 
 
-STEP_MODIFIERS = ("until", "timeout", "label", "tol", "seconds")
+STEP_MODIFIERS = ("until", "timeout", "sim_timeout", "label", "tol", "seconds")
 
 
 def step_kind(s: dict) -> str | None:
@@ -86,6 +89,7 @@ class ScriptCore:
         self._phase = None
         self._on_next()
         self._t0 = time.monotonic()
+        self._t0_sim = None          # simulated time at the step's first frame (set by step())
         if self.i >= len(self.steps):
             self.done = True
             self.log("script: done")
@@ -114,8 +118,16 @@ class ScriptCore:
         s = self.steps[self.i]
         el = time.monotonic() - self._t0
         timeout = s.get("timeout", 15.0)
+        if self._t0_sim is None and "t_sim" in ns:
+            self._t0_sim = float(ns["t_sim"])
+        el_sim = None if self._t0_sim is None else float(ns["t_sim"]) - self._t0_sim
+        if ("settle" in s or "sim_timeout" in s) and el_sim is None:
+            raise ValueError(f"{s}: simulated-time steps need t_sim in the frame state")
         if "note" in s:
             self._next()
+        elif "settle" in s:
+            if el_sim >= s["settle"]:
+                self._next()
         elif "wait" in s:
             if el >= s["wait"]:
                 self._next()
@@ -175,10 +187,12 @@ class ScriptCore:
                     self._key(k, True)
                 self._held = list(s["hold"])
                 self._phase = "holding"
-            elif self._cond(s["until"], ns) or el >= timeout:
-                if el >= timeout:
-                    self.log(f"script: hold timeout {s}")
-                self._next()
+            else:
+                out = el_sim >= s["sim_timeout"] if "sim_timeout" in s else el >= timeout
+                if self._cond(s["until"], ns) or out:
+                    if out:
+                        self.log(f"script: hold timeout {s}")
+                    self._next()
         elif not self._step_extra(s, ns, el, timeout):
             raise ValueError(f"unknown script step {s}")
 

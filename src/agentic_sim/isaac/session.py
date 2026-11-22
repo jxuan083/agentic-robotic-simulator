@@ -28,6 +28,7 @@ import numpy as np
 import torch
 
 import isaaclab.sim as sim_utils
+import omni.ui
 import omni.usd
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 
@@ -87,6 +88,10 @@ class SessionConfig:
     perception_camera: str = "both"
     perception_hz: float = 2.0
     perception_json: str | None = None
+    perception_stage: str = "estimate"   # "capture": capture only, no estimation (benchmark)
+    perception_delay: float = 0.0        # test only: extra seconds before each estimate completes
+    annotations: str = "on"              # camera cells start annotated ("on") or raw ("off")
+    metrics_log: str | None = None       # one JSON line per host second: UI FPS, RTF, perception age
     record: str | None = None          # demonstration capture (issue #13): episodes are written under this directory
     target_color: str | None = None    # colour of the block to pick (capture); default: the first block's colour
     record_hz: float = 20.0            # recorded control rate (images and rows), like the lab captures
@@ -169,6 +174,15 @@ class TeleopSession:
         # the layout state can outlive a session (server): reuse it, pointed at this session's panel
         self.focus_mode = focus_layout or FocusMode(self.panel.window, log)
         self.focus_mode.set_panel(self.panel.window)
+        # operator workspace hooks into this session (the layout object outlives sessions)
+        self.focus_mode.extra_windows = lambda: list(self.sensor_views.windows.values())
+        self.focus_mode.perception_windows = (
+            lambda visible: self.live_perception.set_windows_visible(visible)
+            if getattr(self, "live_perception", None) is not None else None)
+        self.focus_mode.cells(cfg.annotations == "on").annotate_default = cfg.annotations == "on"
+        from agentic_sim.workspace_status import Clocks, MetricsLog
+        self.clocks = Clocks()
+        self.metrics_log = MetricsLog(cfg.metrics_log)
         self.block_colors = [abgr(c) for c in h.block_colors]
         self.script = None
         set_camera = lambda eye, tgt: sim.set_camera_view(eye, tgt)  # noqa: E731
@@ -206,7 +220,8 @@ class TeleopSession:
             from agentic_sim.isaac.live_perception import LivePerception
             self.live_perception = LivePerception(scene_cfg, self.sensor_views,
                                                   cfg.perception_camera, cfg.perception_hz, log,
-                                                  cfg.perception_json)
+                                                  cfg.perception_json, stage=cfg.perception_stage,
+                                                  delay_s=cfg.perception_delay)
         self.log_f = self.log_w = None
         if cfg.log:
             os.makedirs(os.path.dirname(cfg.log) or ".", exist_ok=True)
@@ -388,6 +403,8 @@ class TeleopSession:
         self.handle.cancel()
         if getattr(self, "live_perception", None) is not None:
             self.live_perception.invalidate()
+        if getattr(self, "clocks", None) is not None:
+            self.clocks.reset()           # no RTF across a Reset
         self.log(f"reset: session={ctrl.state.session}")
         if getattr(self, "recorder", None) is not None:
             self.recorder.reset()
@@ -449,6 +466,8 @@ class TeleopSession:
         for a in actions:
             if a == "focus":  # layout only: does not touch the teleop state
                 self.focus_mode.toggle()
+            elif a in ("annotate_global", "annotate_wrist"):   # display only: perception keeps running
+                self.focus_mode.cells().toggle(a.split("_")[1])
             elif a == "pause":
                 self.paused = not self.paused
                 kb.clear()
@@ -550,6 +569,17 @@ class TeleopSession:
         handle.update(s.pos, kind_of(s.status))
         self.focus_mode.update()
         self.sensor_views.update()
+        self.clocks.frame(now, self.t_sim, self.paused)
+        if self.focus_mode.active or self.metrics_log.path:
+            from agentic_sim.isaac.workspace import status_info
+            from agentic_sim.workspace_status import status_lines
+            info = status_info(self, now)
+            self.focus_mode.frame(status_lines(info) if self.focus_mode.active else None, self.live_perception,
+                                  self.sensor_views.windows, now)
+            self.metrics_log.sample(now, self.t_sim, self.clocks, info["perception"],
+                                    {"workspace": self.focus_mode.active})
+        else:
+            self.focus_mode.frame(None, self.live_perception, self.sensor_views.windows, now)
         if self.focus_at_frame >= 0:
             self.focus_at_frame -= 1
             if self.focus_at_frame < 0:
@@ -600,7 +630,7 @@ class TeleopSession:
 
         if script is not None:
             h, usd_ctx, color_dr = self.h, self.usd_ctx, self.color_dr
-            ns = {"target": s.pos, "ee": ee, "block": bpos, "status": s.status, "gripper": s.gripper,
+            ns = {"t_sim": self.t_sim, "target": s.pos, "ee": ee, "block": bpos, "status": s.status, "gripper": s.gripper,
                   "jaw": jaw, "paused": self.paused, "session": s.session,
                   "focused": focused, "held": set(kb.held), "rejected": s.rejected, "yaw_offset": s.yaw_offset,
                   "block_in_placement": block_in_tray(bpos, h.trays["placement_beige"], self.edge),
@@ -618,6 +648,15 @@ class TeleopSession:
                   "selection": list(usd_ctx.get_selection().get_selected_prim_paths()),
                   "focus_mode": self.focus_mode.active, "editors_visible": self.focus_mode.editor_windows_visible(),
                   "front_tabs": self.focus_mode.front_tabs(),
+                  "fullscreen": bool(__import__("omni.appwindow").appwindow.get_default_app_window().is_fullscreen()),
+                  "cells": self.focus_mode.cells().state(),
+                  "status_visible": bool(self.focus_mode.status.window.visible),
+                  "panel_front": _in_front(self.panel.window), "status_front": _in_front(self.focus_mode.status.window),
+                  "tab_bars": [w.title for w in [omni.ui.Workspace.get_window("Viewport"), self.panel.window,
+                                                 self.focus_mode.status.window, *self.sensor_views.windows.values()]
+                               if w is not None and w.visible and getattr(w, "dock_tab_bar_enabled", False)],
+                  "dup_windows": _duplicate_windows(),
+                  "ui_fps": self.clocks.ui_fps, "rtf": self.clocks.rtf,
                   "dr": color_dr.current, "dr_records": len(color_dr.records),
                   "block_mat_rgb": [round(float(x), 6) for x in
                                     usd_ctx.get_stage().GetPrimAtPath("/World/Block/geometry/material/Shader")
@@ -729,6 +768,9 @@ class TeleopSession:
         if self.closed:
             return
         self.finish()
+        self.metrics_log.close()
+        self.focus_mode.extra_windows = lambda: []
+        self.focus_mode.perception_windows = lambda visible: None
         if self.live_perception is not None:
             self.live_perception.close()
             self.live_perception = None
@@ -756,6 +798,29 @@ class TeleopSession:
         self.sim = None
         sim_utils.create_new_stage()
         self.closed = True
+
+
+def _in_front(w) -> bool:
+    """Docked and the visible tab of its dock node (not hidden behind another window)."""
+    try:
+        return bool(w.visible and w.docked and w.is_selected_in_dock())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _duplicate_windows() -> list:
+    """Titles of visible windows that exist more than once (a rebuilt scene must not leave copies behind)."""
+    import omni.ui as ui
+    seen, dup = set(), set()
+    for w in ui.Workspace.get_windows():
+        try:
+            if not w.visible:
+                continue
+            t = w.title
+        except Exception:  # noqa: BLE001
+            continue
+        (dup if t in seen else seen).add(t)
+    return sorted(dup)
 
 
 def session_config_with(cfg: SessionConfig, settings: dict) -> SessionConfig:

@@ -13,6 +13,7 @@ ray, then look the ray up in the wide render. Pure numpy; maps are built once pe
 
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass
 
@@ -90,7 +91,11 @@ class WristLens:
 
     def render_size(self, scale: float = 1.5, margin: float = 1.03) -> tuple:
         """(width, height, vertical fov deg) of a centred pinhole render whose view covers every raw pixel's ray.
-        The render keeps the raw aspect ratio; scale sets its resolution relative to the raw image."""
+        The render keeps the raw aspect ratio; scale sets its resolution relative to the raw image.
+        Cached per lens: undistorting every raw pixel takes about 0.8 s, and live perception asks on every capture."""
+        return _render_size(self.width, self.height, self.fx, self.fy, self.cx, self.cy, tuple(self.dist), scale, margin)
+
+    def _render_size(self, scale: float, margin: float) -> tuple:
         uu, vv = np.meshgrid(np.arange(self.width), np.arange(self.height))
         x, y = self.undistort(uu, vv)
         aspect = self.width / self.height
@@ -115,6 +120,11 @@ class WristLens:
     def apply(render: np.ndarray, maps: tuple) -> np.ndarray:
         iy, ix = maps
         return render[iy, ix]
+
+
+@functools.lru_cache(maxsize=16)
+def _render_size(width, height, fx, fy, cx, cy, dist, scale, margin) -> tuple:
+    return WristLens(width, height, fx, fy, cx, cy, dist)._render_size(scale, margin)
 
 
 def lens_mode(scene: dict, override: str | None = None) -> str:

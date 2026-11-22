@@ -81,9 +81,9 @@ tools/run_acceptance_mujoco.sh keyboard_pick_place            # 不經伺服器�
 
 ## 操作
 
-視窗分成左邊的 3D 畫面與右邊的操作面板，功能和 Isaac 版一致（Isaac 的專注模式除外：MuJoCo 視窗沒有編輯器面板要藏）。
+視窗分成左邊的 3D 畫面與右邊的操作面板，功能和 Isaac 版一致。按 M（或啟動時加 `--focus`）進入全螢幕的操作工作區：相機移到下方並排，旁邊是狀態欄。見 [operator-workspace.md](operator-workspace.md)。
 
-**鍵盤**（和 Isaac 相同）：W/S、A/D、E/Q 移動，Z/X 轉 yaw，O/C 開合夾爪，P 暫停，R reset。按住的鍵只在新的按下時開始；放開、視窗失焦、暫停、reset 都會丟掉輸入，不會補做。
+**鍵盤**（和 Isaac 相同）：W/S、A/D、E/Q 移動，Z/X 轉 yaw，O/C 開合夾爪，P 暫停，R reset，M 操作工作區，1／2 切換相機格的原圖或標註。按住的鍵只在新的按下時開始；放開、視窗失焦、暫停、reset 都會丟掉輸入，不會補做。
 
 **3D 畫面的滑鼠**（和 Isaac 的目標環規則相同）：
 - 目標畫成面向相機、固定螢幕大小的圓環，往下有一條線指到桌面；實際 EE 是藍色小球。圓環顏色：綠＝OK、黃＝工作區邊界、紅＝被拒絕。

@@ -77,6 +77,26 @@ class LiveEstimator:
             found = out
         return found
 
+    @staticmethod
+    def capture_only(rgb, camera, frame_number, captured_at):
+        """--perception-stage capture: the same capture path without estimation (benchmarks the capture cost)."""
+        return rgb, {'frame_number': frame_number, 'captured_at_monotonic_s': captured_at, 'camera': camera.name,
+                     'image_size': [camera.width, camera.height], 'detections': [], 'method': 'capture_only'}
+
+    def worker(self, stage='estimate', delay_s=0.0):
+        """The function the perception worker runs per captured image: estimate (default) or capture only; delay_s
+        (tests) holds each result back so late results can be checked (they keep their capture time)."""
+        fn = self.predict if stage == 'estimate' else self.capture_only
+        if not delay_s:
+            return fn
+
+        def delayed(*a):
+            import time
+            out = fn(*a)
+            time.sleep(delay_s)
+            return out
+        return delayed
+
     def predict(self, rgb, camera, frame_number, captured_at):
         from .vertices import annotate_vertices
         records, fits = [], []

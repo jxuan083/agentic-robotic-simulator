@@ -69,6 +69,9 @@ class RunOptions:
     perception_camera: str = "both"
     perception_hz: float = 2.0
     perception_json: str | None = None
+    perception_stage: str = "estimate"   # "capture": capture only (benchmark)
+    perception_delay: float = 0.0        # test only: late estimates
+    annotations: str = "on"              # camera cells start annotated ("on") or raw ("off")
     focus: bool = False
     color_dr: bool = False
     color_dr_seed: int | None = None
@@ -97,11 +100,8 @@ class Command:
 
 def _app_args(exp: Experiment, opts: RunOptions, backend: str = "isaac") -> list:
     args = ["--scene", exp.scene, "--teleop", exp.teleop]
-    if opts.live_perception:
-        args += ["--live-perception", "--perception-camera", opts.perception_camera,
-                 "--perception-hz", str(opts.perception_hz)]
-        if opts.perception_json:
-            args += ["--perception-json", opts.perception_json]
+    from agentic_sim.perception_cli import args as perception_args
+    args += perception_args(opts)
     if exp.color_dr:
         args += ["--color_dr_config", exp.color_dr]
     if opts.focus and backend == "isaac":
