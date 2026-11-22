@@ -1,10 +1,10 @@
 # Agentic Robotic Simulator
 
-2026 台灣機器人挑戰賽（TRC）SO-101 單臂積木分揀專案。以同一個 repo 串起模擬與實機的完整競賽流程，讓資料採集、訓練、推論、DAgger 修正與 agent 任務執行共用同一套任務核心與介面。
+2026 台灣機器人挑戰賽（TRC）SO-101 單臂積木分揀專案。目標是用同一個 repo 串起模擬、實機示範、ACT 與改單流程。
 
-> 目前為**架構與文件階段**，程式只有第一份 issue 的 Isaac Sim 最小場景與 keyboard／mouse EE 操作（[docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md)）。下列流程是預計整合的系統。可沿用的實機程式位於既有實機工作區，尚未移入本 repo。
+從 repo 根目錄執行 `uv run tools/sim.py` 開啟模擬選單。鍵鼠操作可用 Isaac Sim 或 MuJoCo；「錄示範」會啟動 Isaac，「檢查上一筆示範」從磁碟讀回資料。環境設定見 [模擬入口](docs/sim-server.md)，抓前定位另有[兩引擎的重播指令](docs/wrist-alignment.md)。
 
-## 完整流程
+## 競賽流程規劃
 
 ```mermaid
 flowchart LR
@@ -18,45 +18,34 @@ flowchart LR
     C --> A[Agent 任務執行]
 ```
 
-每個階段可以獨立執行：採集、訓練、推論、評估都不需要啟動 agent。Agent 只在最上層呼叫已驗證的技能。
+各階段設計為可獨立執行。模擬採集、讀回與定位基準已有入口，單臂積木 ACT 訓練與推論待整合。Agent 只在最上層呼叫已驗證的技能。
 
 ## 設計重點
 
-- **共用任務核心，分開後端**：`mock`（無物理、測流程）、`isaac`（Isaac Sim）、`real`（SO-101 實機）。模擬先只做 Isaac Sim。
+- **共用任務核心，分開後端**：Isaac Sim 與 MuJoCo 共用場景設定；實機錄製在獨立整合分支，完整 `real` 與 `mock` 後端仍在規劃中。
 - **ACT 為主線**：政策經 adapter 接入，預留 Diffusion Policy、π0.5 等替代政策。
 - **操作輸入共用一個介面**：模擬端先用 keyboard／mouse 操作末端（EE），再接實體 SO-101 leader，controller 最後。
-- **場地與任務分開**：共用資產搭配 `lab_current`／`competition_draft` 場地配置，任務（一般分揀、干擾色、缺料）可載入任一場地。
-- **DAgger 完整閉環**：人工接管 → 修正資料保存 → 檢查 → 明確納入再訓練 → 同條件比較新舊政策。
+- **場地與任務分開**：已提供 `lab_current_minimal` 與 `lab_20261120`；`competition_draft` 待場地量測。
+- **DAgger 規劃**：人工接管 → 修正資料保存 → 檢查 → 明確納入再訓練 → 同條件比較新舊政策。
 - **依賴環境分開**：同一 repo，模擬端、訓練端、實機執行端可使用各自的 Python 環境。
 
 ## 目前狀態
 
 | 項目 | 狀態 |
 |---|---|
-| 實機遙操作、相機、校正、影像／狀態記錄 | 既有實機工作區可運作（雙臂配置），待移植與單臂化 |
-| 實機 DAgger 接管（控制權切換、清空政策佇列、來源標記） | 既有程式可沿用；修正資料納入再訓練尚未串成流程 |
-| SO-101 leader 讀取（JSONL 狀態格式、錄製與重播工具） | 既有雙臂版，待補單臂選擇與本機輸入 adapter |
-| Isaac Sim 場景、keyboard／mouse EE 操作 | 第一份 issue（[#1](https://github.com/jxuan083/agentic-robotic-simulator/issues/1)）：已實作，含主畫面滑鼠操作、專注模式、顏色 DR（預設關閉，可在面板切換）、1–8 顆積木與傾斜抓取（擴大到達範圍）。注入事件的驗收腳本通過，使用者實際操作確認手感可接受。場景數值為 provisional（[docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md)） |
-| 實驗選單、常駐模擬伺服器、MuJoCo backend | [#3](https://github.com/jxuan083/agentic-robotic-simulator/issues/3) 已完成（P1–P4，PR [#4](https://github.com/jxuan083/agentic-robotic-simulator/pull/4) 合併）：實驗設定檔、控制協定、選單、常駐 Isaac 伺服器與 MuJoCo backend（和 Isaac 一致的鍵盤／滑鼠操作、操作面板與俯視圖、常駐伺服器、FK 對齊 < 0.01 mm）與跨引擎比較（同一條 EE 軌跡在兩個引擎：都完成抓放；差異主要來自關節增益）已完成；增益與控制器平滑度等實機量測後再調（[docs/sim-server.md](docs/sim-server.md)、[docs/mujoco-backend.md](docs/mujoco-backend.md)、[docs/cross-engine-comparison.md](docs/cross-engine-comparison.md)） |
-| 共用介面（RobotProfile、SceneSpec、TaskSpec 等） | 已定義文件，程式預計實作 |
-| ACT 訓練與推論 adapter | 預計實作（既有工作區有 ACT 訓練設定，尚無 ACT checkpoint） |
-| 任務執行器、需求帳本 | [#5](https://github.com/jxuan083/agentic-robotic-simulator/issues/5) 已完成（模擬）：需求帳本（revision、核對後才計入）、可取消的抓放技能、改單／持物詢問／多交取回／缺料詢問，Isaac 與 MuJoCo 都通過驗收。只用模擬真值、抓取為腳本化技能，不含 LLM（[docs/task-executor.md](docs/task-executor.md)） |
-| 繁中聊天層 | [#7](https://github.com/jxuan083/agentic-robotic-simulator/issues/7) 已完成（模擬）：繁中命令列聊天接任務執行器：模型（Qwen3.5-9B，本機 vLLM，可替換）只判斷意圖，程式依帳本檢查後才送命令；改單、追加、只改單一顏色、反問、回答問題、進度與主動回報。語句表與完整對話（Isaac、MuJoCo）都通過（[docs/chat-layer.md](docs/chat-layer.md)） |
-| 實驗室場景、相機視角 | [#9](https://github.com/jxuan083/agentic-robotic-simulator/issues/9) 已完成（模擬，單臂）：依 2026-11-20 實驗室 RGB-D 錄影、關節讀值與照片重建托盤擺位，加入 D455 global 與腕部相機視角，Isaac 與 MuJoCo 共用場景檔；相機位姿由深度點與手臂網格對齊推算（殘差中位數 4.6 mm），部分數值仍為估計或暫定（[docs/lab-scene-cameras.md](docs/lab-scene-cameras.md)） |
-| 一鍵入口、聊天視窗、常駐相機 | [#11](https://github.com/jxuan083/agentic-robotic-simulator/issues/11) 已完成（模擬）：`tools/lab.py` 一個指令開好模型服務、模擬伺服器與獨立的聊天視窗；相機畫面固定在主畫面（Isaac 停靠在 3D 視窗下方）；腕部畫面預設套用由實拍推算的鏡頭變形。兩個引擎都完成「聊天下單 → 缺料詢問 → 聊天回答 → 完成」的競賽流程（[docs/lab-entry.md](docs/lab-entry.md)） |
-| 模擬示範採集與讀回 | [#13](https://github.com/jxuan083/agentic-robotic-simulator/issues/13) 已完成（模擬，單臂）：Isaac 遙操作時以 20 Hz 錄 global 與腕部 RGB、同一步的命令（EE 目標與關節目標）和狀態，格式沿用實機原始錄製；`tools/read_episode.py` 從磁碟檢查完整性並找出夾爪閉合、積木離盤、目標盤放開三個時刻。人工操作的成功示範讀回通過（[docs/demo-capture.md](docs/demo-capture.md)） |
-| 共同入口：錄示範與讀回 | [#16](https://github.com/jxuan083/agentic-robotic-simulator/issues/16) 已完成（模擬，單臂）：`uv run tools/sim.py` 選「錄示範」用預設配置（含黃色積木）開 Isaac 錄製，終端機顯示等待相機、錄製中幀數、已存檔路徑；「檢查上一筆」讀回錄製端回報的那一筆。採集與讀回命令都可複製單獨執行，人工示範從入口錄製並讀回通過（[docs/demo-capture.md](docs/demo-capture.md#從共同入口錄製與讀回)）。按 M 進入全螢幕操作工作區（Isaac、MuJoCo）：3D 操作區、右欄狀態、下方雙相機可切換原圖或標註，分開顯示 UI FPS、RTF 與感知結果年齡；右欄可把模擬器視窗錄成 MP4（[docs/operator-workspace.md](docs/operator-workspace.md)） |
-| Agent（任務規劃、感知整合） | 預計實作 |
-| 評估報表 | 預計實作；驗收數字為目標，尚無成果 |
+| 模擬操作與錄製 | 兩個引擎均可鍵鼠控制 EE、進入全螢幕工作區與錄製視窗 MP4。Isaac 另可錄製含雙相機與關節資料的示範 episode，供離線讀回。 |
+| 聊天與整單執行 | `tools/lab.py` 啟動實驗室模擬與聊天。LLM 解析訂單和回答，執行器管理需求帳本；目前整單使用腳本抓取與模擬真值核對。 |
+| 抓前定位 B | 獨立基準。MuJoCo 主測首次 233/234、含一次重抓 234/234，相鄰紅塊 21/24。Isaac 三場開啟單次 Z 補償後均通過懸停門檻並提起近顆。[方法與重播](docs/wrist-alignment.md) |
+| 實機資料與 ACT | 單臂錄製與讀回在實機整合分支。規劃以 leader 收集紅、藍、黃雙向共 120 筆；收齊後用實拍做離線定位。單臂積木 ACT 與 DAgger 再訓練待驗。 |
 
-完整狀態、可沿用資產與待確認事項見 [docs/status.md](docs/status.md)。
+各階段的現況與待辦見 [docs/status.md](docs/status.md)。
 
 ## 執行環境角色
 
 | 角色 | 用途 |
 |---|---|
 | 實機執行端 | 連接 SO-101 follower／leader 與相機，執行實機採集、推論與 DAgger 驗證 |
-| 模擬端 | 執行 Isaac Sim 場景、keyboard／mouse 遙操作與模擬評估；以實體 leader 操作時，leader 接在執行模擬的同一台電腦 |
+| 模擬端 | 執行 Isaac Sim 或 MuJoCo 場景、keyboard／mouse 遙操作與模擬評估；以實體 leader 操作時，leader 接在執行模擬的同一台電腦 |
 | 訓練端 | 執行 ACT 等政策訓練與離線評估 |
 
 程式可在任何開發環境撰寫；涉及硬體的行為須在實機執行端驗證。機器專屬設定、原始校正與大型資料不進 repo，repo 只放範本、格式與版本說明（見 [docs/architecture.md](docs/architecture.md#設定與資料的存放)）。
@@ -82,6 +71,8 @@ flowchart LR
 | [docs/demo-capture.md](docs/demo-capture.md) | 模擬示範採集：錄製指令、資料格式與單位、讀回與三個時刻、人工示範驗收（#13） |
 | [docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md) | Isaac Sim 最小場景與 keyboard／mouse EE 操作：環境、啟動、操作、驗收、已知問題 |
 | [docs/sim-server.md](docs/sim-server.md) | 實驗設定檔、選單、主機端 uv 環境、模擬伺服器控制協定 |
+| [docs/wrist-alignment.md](docs/wrist-alignment.md) | 抓前定位 B、MuJoCo 基準、Isaac 單次 Z 補償重播與 ACT 接手條件 |
+| [docs/mujoco-backend.md](docs/mujoco-backend.md) | MuJoCo 安裝、模型與模擬入口 |
 | [docs/status.md](docs/status.md) | 已完成／預計實作／待確認、可沿用資產與參考來源 |
 
 ### VS Code Remote：瀏覽器操作
