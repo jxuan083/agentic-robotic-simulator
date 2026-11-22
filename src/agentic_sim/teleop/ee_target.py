@@ -152,6 +152,14 @@ class EETargetController:
         )
         self.homing = self.p.start_q is not None
 
+    def home_joint_space(self, source: str):
+        """Return to the home joint angles in joint space at homing_rate, without IK: the way out of a pose where
+        every nearby EE target is rejected (the IK seeded there finds no solution)."""
+        s = self.state
+        s.q_goal, s.pos, s.yaw_offset = self.q_home.copy(), self.ee_pos(self.q_home), 0.0
+        s.status, s.message, s.source = STATUS_OK, "", source
+        self.homing = True
+
     # ---- evaluation (no state change) ------------------------------------------------
     def evaluate(self, pos, yaw_offset: float) -> Evaluation:
         """Clamp to the workspace, solve IK from the current solution and classify the outcome."""

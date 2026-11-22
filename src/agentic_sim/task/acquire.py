@@ -420,11 +420,22 @@ class Acquire(Skill):
             push_z = cams.floor + edge / 2 + float(m["grasp_dz"])
 
             def push_ok(a, c):
-                d = np.asarray(c) - np.asarray(a)
-                y = ctrl.yaw_for(np.array([a[0], a[1], 0.0]),
-                                 wrap_quarter(math.atan2(d[1], d[0]) - ctrl.yaw_for(np.array([a[0], a[1], 0.0]), 0.0)))
-                return all(ctrl.chain.solve_ik_tilt(np.array([q[0], q[1], z]), y, ctrl.q_home, ctrl.p.max_tilt_deg)[1]
-                           for q, z in ((a, float(m["safe_z"])), (a, push_z), (c, push_z)))
+                """IK along the path as it is driven (each point seeded by the previous solution), and the block
+                still graspable where it ends (with a margin outwards)."""
+                a, c = np.asarray(a, float), np.asarray(c, float)
+                d = c - a
+                off = wrap_quarter(math.atan2(d[1], d[0]) - ctrl.yaw_for(np.array([a[0], a[1], 0.0]), 0.0))
+                q = ctrl.q_home
+                path = [np.array([a[0], a[1], float(m["safe_z"])])] + \
+                    [np.array([*(a + f * d), push_z]) for f in np.linspace(0.0, 1.0, 9)]
+                for p in path:
+                    q, ok, _ = ctrl.chain.solve_ik_tilt(p, ctrl.yaw_for(p, off), q, ctrl.p.max_tilt_deg)
+                    if not ok:
+                        return False
+                out = c + d / max(float(np.linalg.norm(d)), 1e-6) * edge / 2      # the block's centre at the end
+                r = out - np.asarray(base_xy, float)
+                out = out + r / max(float(np.linalg.norm(r)), 1e-6) * float(dc.get("push_reach_margin_m", 0.03))
+                return bool(self.ctx.reachable([out[0], out[1], cams.floor + edge / 2], 0.0))
 
             if push_only:                       # towards the tray centre
                 u = np.asarray(tray["center"], float) - np.asarray(it["xy"], float)

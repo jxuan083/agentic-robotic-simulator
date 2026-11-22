@@ -108,6 +108,7 @@ class Motion:
         else:
             self.blocked += 1
             if self.blocked >= self.blocked_limit:
+                self.blocked = 0       # shared by all skills: the next move starts with a fresh count
                 raise _Fail(f"unreachable: {s.status} {s.message}")
         return False
 
@@ -408,10 +409,20 @@ class Home(Skill):
     cancel_phases = ("rise", "home")
 
     def body(self):
-        self.set_phase("rise")
-        yield from self.up_to_safe(cancellable=True)
-        self.set_phase("home")
-        yield from self.move(self.world.home, 0.0)
+        try:
+            self.set_phase("rise")
+            yield from self.up_to_safe(cancellable=True)
+            self.set_phase("home")
+            yield from self.move(self.world.home, 0.0)
+        except _Fail as f:
+            if not str(f).startswith("unreachable"):
+                raise
+            # stuck where every EE step is rejected: back to the home joint angles in joint space
+            self.evidence["joint_space_home"] = str(f)
+            self.ctx.emit("joint_space_home", reason=str(f))
+            self.ctrl.home_joint_space("task")
+            while not self.motion.arrived(self.obs):
+                yield
 
     def on_cancel(self):
         return
