@@ -2,7 +2,7 @@
 
 2026 台灣機器人挑戰賽（TRC）SO-101 單臂積木分揀專案。以同一個 repo 串起模擬與實機的完整競賽流程，讓資料採集、訓練、推論、DAgger 修正與 agent 任務執行共用同一套任務核心與介面。
 
-> 目前為**架構與文件階段**，程式只有第一份 issue 的 Isaac Sim 最小場景與 keyboard／mouse EE 操作（[docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md)）。下列流程是預計整合的系統。可沿用的實機程式位於既有實機工作區，尚未移入本 repo。
+> 模擬示範採集和目標定位已有獨立入口。實機單臂／雙臂的遙操作採集與離線讀回見 [docs/real-teleop.md](docs/real-teleop.md)，目前以假硬體完成流程驗證。
 
 ## 完整流程
 
@@ -33,8 +33,8 @@ flowchart LR
 
 | 項目 | 狀態 |
 |---|---|
-| 實機遙操作、相機、校正、影像／狀態記錄 | 既有實機工作區可運作（雙臂配置），待移植與單臂化 |
-| 實機 DAgger 接管（控制權切換、清空政策佇列、來源標記） | 既有程式可沿用；修正資料納入再訓練尚未串成流程 |
+| 實機遙操作、相機、校正、影像／狀態記錄 | 單臂與雙臂 CLI 已接上本機 LeRobot 設定，命令分流、錄製格式與離線讀回已用假硬體驗證，待實機驗收 |
+| DAgger 接管（控制權切換、清空政策佇列、來源標記） | 假 follower 已驗證政策切人工、首筆命令對齊與逐幀來源，實機政策與再訓練待整合 |
 | SO-101 leader 讀取（JSONL 狀態格式、錄製與重播工具） | 既有雙臂版，待補單臂選擇與本機輸入 adapter |
 | Isaac Sim 場景、keyboard／mouse EE 操作 | 第一份 issue（[#1](https://github.com/jxuan083/agentic-robotic-simulator/issues/1)）：已實作，含主畫面滑鼠操作、專注模式、顏色 DR（預設關閉，可在面板切換）、1–8 顆積木與傾斜抓取（擴大到達範圍）。注入事件的驗收腳本通過，使用者實際操作確認手感可接受。場景數值為 provisional（[docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md)） |
 | 實驗選單、常駐模擬伺服器、MuJoCo backend | [#3](https://github.com/jxuan083/agentic-robotic-simulator/issues/3) 已完成（P1–P4，PR [#4](https://github.com/jxuan083/agentic-robotic-simulator/pull/4) 合併）：實驗設定檔、控制協定、選單、常駐 Isaac 伺服器與 MuJoCo backend（和 Isaac 一致的鍵盤／滑鼠操作、操作面板與俯視圖、常駐伺服器、FK 對齊 < 0.01 mm）與跨引擎比較（同一條 EE 軌跡在兩個引擎：都完成抓放；差異主要來自關節增益）已完成；增益與控制器平滑度等實機量測後再調（[docs/sim-server.md](docs/sim-server.md)、[docs/mujoco-backend.md](docs/mujoco-backend.md)、[docs/cross-engine-comparison.md](docs/cross-engine-comparison.md)） |
@@ -68,6 +68,7 @@ flowchart LR
 | [docs/interfaces.md](docs/interfaces.md) | 設定規格、命令契約、leader 輸入 adapter、技能結果 |
 | [docs/scenes-and-tasks.md](docs/scenes-and-tasks.md) | 資產、場地配置、任務定義與量測需求 |
 | [docs/teleop-data-training.md](docs/teleop-data-training.md) | 遙操作、episode 資料、檢查與分割、ACT 訓練 |
+| [docs/real-teleop.md](docs/real-teleop.md) | 單臂／雙臂實機 CLI、可攜 episode、離線讀回與假硬體接管 |
 | [docs/inference-dagger-evaluation.md](docs/inference-dagger-evaluation.md) | 自主推論、DAgger 閉環、再訓練比較與評估 |
 | [docs/agent.md](docs/agent.md) | Agent、任務執行器、需求帳本與缺料流程 |
 | [docs/task-executor.md](docs/task-executor.md) | 需求帳本與任務執行器的實作、改單規則、驗收場景（#5） |

@@ -1,0 +1,23 @@
+# Copy this file outside version control and fill the local IDs and device paths.
+control_hz: 60
+arms:
+  right:
+    leader: {id: replace-right-leader-calibration-id, port: /dev/serial/by-id/replace-right-leader}
+    follower: {id: replace-right-follower-calibration-id, port: /dev/serial/by-id/replace-right-follower}
+cameras:
+  global:
+    backend: realsense
+    device: "replace-D455-serial"
+    width: 640
+    height: 480
+    fps: 30
+    depth: true
+    calibration: {id: global-d455, version: replace-with-local-calibration-revision}
+  wrist:
+    backend: v4l2
+    device: /dev/v4l/by-path/replace-right-wrist
+    width: 640
+    height: 480
+    fps: 30
+    fourcc: MJPG
+    calibration: {id: right-wrist, version: unmeasured-v1}

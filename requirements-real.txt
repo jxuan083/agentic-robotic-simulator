@@ -1,0 +1,5 @@
+# Hardware environment only. Offline fake generation and readback use Python's standard library.
+lerobot[feetech]==0.4.3
+PyYAML>=6.0
+# Omit this dependency when all cameras use V4L2.
+pyrealsense2==2.59.1.11053
