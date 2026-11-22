@@ -33,40 +33,75 @@ def at_hover(sim, estimate):
             "xy_error_mm": xy_mm, "z_error_mm": z_mm, "joint_speed_rad_s": speed}
 
 
-def search_source(sim, color):
-    """Look across the known tray when the global image has no reliable candidate."""
+def search_source(sim, color, known=()):
+    """Look across the known tray when the global image did not confirm every cube of the requested colour.
+
+    Global fits already confirmed in this static tray (``known``) stay candidates. A cube seen in several frames
+    counts once: centres closer than one cube edge are the same cube, because two upright cubes cannot be closer.
+    A wrist estimate replaces a global one of the same cube. Candidates are rebuilt on every call (new tray state)."""
     tray = sim.source_tray
     c, s = np.cos(tray["yaw"]), np.sin(tray["yaw"])
     rotation = np.array([[c, -s], [s, c]])
-    seen, views = [], []
     # Two red cubes are in the benchmark order. Require both before ranking nearest.
     expected = sim.colors.count(color)
-    for u, v in ((-0.5, 0), (0.4, 0), (-0.5, -0.55), (-0.5, 0.55)):
+    seen = [{"estimate": p, "sources": ["global"]} for p in known]
+    views = []
+
+    def add(estimate, source):
+        for item in seen:
+            if np.linalg.norm(estimate.xy - item["estimate"].xy) < sim.scene.edge:
+                if item["sources"] == ["global"]:
+                    item["estimate"] = estimate
+                item["sources"].append(source)
+                return
+        seen.append({"estimate": estimate, "sources": [source]})
+
+    def ranked():
+        items = sorted(seen, key=lambda item: np.linalg.norm(item["estimate"].xy - sim.pan))
+        return [item["estimate"] for item in items], [{"xy_m": item["estimate"].xy.tolist(), "sources": item["sources"]}
+                                                      for item in items]
+
+    for i, (u, v) in enumerate(((-0.5, 0), (0.4, 0), (-0.5, -0.55), (-0.5, 0.55))):
+        if len(seen) == expected:
+            break
         xy = tray["center"] + rotation @ (np.array([u, v]) * tray["inner_half"])
         if sim.recenter_wrist(Estimate(xy, 0, 0), height=sim.cfg["hover_z_m"] + 0.025) is None:
             continue
         record = sim.image("wrist")
         views.append(xy.tolist())
         for found in global_candidates(record, color, {}, base_xy=sim.pan):
-            if not block_in_tray(found["center_xyz_m"], tray, sim.scene.edge):
-                continue
-            estimate = Estimate.from_record(found)
-            if all(np.linalg.norm(estimate.xy - other.xy) > sim.scene.edge / 2 for other in seen):
-                seen.append(estimate)
-        if len(seen) == expected:
-            return sorted(seen, key=lambda item: np.linalg.norm(item.xy - sim.pan)), views
-    return [], views
+            if block_in_tray(found["center_xyz_m"], tray, sim.scene.edge):
+                add(Estimate.from_record(found), f"wrist_view_{i}")
+    estimates, records = ranked()
+    return (estimates if len(seen) == expected else []), views, records
 
 
-def separated_views(sim, target, neighbors):
-    """Rank reachable wrist viewpoints by projected separation and distance to frame edges."""
+def _hull_gap(a, b):
+    """Pixel distance between two convex hulls (0 when they touch or overlap)."""
+    a, b = a.reshape(-1, 1, 2), b.reshape(-1, 1, 2)
+    if cv2.intersectConvexConvex(a, b)[0] > 0:
+        return 0.0
+    d = [-cv2.pointPolygonTest(b, (float(x), float(y)), True) for x, y in a[:, 0]]
+    d += [-cv2.pointPolygonTest(a, (float(x), float(y)), True) for x, y in b[:, 0]]
+    return max(0.0, min(d))
+
+
+def separated_views(sim, target, neighbors, same_color=()):
+    """Rank reachable wrist viewpoints: first those where the target and every same-colour neighbour project as
+    separate silhouettes (a shared silhouette cannot be split by colour), then by overlap with any neighbour,
+    whether the same-colour neighbours are also complete in the frame, the target's distance to the frame edges."""
     if not neighbors:
         return []
     edge, floor = sim.scene.edge, sim.floor
     vertices = [cube_vertices(p.xy, p.yaw, edge, floor) for p in [target, *neighbors]]
+    same_vertices = [cube_vertices(p.xy, p.yaw, edge, floor) for p in same_color]
     current = sim.data.qpos[sim.scene.arm_qpos] - sim.scene.arm_offset
     height = sim.cfg["hover_z_m"] + 0.025
     choices = []
+
+    def frame_margin(uv, camera):
+        return min(uv[:, 0].min(), uv[:, 1].min(), camera.width - uv[:, 0].max(), camera.height - uv[:, 1].max())
+
     for angle in np.arange(8) * math.pi / 4:
         xy = target.xy + 0.035 * np.array([math.cos(angle), math.sin(angle)])
         for roll in (0, math.pi / 2, -math.pi / 2):
@@ -76,23 +111,31 @@ def separated_views(sim, target, neighbors):
             camera = CameraGeometry.from_scene(sim.scene_config, "wrist", joints_rad=q)
             try:
                 points = [camera.project(v, distorted=False).astype(np.float32) for v in vertices]
+                same = [camera.project(v, distorted=False).astype(np.float32) for v in same_vertices]
             except ValueError:
                 continue
             uv = points[0]
-            margin = min(uv[:, 0].min(), uv[:, 1].min(), camera.width - uv[:, 0].max(),
-                         camera.height - uv[:, 1].max())
+            margin = frame_margin(uv, camera)
             if margin < 5:
                 continue
             hull = cv2.convexHull(uv)
             overlap = max(cv2.intersectConvexConvex(hull, cv2.convexHull(other))[0] for other in points[1:])
             gap = min(np.linalg.norm(other.mean(axis=0) - uv.mean(axis=0)) for other in points[1:])
-            score = (overlap / cv2.contourArea(hull), -min(margin, 45), -gap, np.linalg.norm(q-current))
-            choices.append((score, q, xy))
+            same_gap = min((_hull_gap(hull, cv2.convexHull(o)) for o in same), default=math.inf)
+            same_margin = min((frame_margin(o, camera) for o in same), default=math.inf)
+            separated, complete = same_gap >= 8, same_margin >= 5
+            score = (not separated, overlap / cv2.contourArea(hull), not complete, -min(margin, 45), -gap,
+                     np.linalg.norm(q - current))
+            info = {"ee_xy_m": xy.tolist(), "roll_deg": math.degrees(roll), "target_margin_px": float(margin),
+                    "same_color_gap_px": None if not same else float(same_gap),
+                    "same_color_margin_px": None if not same else float(same_margin),
+                    "overlap_fraction": float(overlap / cv2.contourArea(hull))}
+            choices.append((score, q, xy, info))
     choices.sort(key=lambda x: x[0])
     selected = []
-    for _, q, xy in choices:
+    for _, q, xy, info in choices:
         if all(np.linalg.norm(q - other[0]) > 0.35 for other in selected):
-            selected.append((q, xy))
+            selected.append((q, xy, info))
         if len(selected) == 2:
             break
     return selected
@@ -129,7 +172,8 @@ def trial(sim, episode):
     _, coarse, _ = sim.coarse(episode, scene_candidates=observed)
     same = [p for c, p in observed if c == color]
     if coarse is None or len(same) != sim.colors.count(color):
-        same, result["search_views_xy_m"] = search_source(sim, color)
+        same, result["search_views_xy_m"], result["search_candidates"] = search_source(
+            sim, color, [p for c, p in observed if c == color])
         if not same:
             return dict(result, status="source_search_unconfirmed")
         coarse = same[0]
@@ -156,10 +200,11 @@ def trial(sim, episode):
         final = observe(anchor) if plan is not None else None
         if final is None and neighbors:
             result["separation_views"] = []
-            for q, xy in separated_views(sim, anchor, neighbors):
+            same_near = [p for p in neighbors if any(p is n for n in same_neighbors)]
+            for q, xy, info in separated_views(sim, anchor, neighbors, same_near):
                 sim.motion(0.55, q=q)
                 final = observe(anchor)
-                result["separation_views"].append({"ee_xy_m": xy.tolist(), "confirmed": final is not None})
+                result["separation_views"].append(dict(info, confirmed=final is not None))
                 if final is not None:
                     break
         if plan is None and final is None:
