@@ -344,6 +344,7 @@ def main():
     p.add_argument("--target", choices=("hidden", "any"), default="hidden")
     p.add_argument("--depth-noise-mm-at-1m", type=float, default=5.0)
     p.add_argument("--video", action="store_true")
+    p.add_argument("--only", type=int, nargs="+", help="run just these episode indices (same scenes as in a full run)")
     p.add_argument("--no-declutter", action="store_true", help="baseline: localize directly, move nothing")
     p.add_argument("--scene", default="configs/scenes/lab_20261120.yaml")
     p.add_argument("--config", default="configs/target_localization.yaml")
@@ -357,7 +358,7 @@ def main():
     random_path.write_text(yaml.safe_dump(random_cfg, sort_keys=False), encoding="utf-8")
     cfg, task_cfg = load(args.config), load(TASK_CONFIG)
     reachable = grasp_ik_checker(load(args.scene), "configs/teleop.yaml")
-    eps = [run_episode(i, args, cfg, task_cfg, reachable, random_path, out) for i in range(args.episodes)]
+    eps = [run_episode(i, args, cfg, task_cfg, reachable, random_path, out) for i in (args.only or range(args.episodes))]
     by = {}
     for e in eps:
         by.setdefault(e["scenario"], []).append(e)
