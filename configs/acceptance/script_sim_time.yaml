@@ -1,0 +1,37 @@
+# Injected keys move by simulated time (PR #17 round 3): the same hold moves the target by linear_speed x simulated
+# seconds whatever the frame rate, a pause accumulates nothing and the resume does not jump.
+# Run it slow on purpose (lab scene with live perception, about 15-20 fps) and fast (no perception):
+#   docker/isaac/run.sh /isaac-sim/python.sh scripts/isaac_ee_teleop.py --scene configs/scenes/lab_20261120.yaml \
+#     --block_colors red,yellow,blue --live-perception --script configs/acceptance/script_sim_time.yaml \
+#     --exit_after_script --result outputs/acceptance/script_sim_time_perception.json
+# linear_speed is 0.08 m/s (configs/teleop.yaml): 0.5 simulated s = 40 mm, one 60 Hz control step = 1.33 mm.
+- {wait: 4.0}
+- {settle: 1.0}
+
+- {note: "HOLD by simulated time: 0.5 simulated s of W moves 40 mm at any frame rate"}
+- {mark: hold_start}
+- {hold: [W], until: "False", sim_timeout: 0.5}
+- {mark: hold_end}
+- {check: "abs((m['hold_end']['target'][0] - m['hold_start']['target'][0]) - 0.040) < 0.0028", label: "hold: 0.5 simulated s of W moves 40 mm (within two control steps)"}
+- {check: "abs((m['hold_end']['target'][0] - m['hold_start']['target'][0]) / (m['hold_end']['t_sim'] - m['hold_start']['t_sim']) - 0.08) < 0.006", label: "hold: speed is 0.08 m/s of simulated time"}
+
+- {note: "PAUSE while the script holds a key: nothing accumulates"}
+- {press: S}
+- {settle: 0.3}
+- {tap: P}
+- {hold: [], until: "paused", timeout: 5}
+- {mark: paused_at}
+- {wait: 2.0}
+- {check: "paused and abs(target[0] - m['paused_at']['target'][0]) < 1e-9", label: "pause: no displacement accumulated while paused (host time passes, simulated time does not)"}
+- {check: "t_sim == m['paused_at']['t_sim']", label: "pause: simulated time stopped"}
+- {tap: P}
+- {hold: [], until: "not paused", timeout: 5}
+- {mark: resumed}
+- {release: S}
+- {check: "target_step < 0.0014 and abs(target[0] - m['paused_at']['target'][0]) < 0.0014", label: "resume: no jump (at most one control step from where the pause began)"}
+
+- {note: "AFTER RESUME the same hold moves the same distance"}
+- {mark: hold2_start}
+- {hold: [S], until: "target_step > 0.0014", sim_timeout: 0.5}
+- {mark: hold2_end}
+- {check: "abs((m['hold2_start']['target'][0] - m['hold2_end']['target'][0]) - 0.040) < 0.0028", label: "after resume: 0.5 simulated s of S moves 40 mm back, no per-frame jump"}

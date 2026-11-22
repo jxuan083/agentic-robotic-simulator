@@ -36,3 +36,21 @@ def test_mujoco_reset_discards_previous_camera_frame_and_advances_generation():
     assert manager.errors == {}
     assert manager.generation == {"global": 3, "wrist": 3}
     assert manager.last_capture == {}
+
+
+def test_stage_delay_and_annotations_are_passed_only_when_not_default():
+    import argparse
+    from agentic_sim.perception_cli import add_arguments, options
+    ap = argparse.ArgumentParser()
+    add_arguments(ap)
+    exp = load_experiment("lab_20261120")
+    plain = options(ap.parse_args(["--live-perception"]))
+    assert set(plain) == {"live_perception", "perception_camera", "perception_hz", "perception_json"}
+    args = _app_args(exp, RunOptions(**plain), "isaac")
+    assert "--perception-stage" not in args and "--annotations" not in args and "--perception-delay" not in args
+    bench = options(ap.parse_args(["--live-perception", "--perception-stage", "capture", "--annotations", "off",
+                                   "--perception-delay", "3"]))
+    args = _app_args(exp, RunOptions(**bench), "mujoco")
+    s = " ".join(args)
+    assert "--perception-stage capture" in s and "--perception-delay 3.0" in s and "--annotations off" in s
+    assert options(ap.parse_args(["--annotations", "off"])) == {}       # perception off: nothing is passed

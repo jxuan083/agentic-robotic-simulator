@@ -192,3 +192,36 @@ def test_row_and_camera_index_are_cross_checked_per_frame(tmp_path, corrupt, cam
     assert any(e["camera"] == camera and e["frame"] == 5 for e in rep["errors"])
     assert read_episode.main([root]) == 1
     assert json.load(open(os.path.join(root, "readback", "readback.json")))["ok"] is False
+
+
+class _SlowWorld:
+    """A gripper that closes over 0.5 simulated seconds while the simulation runs at 0.16 x real time."""
+    def __init__(self, rtf):
+        self.t_sim, self.jaw, self.closing, self.rtf = 0.0, 0.5, False, rtf
+
+    def tick(self, dt_host):
+        self.t_sim += dt_host * self.rtf
+        if self.closing:
+            self.jaw = max(0.2, self.jaw - dt_host * self.rtf * 0.6)   # stops on the block at 0.2
+
+
+@pytest.mark.parametrize("step,passes", [({"settle": 1.0}, True), ({"wait": 1.0}, False)])
+def test_simulated_time_waits_survive_a_slow_simulation(monkeypatch, step, passes):
+    """Close the gripper, wait, check the jaw stopped on the block. A host-time wait checks too early when the
+    simulation runs slowly (live perception: about 0.16 x real time); the simulated-time settle does not."""
+    from agentic_sim.teleop import script_core
+    clock = {"t": 0.0}
+    monkeypatch.setattr(script_core.time, "monotonic", lambda: clock["t"])
+    world = _SlowWorld(rtf=0.16)
+
+    class Script(script_core.ScriptCore):
+        def _key(self, name, down):
+            if name == "C":
+                world.closing = down or world.closing
+
+    sc = Script([{"tap": "C"}, step, {"check": "jaw <= 0.21", "label": "jaw on the block"}], log=lambda *a: None)
+    while not sc.done:
+        sc.step({"t_sim": world.t_sim, "jaw": world.jaw})
+        clock["t"] += 1 / 30
+        world.tick(1 / 30)
+    assert sc.results[0]["ok"] is passes

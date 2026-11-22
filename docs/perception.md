@@ -166,6 +166,12 @@ python tools/lab.py --backend mujoco --no-chat --random-blocks --live-perception
 
 Isaac 的 global/wrist 預覽是兩個同時可見、標題不同的視窗；MuJoCo 在兩個相機 inset 顯示疊圖，並在旁列出各鏡頭的中心 XYZ、拒絕候選、age 與 stale 狀態。`--perception-camera global` 或 `wrist` 可單獨啟用一鏡。兩引擎都是獨立純影像估算，不讀取 block pose。可用 `--perception-json <path>` 定期覆寫 latest JSON；每鏡記錄含 frame、capture 時間、相機矩陣、候選中心、八角、fit/rejected 與 age。Reset 會清除前一場景顯示與 JSON 最新資料。
 
+**操作工作區（M）**：
+- 進入後收起這些預覽浮窗，改在相機格內切換原圖或標註快照（按 1／2）。標註只畫在產生它的那張影格上，結果超過 2 秒就改顯示原圖並註明，見 [operator-workspace.md](operator-workspace.md)。
+- `--annotations off` 讓相機格一開始顯示原圖。
+- `--perception-stage capture` 只取圖不估測，給效能對照用。
+- `--perception-delay` 是測試用的估測延遲。
+
 每次擷取完整 sensor 解析度的 RGB 及**同一渲染影格**的 view/projection matrix。腕部相機的 USD world pose 已由實際 gripper link 更新；view matrix 決定該影格外參，不會把較晚的關節角度套回舊影像。理想針孔內參取該次渲染 projection；畸變相機沿用場景的鏡頭內參與畸變。尚未使用深度影像。
 
 一次最多一個背景推算工作，忙碌時不排隊累積舊影像；`--perception-hz` 是更新頻率上限，不保證每秒達到指定次數。疊圖和數字屬於同一張處理後的快照，`Snapshot age` 從渲染捕獲回報時開始計時，超過兩秒標示 `STALE`。不會把舊八點畫到正在移動的新相機畫面。Reset 會清除舊結果；畫面截斷、分割合併或擬合不佳的候選顯示 rejected。沒有候選時清空上一幀座標。

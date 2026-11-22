@@ -21,7 +21,8 @@ def camera_selection(camera):
 
 
 class MjLivePerception:
-    def __init__(self, scene, model, hz=2.0, log=print, camera="both", json_path=None):
+    def __init__(self, scene, model, hz=2.0, log=print, camera="both", json_path=None, stage="estimate",
+                 delay_s=0.0, fault=None):
         if not np.isfinite(hz) or not 0 < hz <= 30:
             raise ValueError("perception_hz must be finite and in (0, 30]")
         self.scene_cfg, self.model = scene, model
@@ -46,6 +47,9 @@ class MjLivePerception:
         self.hz, self.period = hz, 1.0 / hz
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mujoco-perception")
         self.estimators = {key: LiveEstimator(self.edge, self.floor) for key in self.specs}
+        self.stage = stage
+        self.work = {key: est.worker(stage, delay_s, fault if fault is not None and fault.camera == key else None)
+                     for key, est in self.estimators.items()}
         self.renderers = {}
         self.latest, self.futures, self.last_capture = {}, {}, {}
         self.generation = {key: 0 for key in self.specs}
@@ -104,7 +108,7 @@ class MjLivePerception:
         geometry = self._geometry(key, data)
         number = self.frame_numbers[key]
         self.frame_numbers[key] += 1
-        return self.pool.submit(self.estimators[key].predict, rgb, geometry, number, now), rgb
+        return self.pool.submit(self.work[key], rgb, geometry, number, now), rgb
 
     def update(self, data):
         if self.closed:
@@ -133,6 +137,11 @@ class MjLivePerception:
                 self.future_generation[key] = self.generation[key]
             except Exception as exc:
                 self.errors[key] = str(exc)
+
+    def snapshot(self, key):
+        """(annotated RGB, latest record) of a camera, or None before its first result."""
+        item = self.latest.get(key)
+        return None if item is None else (item["overlay_rgb"], item["record"])
 
     def overlay(self, key):
         item = self.latest.get(key)

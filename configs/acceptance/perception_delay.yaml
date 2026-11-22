@@ -1,0 +1,10 @@
+# Late perception results (run with --live-perception --perception-delay 3): every estimate completes at least 3 s
+# after its image was captured, so its age is above the 2 s staleness limit. Both camera cells must show the live raw
+# image with "annotation too old", never the old boxes on a newer frame; the status column keeps the result age.
+- {wait: 3.0}
+- {tap: M}
+- {wait: 14.0}
+- {check: "'too old' in cells['global']['text'] and 'too old' in cells['wrist']['text']", label: "delay: both cells say the annotation is too old"}
+- {check: "not cells['global']['image_visible'] and not cells['wrist']['image_visible']", label: "delay: no old annotated snapshot over the live camera"}
+- {tap: M}
+- {wait: 1.5}

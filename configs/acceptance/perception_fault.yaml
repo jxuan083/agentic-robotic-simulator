@@ -1,0 +1,23 @@
+# A failed capture or estimate (run with --live-perception --perception-fault global:10:4): 10 s after its first
+# valid result (by then both cells show annotations; checked), every global estimate fails for 4 s. The global cell
+# must go back to the live raw image with the reason at once, the wrist cell must stay annotated, and the global
+# annotation must come back only with a new valid result (a newer frame number), never with the result from before
+# the failure.
+- {wait: 3.0}
+- {tap: M}
+- {hold: [], until: "cells['global']['image_visible'] and cells['wrist']['image_visible']", timeout: 60}
+- {mark: annotated}
+- {check: "m['annotated']['cells']['global']['image_visible'] and m['annotated']['cells']['wrist']['image_visible']", label: "fault: both cells annotated before the failure"}
+- {hold: [], until: "perception['global']['error'] is not None", timeout: 40}
+- {mark: faulted}
+- {check: "perception['global']['age_s'] < 2.0", label: "fault: the last valid global result is still fresh (the cell would be annotated without the error)"}
+- {check: "not cells['global']['image_visible'] and 'perception error' in cells['global']['text']", label: "fault: the failing camera's cell is back to the raw image with the reason, at once"}
+- {check: "cells['wrist']['image_visible'] and perception['wrist']['error'] is None", label: "fault: the other camera keeps its annotation"}
+- {wait: 2.0}
+- {check: "not cells['global']['image_visible'] and perception['global']['error'] is not None", label: "fault: still raw while the estimates fail (the earlier result is not shown again)"}
+- {hold: [], until: "cells['global']['image_visible']", timeout: 20}
+- {mark: recovered}
+- {check: "perception['global']['error'] is None and perception['global']['frame'] > m['faulted']['perception']['global']['frame']", label: "recovery: the annotation is back only with a new valid result (newer frame)"}
+- {check: "perception['global']['age_s'] < 2.0", label: "recovery: the shown result is fresh"}
+- {tap: M}
+- {wait: 1.5}

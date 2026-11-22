@@ -77,6 +77,27 @@ class LiveEstimator:
             found = out
         return found
 
+    @staticmethod
+    def capture_only(rgb, camera, frame_number, captured_at):
+        """--perception-stage capture: the same capture path without estimation (benchmarks the capture cost)."""
+        return rgb, {'frame_number': frame_number, 'captured_at_monotonic_s': captured_at, 'camera': camera.name,
+                     'image_size': [camera.width, camera.height], 'detections': [], 'method': 'capture_only'}
+
+    def worker(self, stage='estimate', delay_s=0.0, fault=None):
+        """The function the perception worker runs per captured image: estimate (default) or capture only; delay_s
+        (tests) holds each result back so late results can be checked (they keep their capture time); fault
+        (tests, an InjectedFault) makes the estimates of this camera fail for a while."""
+        fn = self.predict if stage == 'estimate' else self.capture_only
+        if delay_s:
+            inner = fn
+
+            def fn(*a):
+                import time
+                out = inner(*a)
+                time.sleep(delay_s)
+                return out
+        return fn if fault is None else fault.wrap(fn)
+
     def predict(self, rgb, camera, frame_number, captured_at):
         from .vertices import annotate_vertices
         records, fits = [], []
@@ -93,3 +114,40 @@ class LiveEstimator:
             'distortion': camera.dist.tolist(), 'detections': records,
             'id_scope': 'current_frame_only', 'method': 'classical_RGB_and_cube_geometry',
         }
+
+
+class InjectedFault:
+    """Test only (--perception-fault CAMERA:AFTER:DURATION): the estimates of one camera raise for DURATION seconds,
+    starting AFTER seconds after its first valid result; afterwards they succeed again. Checks that a failed capture
+    or estimate takes the camera cell back to the raw image, and that only a new valid result brings the
+    annotation back."""
+
+    def __init__(self, camera: str, after_s: float, duration_s: float):
+        self.camera, self.after_s, self.duration_s = camera, float(after_s), float(duration_s)
+        self.first_ok = None
+
+    @classmethod
+    def parse(cls, text):
+        from agentic_sim.perception_cli import parse_fault
+        spec = parse_fault(text)
+        return None if spec is None else cls(*spec)
+
+    def window(self):
+        """(start, end) host monotonic time of the failure, or None before the first valid result."""
+        if self.first_ok is None:
+            return None
+        start = self.first_ok + self.after_s
+        return start, start + self.duration_s
+
+    def wrap(self, fn):
+        import time
+
+        def run(*a):
+            w = self.window()
+            if w is not None and w[0] <= time.monotonic() < w[1]:
+                raise RuntimeError('injected test fault (--perception-fault)')
+            out = fn(*a)
+            if self.first_ok is None:
+                self.first_ok = time.monotonic()
+            return out
+        return run

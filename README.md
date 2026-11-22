@@ -45,6 +45,7 @@ flowchart LR
 | 實驗室場景、相機視角 | [#9](https://github.com/jxuan083/agentic-robotic-simulator/issues/9) 已完成（模擬，單臂）：依 2026-11-20 實驗室 RGB-D 錄影、關節讀值與照片重建托盤擺位，加入 D455 global 與腕部相機視角，Isaac 與 MuJoCo 共用場景檔；相機位姿由深度點與手臂網格對齊推算（殘差中位數 4.6 mm），部分數值仍為估計或暫定（[docs/lab-scene-cameras.md](docs/lab-scene-cameras.md)） |
 | 一鍵入口、聊天視窗、常駐相機 | [#11](https://github.com/jxuan083/agentic-robotic-simulator/issues/11) 已完成（模擬）：`tools/lab.py` 一個指令開好模型服務、模擬伺服器與獨立的聊天視窗；相機畫面固定在主畫面（Isaac 停靠在 3D 視窗下方）；腕部畫面預設套用由實拍推算的鏡頭變形。兩個引擎都完成「聊天下單 → 缺料詢問 → 聊天回答 → 完成」的競賽流程（[docs/lab-entry.md](docs/lab-entry.md)） |
 | 模擬示範採集與讀回 | [#13](https://github.com/jxuan083/agentic-robotic-simulator/issues/13) 已完成（模擬，單臂）：Isaac 遙操作時以 20 Hz 錄 global 與腕部 RGB、同一步的命令（EE 目標與關節目標）和狀態，格式沿用實機原始錄製；`tools/read_episode.py` 從磁碟檢查完整性並找出夾爪閉合、積木離盤、目標盤放開三個時刻。人工操作的成功示範讀回通過（[docs/demo-capture.md](docs/demo-capture.md)） |
+| 共同入口：錄示範與讀回 | [#16](https://github.com/jxuan083/agentic-robotic-simulator/issues/16) 已完成（模擬，單臂）：`uv run tools/sim.py` 選「錄示範」用預設配置（含黃色積木）開 Isaac 錄製，終端機顯示等待相機、錄製中幀數、已存檔路徑；「檢查上一筆」讀回錄製端回報的那一筆。採集與讀回命令都可複製單獨執行，人工示範從入口錄製並讀回通過（[docs/demo-capture.md](docs/demo-capture.md#從共同入口錄製與讀回)）。按 M 進入全螢幕操作工作區（Isaac、MuJoCo）：3D 操作區、右欄狀態、下方雙相機可切換原圖或標註，分開顯示 UI FPS、RTF 與感知結果年齡；右欄可把模擬器視窗錄成 MP4（[docs/operator-workspace.md](docs/operator-workspace.md)） |
 | Agent（任務規劃、感知整合） | 預計實作 |
 | 評估報表 | 預計實作；驗收數字為目標，尚無成果 |
 
@@ -77,6 +78,7 @@ flowchart LR
 | [docs/perception.md](docs/perception.md) | RGB 積木實例分割、顏色估計、追蹤 ID、CLI 與微調說明 |
 | [docs/random-blocks.md](docs/random-blocks.md) | 隨機積木數量、顏色與合法初始位置；啟動／Reset 抽樣與 seed 重現 |
 | [docs/remote-desktop.md](docs/remote-desktop.md) | 瀏覽器桌面啟動 Isaac 與 host 隔離環境 MuJoCo |
+| [docs/operator-workspace.md](docs/operator-workspace.md) | 全螢幕操作工作區（M）、相機格原圖／標註、UI FPS／RTF／感知年齡、右欄畫面錄影、效能對照（#16） |
 | [docs/demo-capture.md](docs/demo-capture.md) | 模擬示範採集：錄製指令、資料格式與單位、讀回與三個時刻、人工示範驗收（#13） |
 | [docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md) | Isaac Sim 最小場景與 keyboard／mouse EE 操作：環境、啟動、操作、驗收、已知問題 |
 | [docs/sim-server.md](docs/sim-server.md) | 實驗設定檔、選單、主機端 uv 環境、模擬伺服器控制協定 |
@@ -85,3 +87,5 @@ flowchart LR
 ### VS Code Remote：瀏覽器操作
 
 執行 `docker/isaac/remote.sh run`，在 VS Code **Ports** 轉發 **6080**，開啟 `http://localhost:6080/vnc.html?autoconnect=1&resize=scale`。預設顯示隨機積木場景與即時八頂點預覽；詳見 [遠端桌面](docs/remote-desktop.md)。
+
+開發與交接請見[開發規則](AGENTS.md)。

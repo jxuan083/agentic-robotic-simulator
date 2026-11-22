@@ -189,6 +189,20 @@ class TeleopPanel:
                 for key, text, action, name in row:
                     kw = {"name": name} if name else {}
                     self.buttons[key] = ui.Button(text, clicked_fn=lambda a=action: self.actions.append(a), **kw)
+        with ui.HStack(height=30, spacing=4):   # screen video of this window (agentic_sim.screen_video)
+            self.buttons["screen_video"] = ui.Button("Record screen",
+                                                     clicked_fn=lambda: self.actions.append("screen_video"))
+        self.screen_label = ui.Label("", name="dim", word_wrap=True, height=0)
+        self._screen = None
+
+    def set_screen(self, button_text: str, line: str, enabled: bool = True):
+        """Screen video button and state line (changed only when the text changes: label layout is not free)."""
+        if (button_text, line, enabled) == self._screen:
+            return
+        self._screen = (button_text, line, enabled)
+        self.buttons["screen_video"].text = button_text
+        self.screen_label.text = line
+        self.buttons["screen_video"].enabled = enabled
 
     def _build_scene(self):
         ui.Label("SCENE  (applied on Reset)", name="section", height=16)

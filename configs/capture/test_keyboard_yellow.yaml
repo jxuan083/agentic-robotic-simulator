@@ -3,24 +3,28 @@
 # operator: scripted_input and are NOT demonstrations; the acceptance episode is teleoperated by a person.
 # Waypoints follow configs/trajectories/lab_pick_place.yaml (5 mm short on the fixed-finger side, yaw offset =
 # -(heading from the pan axis) so the fingers face the cube sides).
+# Physical waits and timeouts are in simulated seconds (settle, sim_timeout): the run passes however slowly the
+# simulation goes (e.g. about 0.2 x real time with live perception on). The first wait is host time (app start).
+# Injected keys move by simulated time (one control step per frame), so the waypoints do not depend on the frame rate.
 - {wait: 4.0}
-- {hold: [O], until: "gripper >= 0.5", timeout: 3}
-- {hold: [W], until: "target[0] >= 0.230", timeout: 5}
-- {hold: [A], until: "target[1] >= 0.155", timeout: 5}
-- {hold: [Z], until: "yaw_offset <= -0.60", timeout: 3}
-- {hold: [Q], until: "target[2] <= 0.029", timeout: 5}
-- {wait: 1.2}
-- {hold: [C], until: "gripper <= -0.17", timeout: 3}
-- {wait: 1.0}
+- {hold: [O], until: "gripper >= 0.5", sim_timeout: 3}
+- {hold: [W], until: "target[0] >= 0.230", sim_timeout: 5}
+- {hold: [A], until: "target[1] >= 0.155", sim_timeout: 5}
+- {hold: [Z], until: "yaw_offset <= -0.60", sim_timeout: 3}
+- {hold: [Q], until: "target[2] <= 0.029", sim_timeout: 5}
+- {settle: 1.2}
+- {mark: grasp}                      # where the gripper closes (compared across frame rates)
+- {hold: [C], until: "gripper <= -0.17", sim_timeout: 3}
+- {settle: 1.0}
 - {check: "jaw > 0.05", label: "grasp: jaw stopped by the block"}
-- {hold: [E], until: "target[2] >= 0.105", timeout: 5}
-- {wait: 0.8}
+- {hold: [E], until: "target[2] >= 0.105", sim_timeout: 5}
+- {settle: 0.8}
 - {check: "blocks[1][2] > 0.06", label: "lift: yellow block raised"}
-- {hold: [D], until: "target[1] <= -0.130", timeout: 8}
-- {wait: 0.8}
-- {hold: [Q], until: "target[2] <= 0.045", timeout: 5}
-- {wait: 0.6}
-- {hold: [O], until: "gripper >= 0.5", timeout: 3}
-- {wait: 0.8}
-- {hold: [E], until: "target[2] >= 0.105", timeout: 5}
-- {wait: 3.0}
+- {hold: [D], until: "target[1] <= -0.130", sim_timeout: 8}
+- {settle: 0.8}
+- {hold: [Q], until: "target[2] <= 0.045", sim_timeout: 5}
+- {settle: 0.6}
+- {hold: [O], until: "gripper >= 0.5", sim_timeout: 3}
+- {settle: 0.8}
+- {hold: [E], until: "target[2] >= 0.105", sim_timeout: 5}
+- {settle: 3.0}
