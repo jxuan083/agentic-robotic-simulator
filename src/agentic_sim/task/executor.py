@@ -48,6 +48,7 @@ class TaskExecutor:
         self.unfindable: dict = {}            # colour -> why Acquire could not get it (cleared by a new order)
         self._unfindable_t = 0.0
         self.grasp_failures: dict = {}        # colour -> failed grasps of acquired poses
+        self.failed_grasp: dict = {}          # colour -> the last failed grasp (pos, yaw_offset): retry differently
         self.seen_stock: dict = {}            # colour -> blocks the last global look saw in the storage tray
         self.status_text = ""
         self.ledger = Ledger()
@@ -261,7 +262,7 @@ class TaskExecutor:
                                color=a["color"], purpose="deliver")
         for c in needed:
             if c not in self.unfindable:
-                return self._start(Acquire, color=c, purpose="deliver")
+                return self._start(Acquire, color=c, purpose="deliver", avoid_grasp=self.failed_grasp.get(c))
         if needed:
             if not self.restock_wait and self._asked_shortage != led.revision:
                 self._ask_shortage(needed)
@@ -334,7 +335,7 @@ class TaskExecutor:
         e = self.ledger.set_order(counts, mode, self.t)
         self._write(e)
         self.restock_wait = False
-        self.unfindable, self.grasp_failures = {}, {}
+        self.unfindable, self.grasp_failures, self.failed_grasp = {}, {}, {}
         if self.state == "done":
             self.state = "running"
         q = self.question
@@ -443,8 +444,11 @@ class TaskExecutor:
             if sk.name == "pick_at" and r.status == "failed":
                 c = sk.params["color"]
                 self.grasp_failures[c] = self.grasp_failures.get(c, 0) + 1
-                if self.grasp_failures[c] >= int(self.cfg["retry"]["pick_attempts"]):
+                self.failed_grasp[c] = {"pos": list(sk.params["pos"]), "yaw_offset": sk.params.get("yaw_offset")}
+                if self.grasp_failures[c] >= int(self.cfg["retry"].get("acquired_pick_attempts", 3)):
                     self.unfindable[c], self._unfindable_t = f"grasp failed {self.grasp_failures[c]} times", self.t
+            if sk.name == "pick_at" and r.status == "succeeded":
+                self.failed_grasp.pop(sk.params["color"], None)
             if r.status in ("succeeded", "cancelled"):
                 self.holding = r.holding
             elif r.holding is not None and r.failure_reason != "dropped":

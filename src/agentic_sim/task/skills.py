@@ -440,6 +440,14 @@ class PickAt(Pick):
         yield from self.move([g[0], g[1], safe], off)
         self.set_phase("descend")
         yield from self.move([g[0], g[1], bp[2] + float(m["grasp_dz"])], off)
+        # measured EE (forward kinematics of the measured joints) short of the grasp height: the gripper rests on
+        # something beside the block; closing there misses or grabs a corner
+        short = float(self.obs.ee[2]) - (float(bp[2]) + float(m["grasp_dz"]))
+        self.evidence["descend_short_m"] = round(short, 4)
+        if short > float(self.cfg["grasp_check"].get("descend_blocked_dz", 0.012)):
+            self.ctx.emit("grasp_blocked", block=b, short_m=round(short, 4))
+            yield from self.up_to_safe(cancellable=False)
+            raise _Fail("blocked")
         self.set_phase("close")
         yield from self.gripper(False)
         self.evidence["jaw_closed"] = round(float(self.obs.jaw), 4)   # measured, as a servo would report it

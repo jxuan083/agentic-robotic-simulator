@@ -19,6 +19,9 @@ grasp_check:
   max_block_ee: 0.035       # m; block centre within this of the EE while holding (otherwise: dropped)
   jaw_hold_min_rad: 0.10    # measured jaw at least this = something between the fingers (PickAt). MuJoCo, 117
                             # picks: holding 0.127-0.234, empty or slipped <= 0.113 at the close, <= 0.071 at the drop
+  descend_blocked_dz: 0.012 # m; PickAt: measured EE still this far above the grasp height after the descent = the
+                            # gripper rests on something (a neighbour, the tray wall): do not close. MuJoCo: grasps
+                            # held up to +10 mm, failed from +13 mm
 verify:
   settle_s: 1.5             # wait up to this long for the placed block to come to rest
   rest_speed: 0.01          # m/s
@@ -27,6 +30,7 @@ stop:
   arm_stopped_qd: 0.1       # rad/s; arm counts as stopped (stop latency measurement)
 retry:
   pick_attempts: 2          # per block, then the block is marked uncertain and skipped
+  acquired_pick_attempts: 3 # cameras: grasps of one colour (each retry another finger orientation or a push first)
 order:
   max_per_color: 8          # blocks of one colour in an order; a larger order is refused, the ledger stays as it was
 shortage:

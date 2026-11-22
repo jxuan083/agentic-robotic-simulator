@@ -7,6 +7,9 @@
     {"status": "holding", "block"}          the target was moved for the declutter and the wrist saw its colour in
                                             the gripper: it is still held, ready to be delivered
     {"status": "unreachable" | "not_found" | "gave_up", "reason"}
+  avoid_grasp={"pos", "yaw_offset"}: a grasp of this colour that failed there (the gripper rested on a neighbour or
+  the tray wall, or the block slipped): when the target is found at the same place again, the other finger
+  orientation is used, or, when there is none, the target is pushed clear first
 
 Each round looks again with the global camera (RGB + depth height check, perception.height), lets the declutter
 rules (task.declutter.plan) pick one action and does it: a wrist look at the target (the coarse-to-fine localization
@@ -179,15 +182,18 @@ class Acquire(Skill):
                                             ctrl.p.max_tilt_deg)
         return q if ok else None
 
-    def grasp_offset(self, items, i, pos, yaw):
+    def grasp_offset(self, items, i, pos, yaw, exclude=None):
         """Finger orientation: the smallest turn, unless the fingers lack room there (task.declutter). An orientation
-        needs IK above and at the grasp point, and the wrist camera mount clear of other blocks there."""
+        needs IK above and at the grasp point, and the wrist camera mount clear of other blocks there; `exclude`
+        (an offset that failed) is not used again."""
         ctrl, m = self.ctrl, self.cfg["motion"]
         safe_z, gap = float(m["safe_z"]), float(m["fixed_finger_gap"])
         heading = lambda o: ctrl.yaw_for(np.array([pos[0], pos[1], 0.0]), o)
         margin = float(self.ctx.loc_cfg["declutter"].get("mount_margin_m", 0.003))
 
         def feasible(o):
+            if exclude is not None and abs(wrap_quarter(o - exclude)) < 0.3 and abs(o - exclude) < 0.8:
+                return False
             y = heading(o)
             g = np.asarray(pos[:2]) - gap * np.array([math.cos(y), math.sin(y)])
             q = self.grasp_ik(pos, o)
@@ -252,6 +258,8 @@ class Acquire(Skill):
         failed, excluded, confirmed, crowded_seen = {}, set(), set(), set()
         confirmed_pose = {}                     # item key -> wrist pose (centre, yaw) of a confirmed target
         moves, result, decision, items, found_at = 0, None, None, [], None
+        avoid, exclude = self.params.get("avoid_grasp"), None
+        self.evidence["retry"] = None
         self.evidence["rounds"] = self.rounds
         for r in range(int(dc["max_moves"]) + int(dc.get("max_localize_attempts", 3)) + 1):
             self._between_moves()
@@ -292,6 +300,40 @@ class Acquire(Skill):
                 row["after_confirm"] = again
                 if again["action"] == "localize" and again["target"] == k:
                     blocker = self.mount_blocker(items, k, result) if result["status"] == "found" else None
+                    if (blocker is None or moves == int(dc["max_moves"])) and result["status"] == "found" and \
+                            avoid is not None and avoid.get("yaw_offset") is not None and np.linalg.norm(
+                                np.asarray(result["center_xyz_m"][:2]) - np.asarray(avoid["pos"][:2])) < 0.015:
+                        # the last grasp failed here: another finger orientation, else push the target clear
+                        it = dict(items[k], xy=list(result["center_xyz_m"][:2]),
+                                  yaw_rad=float(result["yaw_rad_mod_pi_over_2"] or 0.0))
+                        alt = self.grasp_offset(items[:k] + [it] + items[k + 1:], k, result["center_xyz_m"],
+                                                it["yaw_rad"], exclude=float(avoid["yaw_offset"]))
+                        if alt is not None or moves == int(dc["max_moves"]):
+                            exclude = float(avoid["yaw_offset"]) if alt is not None else None
+                            self.evidence["retry"] = "other finger orientation" if alt is not None else None
+                            break
+                        # no other orientation: move the nearest neighbour (the gripper rested on it), or, with none
+                        # close, push the target towards the tray centre (the gripper rested on the wall)
+                        reach = float(dc.get("retry_neighbour_m", 0.03))
+                        near = [j for j, o in enumerate(items)
+                                if j != k and item_gap(items[k], o, rules["hull_margin_m"]) < reach]
+                        if near:
+                            j = min(near, key=lambda j: item_gap(items[k], items[j], rules["hull_margin_m"]))
+                            decision = {"action": "move", "item": j, "target": k,
+                                        "reason": "the last grasp failed here: move the nearest neighbour"}
+                        else:
+                            decision = {"action": "move", "item": k, "target": k,
+                                        "reason": "the last grasp failed here: push the target to the tray centre"}
+                        row["decision_after_confirm"] = decision
+                        self.evidence["retry"] = "neighbour" if near else "push"
+                        moves += 1
+                        avoid = result = found_at = None
+                        done = yield from self.move_item(items, decision, confirmed_pose, failed, rules, row,
+                                                         push_only=not near)
+                        if done is not None:
+                            result = done
+                            break
+                        continue
                     if blocker is None or moves == int(dc["max_moves"]):
                         break
                     # the grasp would put the wrist camera mount on a block: move that block first
@@ -328,16 +370,16 @@ class Acquire(Skill):
             it = dict(items[k], xy=list(result["center_xyz_m"][:2]),
                       yaw_rad=float(result["yaw_rad_mod_pi_over_2"] or 0.0))
             result["grasp_yaw_offset"] = self.grasp_offset(items[:k] + [it] + items[k + 1:], k,
-                                                           result["center_xyz_m"], it["yaw_rad"])
+                                                           result["center_xyz_m"], it["yaw_rad"], exclude)
             result["block"] = cams.block_id_near(result["center_xyz_m"])
         result["moves"] = moves
         self.evidence["outcome"] = result
         if result["status"] not in ("found", "holding"):
             raise _Fail(f"{result['status']}: {result.get('reason', '')}")
 
-    def move_item(self, items, decision, confirmed_pose, failed, rules, row):
-        """Move one block (pick and set down, or push). Returns the outcome when the target itself ends up held and
-        the wrist saw its colour in the gripper, else None."""
+    def move_item(self, items, decision, confirmed_pose, failed, rules, row, push_only: bool = False):
+        """Move one block (pick and set down, or push; only push with push_only). Returns the outcome when the target
+        itself ends up held and the wrist saw its colour in the gripper, else None."""
         cams, dc, edge = self.ctx.cameras, self.ctx.loc_cfg["declutter"], self.world.edge
         tray, base_xy, m = self.world.trays["storage"], self.ctx.base_xy, self.cfg["motion"]
         color = self.params["color"]
@@ -355,7 +397,9 @@ class Acquire(Skill):
         off = self.grasp_offset(items, i, pos, it["yaw_rad"])
         row.update(spot=spot, grasp_yaw_offset_deg=None if off is None else round(math.degrees(off), 1))
         pick = None
-        if spot is not None and off is not None and it["status"] != "merged":   # merged: centre between blocks
+        if push_only:
+            yield from self.run(Home(self.ctx))
+        elif spot is not None and off is not None and it["status"] != "merged":   # merged: centre between blocks
             self.set_phase("move")
             pick = yield from self.run(PickAt(self.ctx, block=b, pos=pos, yaw=it["yaw_rad"], yaw_offset=off,
                                               color=it["color"]))
@@ -382,7 +426,14 @@ class Acquire(Skill):
                 return all(ctrl.chain.solve_ik_tilt(np.array([q[0], q[1], z]), y, ctrl.q_home, ctrl.p.max_tilt_deg)[1]
                            for q, z in ((a, float(m["safe_z"])), (a, push_z), (c, push_z)))
 
-            path = push_path(items, i, tray, edge, t, dc["push_distance_m"], feasible=push_ok)
+            if push_only:                       # towards the tray centre
+                u = np.asarray(tray["center"], float) - np.asarray(it["xy"], float)
+                u = u / max(float(np.linalg.norm(u)), 1e-6)
+                p0 = np.asarray(it["xy"], float)
+                a, c = p0 - (edge / 2 + 0.02) * u, p0 + float(dc["push_distance_m"]) * u
+                path = ([float(x) for x in a], [float(x) for x in c]) if push_ok(a, c) else None
+            else:
+                path = push_path(items, i, tray, edge, t, dc["push_distance_m"], feasible=push_ok)
             if path is not None:
                 self.set_phase("move")
                 yield from self.run(Push(self.ctx, start=path[0], end=path[1], z=push_z))

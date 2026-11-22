@@ -315,6 +315,7 @@ MUJOCO_GL=egl PYTHONPATH=src .venv-mujoco/bin/python tools/evaluate_height_check
    - MuJoCo 117 次抓取的夾爪角度：有夾住 0.127–0.234 rad，空夾或滑掉 ≤ 0.113 rad。
    - 有 3 次夾住了，但手臂卡在低處沒抬起來；只看夾爪會誤判，所以也要看末端高度。
    - 10 場驗證中，這個判斷和真值 12/12 一致。
+   - 合爪前也會檢查末端有沒有降到位（`grasp_check.descend_blocked_dz`）。沒降到位就不合爪，回報 `blocked`，並在下一次換夾爪方向或先搬開鄰居（task-executor.md）。
 5. 上限：搬 6 次（原本 4 次，任務執行器接上後放寬）、wrist 確認失敗 3 次。超過就回報 `gave_up`，交給 LLM。
 
 目前的抓取、放置、推是腳本動作（`task/skills.py` 的 `PickAt`、`Place`、`Push`），代替 ACT。`PickAt` 用夾爪角度＋末端高度判斷有沒有夾起；`Place` 放下後的確認仍用模擬真值，和任務執行器相同。
