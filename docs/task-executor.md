@@ -185,6 +185,8 @@ DISPLAY= ISAAC_CONTAINER_NAME=ars-plot docker/isaac/run.sh /isaac-sim/python.sh 
   - 待命後；
   - 等補料時，每 `shortage.recheck_s` 一次。
 
+  改單（包括接受替代色）時，已交付數量保留，快照則失效，下一次選料先重新觀測。
+
   `executor.camera` 設定時，觀測改由 `Observe` 技能用相機完成，抓取也改由相機定位（`agentic_sim.task.camera`）。看不清時送出 `observation_unclear` 事件，不提缺料問題。
 - **缺料選項**：`shortage.options` 可以限制選項，例如只有改色與等待。問題另外帶 `substitute_candidates`（來源盤內不在訂單裡的顏色）與 `delivery_sequence`（交付順序），聊天就能說「一藍一紅已放好…」。
 

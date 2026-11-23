@@ -420,6 +420,10 @@ class TaskExecutor:
         e = self.ledger.set_order(counts, mode, self.t)
         self._write(e)
         self.restock_wait = False
+        if self.snapshot_mode and self.inventory is not None:
+            # the order changed (e.g. a substitute colour was accepted): what was seen before it may be out of date,
+            # so the next choice takes a new observation of the tray (delivered counts stay in the ledger)
+            self.inventory["stale"] = True
         if self.state == "done":
             self.state = "running"
         q = self.question

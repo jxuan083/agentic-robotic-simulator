@@ -36,15 +36,19 @@ SEEDS = {SETS[0]: (11, 12), SETS[1]: (21, 22), SETS[2]: (31, 32)}
 ANSWERS = ("substitute", "wait")
 
 
-def scenario(roles, seed: int, answer: str | None, perception: str = "camera", order: str = "scenario") -> dict:
+def scenario(roles, seed: int, answer: str | None, perception: str = "camera", order: str = "scenario",
+             move_substitute: bool = False) -> dict:
     spec = load(BASE)
+    if move_substitute:
+        spec["finals"]["move_substitute"] = True
     spec["finals"]["perception"] = perception
     spec["finals"]["order"] = order
     a, b, c = roles
     spec["finals"]["roles"] = {"shortage": a, "priority": b, "substitute": c}
     spec["finals"]["layout"]["seed"] = int(seed)
     spec["finals"]["answer"] = answer
-    spec["name"] = f"finals_{a}_{b}_{c}_s{seed}_{answer or 'chat'}" + ("" if perception == "camera" else "_truth")
+    spec["name"] = (f"finals_{a}_{b}_{c}_s{seed}_{answer or 'chat'}" + ("" if perception == "camera" else "_truth")
+                    + ("_moved" if move_substitute else ""))
     return spec
 
 
@@ -150,6 +154,8 @@ def main():
     one.add_argument("--seed", type=int, default=11)
     one.add_argument("--answer", choices=ANSWERS, required=True)
     one.add_argument("--out", default="outputs/finals/runs")
+    one.add_argument("--move-substitute", action="store_true",
+                     help="acceptance: once the question is up (before the answer) the scene moves C elsewhere")
     bat = sub.add_parser("batch", help="the acceptance batch (every set x seed x answer)")
     bat.add_argument("--sets", default=None, help="role sets 'a,b,c;a,b,c' (default: the three acceptance sets)")
     bat.add_argument("--seeds", default=None, help="seeds for every set, e.g. 5,6 (default: preselected per set)")
@@ -160,6 +166,7 @@ def main():
     chat.add_argument("--roles", default="red,blue,yellow")
     chat.add_argument("--seed", type=int, default=11)
     chat.add_argument("--out", default="outputs/finals/chat")
+    chat.add_argument("--move-substitute", action="store_true", help="acceptance: move C after the question")
     chat.add_argument("--lab", nargs=argparse.REMAINDER, default=[], help="more tools/lab.py options (--model, --type)")
     for p in (one, bat):
         p.add_argument("--perception", choices=("camera", "sim_truth"), default="camera",
@@ -176,7 +183,7 @@ def main():
     if a.cmd == "chat":
         import yaml
         roles = tuple(a.roles.split(","))
-        spec = scenario(roles, a.seed, None, "camera", order="chat")
+        spec = scenario(roles, a.seed, None, "camera", order="chat", move_substitute=a.move_substitute)
         spec["name"] += time.strftime("_%Y%m%d_%H%M%S")
         os.makedirs(a.out, exist_ok=True)
         path = os.path.join(a.out, spec["name"] + ".yaml")
@@ -191,7 +198,8 @@ def main():
         return subprocess.call(cmd)
     if a.cmd == "run":
         roles = tuple(a.roles.split(","))
-        r = run_one(scenario(roles, a.seed, a.answer, a.perception), a.out, a.video, a.extra)
+        r = run_one(scenario(roles, a.seed, a.answer, a.perception, move_substitute=a.move_substitute), a.out, a.video,
+                    a.extra)
         print(json.dumps(r, ensure_ascii=False, indent=1))
         return 0 if r["ok"] else 1
     sets = [tuple(s.split(",")) for s in a.sets.split(";")] if a.sets else SETS

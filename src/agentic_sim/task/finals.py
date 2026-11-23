@@ -125,6 +125,10 @@ class FinalsDirector:
         self.answer = f.get("answer") or None
         self.answer_after = float(f.get("answer_after_s", 2.0))
         self.restock_after = int(f.get("restock_after_observations", 3))
+        # acceptance of a fresh look after the answer: once the question is up (before the answer), the scene moves
+        # the substitute block to another legal pose; the executor must find it there with the cameras
+        self.move_substitute = bool(f.get("move_substitute", False))
+        self.moved: list = []
         self.perception = f.get("perception", "camera")   # camera: choose / recheck with the cameras; sim_truth
         if self.perception not in ("camera", "sim_truth"):
             raise ValueError("finals perception must be camera or sim_truth")
@@ -173,6 +177,8 @@ class FinalsDirector:
             self.questions += 1
             if self.question is None:
                 self.question = e
+                if self.move_substitute:
+                    self.pending.append(("move_substitute", e))
                 if self.answer:
                     self.answer_due = e["t"] + self.answer_after
         elif k == "answer":
@@ -194,6 +200,8 @@ class FinalsDirector:
                 self._remove(obs)
             elif action == "restock":
                 self._restock(obs, e)
+            elif action == "move_substitute":
+                self._move_substitute(obs)
         self.pending = []
         if self.answer_due is not None and obs.t + 1e-9 >= self.answer_due:
             self.answer_due = None
@@ -215,7 +223,9 @@ class FinalsDirector:
         c = self._blocks_of("substitute")[0]
         if self.c_init is None:
             self.c_init = np.asarray(obs.blocks[c]).copy()
-        if self.answer_event is None or self.answer_event.get("choice") == "wait":   # by the answer actually given
+        if getattr(self, "_c_frame_stale", False):
+            self._c_frame_stale = False
+        elif self.answer_event is None or self.answer_event.get("choice") == "wait":   # by the answer actually given
             self.c_disp = max(self.c_disp, float(np.linalg.norm(np.asarray(obs.blocks[c]) - self.c_init)) * 1000)
 
     def _blocks_of(self, role: str) -> list:
@@ -238,6 +248,27 @@ class FinalsDirector:
             self.removed.append({"block": b, "pose": pose, "t": obs.t})
             self._scene("remove", block=b, color=ex.world.colors[b], pose=pose, arm_qd=round(float(obs.qd_max), 4),
                         jaw_open=bool(jaw_open))
+
+    def _move_substitute(self, obs):
+        """Move C to another legal, reachable pose in the storage tray (at least one edge plus the gap away)."""
+        ex = self.ex
+        c = self._blocks_of("substitute")[0]
+        storage = ex.world.trays["storage"]
+        occupied = []
+        for b in range(len(ex.world.colors)):
+            if b == c or not block_in_tray(obs.blocks[b], storage, ex.world.edge):
+                continue
+            pos, quat = self.world.block_pose(b)
+            occupied.append({"xy": [float(pos[0]), float(pos[1])], "yaw_deg": _yaw_deg(quat)})
+        pos, quat = self.world.block_pose(c)
+        old = {"xy": [float(pos[0]), float(pos[1])], "z": float(pos[2]), "yaw_deg": _yaw_deg(quat)}
+        seed = f"{self.spec['finals']['layout']['seed']}:move_substitute"
+        pose = restock_pose(self.scene, self.spec, self.teleop, occupied, old, seed)
+        self.world.place_block(c, [*pose["xy"], pose["z"]], pose["yaw_deg"])
+        self.moved.append({"block": c, "from": old, "to": pose, "t": obs.t})
+        self.c_init = np.array([*pose["xy"], pose["z"]])   # C's own displacement: from where the scene put it
+        self._c_frame_stale = True     # this frame's observation was taken before the move
+        self._scene("move_substitute", block=c, color=ex.world.colors[c], from_pose=old, pose=pose)
 
     def _restock(self, obs, e):
         ex = self.ex
@@ -295,6 +326,8 @@ class FinalsDirector:
             add("ledger", led["done"] and led["target"] == {b: 1, a: 1, c: 1} and led["delivered"] == {b: 1, a: 1, c: 1},
                 ledger=led)
             add("substitute_untouched_until_answer", self.c_disp < 2.0, observed_mm=round(self.c_disp, 2))
+            ok, detail = self._fresh_look(obs)
+            add("fresh_look_after_answer", ok, **detail)
         elif choice == "wait":
             add("final_placement", placed == {a: 2, b: 1}, expected={a: 2, b: 1}, observed=placed)
             led = ex.ledger.snapshot()
@@ -316,7 +349,38 @@ class FinalsDirector:
             add("answered", False, choice=choice)
         return out
 
+    def _fresh_look(self, obs):
+        """After the substitute answer: a new storage observation before the first pick, and that pick's target (its
+        first approach) is where C was observed then; when the scene moved C, the new pose, not the old one."""
+        ev = self.ex.events
+        t_a = self.answer_event["t"]
+        pick = next((e for e in ev if e["kind"] == "skill_start" and e.get("skill") == "pick" and e["t"] >= t_a), None)
+        if pick is None:
+            return False, {"reason": "no pick after the answer"}
+        looks = [e for e in ev if e["kind"] == "observation" and t_a <= e["t"] <= pick["t"]]
+        target = (pick.get("target") or {}).get("xy")
+        c = self._blocks_of("substitute")[0]
+        detail = {"answer_t": t_a, "observations_between": [{"t": e["t"], "n": e["n"], "reason": e["reason"],
+                                                             "source": e["source"]} for e in looks],
+                  "pick_t": pick["t"], "pick_target_xy": target}
+        if self.perception == "sim_truth":     # no camera target: the fresh observation is what is checked
+            return bool(looks), detail
+        ok = bool(looks) and target is not None
+        if looks and target is not None:
+            seen = looks[-1]["poses"].get(str(pick.get("block")), {}).get("xy")
+            detail["observed_xy_after_answer"] = seen
+            ok = ok and seen is not None and np.linalg.norm(np.subtract(seen, target)) < 1e-6
+        if self.moved:
+            m = self.moved[0]
+            detail.update(moved_from_xy=m["from"]["xy"], moved_to_xy=m["to"]["xy"])
+            if target is not None:
+                to_new = float(np.linalg.norm(np.subtract(target, m["to"]["xy"]))) * 1000
+                to_old = float(np.linalg.norm(np.subtract(target, m["from"]["xy"]))) * 1000
+                detail.update(target_to_new_mm=round(to_new, 2), target_to_old_mm=round(to_old, 2))
+                ok = ok and to_new < 10.0 and to_old > 1000 * self.ex.world.edge
+        return ok, detail
+
     def record(self) -> dict:
-        return {"roles": self.roles, "perception": self.perception, "removed": self.removed, "restocked": self.restocked,
+        return {"roles": self.roles, "perception": self.perception, "removed": self.removed, "moved": self.moved, "restocked": self.restocked,
                 "scene_events": self.scene_events, "question": self.question,
                 "answer": self.answer_event, "standby": self.standby_event}

@@ -33,12 +33,13 @@ LAB = load("configs/scenes/lab_20261120.yaml")
 class FinalsWorld(FakeWorld):
     """The fake world on the lab scene with the finals layout, plus the scene operations the director uses."""
 
-    def __init__(self, out_dir, roles=("red", "blue", "yellow"), seed=11, answer="substitute"):
+    def __init__(self, out_dir, roles=("red", "blue", "yellow"), seed=11, answer="substitute", move=False):
         path = "configs/tasks/finals_shortage.yaml"
         spec = load(path)
         spec["finals"].update(roles=dict(zip(("shortage", "priority", "substitute"), roles)), answer=answer,
                               perception="sim_truth")
         spec["finals"]["layout"]["seed"] = seed
+        spec["finals"]["move_substitute"] = move
         self.spec_path = os.path.join(out_dir, f"finals_{answer}.yaml")
         with open(self.spec_path, "w") as f:
             yaml.safe_dump(spec, f)
@@ -84,6 +85,21 @@ def test_both_answers_finish_with_the_right_order(tmp_path, answer):
         assert w.placed() == {"red": 2, "blue": 1}
     else:
         assert w.placed() == {"red": 1, "blue": 1, "yellow": 1}
+
+
+def test_substitute_is_looked_for_again_after_the_answer(tmp_path):
+    w = FinalsWorld(tmp_path, answer="substitute", move=True)
+    w.run(lambda w: w.runner.done, max_s=300.0)
+    res = w.runner.result(w.obs(0.0), "fake")
+    assert not [c for c in res["checks"] if not c["ok"]]
+    moved = res["finals"]["moved"][0]
+    t_a = res["finals"]["answer"]["t"]
+    looks = [e for e in w.ex.events if e["kind"] == "observation" and e["t"] >= t_a]
+    pick = next(e for e in w.ex.events if e["kind"] == "skill_start" and e.get("skill") == "pick" and e["t"] >= t_a)
+    assert looks and looks[0]["t"] <= pick["t"]
+    seen = looks[0]["poses"][str(pick["block"])]["xy"]
+    assert np.linalg.norm(np.subtract(seen, moved["to"]["xy"])) < 1e-3     # found where the scene moved it
+    assert w.placed() == {"red": 1, "blue": 1, "yellow": 1}
 
 
 def test_roles_are_read_from_the_scene_not_fixed(tmp_path):
