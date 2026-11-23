@@ -70,3 +70,9 @@ python tools/replay_real_follower.py outputs/261124-right/episodes/D001-01 \
 `tools/real_teleop.py record` 的單臂入口也使用 `--setup` 與同一動作流程，適用於任務卡外的手動短錄。雙臂保留原有入口與現場流程。
 
 LeHome 舊的 `scripts/replay_real_robot.py` 讀取其 12 軸 LeRobot dataset。競賽 repo 的 `tools/read_episode.py` 繼續讀 Isaac 的模擬示範格式。
+
+## 盤位參考與腕部標定
+
+`tools/calibrate_real_cameras.py` 沿用正式相機設定。先執行 `measure` 輸入標定紙實測尺寸，再用 `global` 存 D455 的三標記 RGB-D 參考，或用 `wrist` 收 ChArUco 原圖。現場預覽使用含 OpenCV GUI 和 ArUco 的 Python 環境。預覽結束會釋放相機。也可用 `global --episode <目錄>` 從已錄下的標準起姿影格讀取盤位參考。
+
+`fit-wrist` 在同一批原圖比較 Brown 和 fisheye，保存留出影格的全畫面與邊緣誤差。腕部手眼外參另需固定板與同期關節。D455 若有實測的 `base_from_marker40_m`，可用 `check-global --links <JSON> --holdout <點位 JSON>` 分報獨立近／遠點的 XY 和 Z 誤差。轉換以 `destination_from_source` 命名，平移以 m 表示。
