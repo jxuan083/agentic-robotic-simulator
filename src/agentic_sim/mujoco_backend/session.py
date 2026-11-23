@@ -281,8 +281,62 @@ class MjSession:
             self.task.close()
         colors = self.block_color_names or default_color_names(self.scene_cfg, len(self.sc.block_bodies))
         self.task = TaskRunner(self.ctrl, self.scene_cfg, self.sc.block_init_pos, colors, self.control_dt, self.log,
-                               scenario=self.cfg.task, event_log=self.cfg.task_log)
+                               scenario=self.cfg.task, event_log=self.cfg.task_log, world_ops=self,
+                               teleop_path=self.cfg.teleop)
+        if self.task.finals is not None and self.task.finals.perception == "camera":
+            self.task.ex.camera = self._task_camera()
         return self.task
+
+    def _task_camera(self):
+        """Synchronous global / wrist captures of the current frame for the executor (finals scenes)."""
+        from agentic_sim.mujoco_backend.live_perception import MjLivePerception
+        from agentic_sim.task.camera import TaskCamera
+        from agentic_sim.scene_layout import sensor_cameras
+        if set(sensor_cameras(self.scene_cfg)) != {"global", "wrist"}:
+            raise ValueError("finals scenes with perception: camera need a scene with the global and wrist cameras "
+                             "(--scene configs/scenes/lab_20261120.yaml)")
+        if getattr(self, "_cam_perception", None) is None:
+            self._cam_perception = MjLivePerception(self.scene_cfg, self.m, log=lambda _: None)
+        p = self._cam_perception
+        tray = self.task.ex.world.trays["storage"]
+        for est in p.estimators.values():
+            est.floor = tray["floor_top"]
+        for key in ("global", "wrist"):   # warm up: renderers and lens maps are built on the first capture
+            p.capture_rgb(key, self.d)
+        return TaskCamera(self.scene_cfg, lambda key: p.capture_rgb(key, self.d), tray, self.task.ex.world.edge,
+                          self.ctrl, p.estimators)
+
+    # ---- scene operations (finals scenarios: the scene removes / restocks blocks) ----------------------
+    PARK = (-1.2, -0.6, 0.4)   # far outside the table and both cameras' views
+
+    def block_pose(self, b: int):
+        a = self.sc.block_qpos[b]
+        return self.d.qpos[a:a + 3].copy(), self.d.qpos[a + 3:a + 7].copy()
+
+    def remove_block(self, b: int):
+        """Take block b out of the scene: parked, floating, without contacts."""
+        a, dv, g, body = self.sc.block_qpos[b], self.sc.block_qvel[b], self.sc.block_geoms[b], self.sc.block_bodies[b]
+        if not hasattr(self, "_contacts"):
+            self._contacts = {}
+        self._contacts.setdefault(g, (int(self.m.geom_contype[g]), int(self.m.geom_conaffinity[g])))
+        self.m.geom_contype[g] = self.m.geom_conaffinity[g] = 0
+        self.m.body_gravcomp[body] = 1.0
+        self.d.qpos[a:a + 3] = [self.PARK[0], self.PARK[1] + 0.06 * b, self.PARK[2]]
+        self.d.qpos[a + 3:a + 7] = [1.0, 0.0, 0.0, 0.0]
+        self.d.qvel[dv:dv + 6] = 0.0
+        mujoco.mj_forward(self.m, self.d)
+
+    def place_block(self, b: int, xyz, yaw_deg: float):
+        """Put block b (back) into the scene at rest at xyz with yaw_deg about +Z."""
+        from agentic_sim.scene_layout import yaw_quat
+        a, dv, g, body = self.sc.block_qpos[b], self.sc.block_qvel[b], self.sc.block_geoms[b], self.sc.block_bodies[b]
+        if g in getattr(self, "_contacts", {}):
+            self.m.geom_contype[g], self.m.geom_conaffinity[g] = self._contacts.pop(g)
+        self.m.body_gravcomp[body] = 0.0
+        self.d.qpos[a:a + 3] = xyz
+        self.d.qpos[a + 3:a + 7] = yaw_quat(yaw_deg)
+        self.d.qvel[dv:dv + 6] = 0.0
+        mujoco.mj_forward(self.m, self.d)
 
     def stop_task(self):
         """Give the arm back to the operator (keyboard / mouse) where it is."""
@@ -372,6 +426,10 @@ class MjSession:
         for r in REASONS:
             self.carry["reasons"][r] += ctrl.state.reject_counts[r]
         ctrl.reset()
+        for g, (ct, ca) in getattr(self, "_contacts", {}).items():   # blocks a finals scene had removed
+            self.m.geom_contype[g], self.m.geom_conaffinity[g] = ct, ca
+        self._contacts = {}
+        self.m.body_gravcomp[sc.block_bodies] = 0.0
         mujoco.mj_resetData(self.m, d)
         for adr, q, off in zip(sc.arm_qpos, ctrl.state.q_cmd, sc.arm_offset):
             d.qpos[adr] = q + off
@@ -644,6 +702,22 @@ class MjSession:
             out["task"] = self.task.ex.view()
         return out
 
+    def write_task_result(self, metrics: dict | None = None) -> dict:
+        """The scenario's checks (and the finals record) to cfg.result; also called by the server when a scenario
+        loaded through it is done."""
+        extra = {"mujoco": mujoco.__version__, "stats": self.stats, "blocks": self.block_color_names}
+        if metrics is not None:
+            extra["metrics"] = metrics
+        if self.random_spawn is not None:
+            extra["random_spawn"] = self.random_spawn
+        res = self.task.result(self.task_obs(), "mujoco", extra)
+        self._task_result_written = True
+        os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
+        with open(self.cfg.result, "w") as f:
+            json.dump(res, f, indent=2, ensure_ascii=False)
+        self.log(f"wrote {self.cfg.result}: {res['passed']}/{res['checks_total']} checks passed")
+        return {"result": self.cfg.result, "passed": res["passed"], "checks": res["checks_total"]}
+
     def finish(self) -> dict:
         if self._finished is not None:
             return self._finished
@@ -665,14 +739,9 @@ class MjSession:
         out = {"metrics": summary}
         if self.traj is not None and self.cfg.result:
             out.update(self._write_trajectory_result(summary))
-        if self.task is not None and self.task.scenario is not None and self.cfg.result:
-            res = self.task.result(self.task_obs(), "mujoco", {"mujoco": mujoco.__version__, "stats": self.stats,
-                                                               "metrics": summary, "blocks": self.block_color_names})
-            os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
-            with open(self.cfg.result, "w") as f:
-                json.dump(res, f, indent=2, ensure_ascii=False)
-            self.log(f"wrote {self.cfg.result}: {res['passed']}/{res['checks_total']} checks passed")
-            out.update({"result": self.cfg.result, "passed": res["passed"], "checks": res["checks_total"]})
+        if (self.task is not None and self.task.scenario is not None and self.cfg.result
+                and not getattr(self, "_task_result_written", False)):   # the server wrote it when the order was done
+            out.update(self.write_task_result(summary))
         if self.task is not None:
             self.task.close()
         if self.script is not None and self.cfg.result:

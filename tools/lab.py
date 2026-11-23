@@ -164,6 +164,8 @@ class Lab:
             opts["blocks"] = self.a.blocks
         if self.a.wrist_lens:
             opts["wrist_lens"] = self.a.wrist_lens
+        if getattr(self.a, "task", None):
+            opts["task"] = self.a.task
         c = SimClient.for_backend(self.a.backend, name="lab", timeout=120.0)
         c.connect()
         try:
@@ -177,6 +179,8 @@ class Lab:
                "--model", name]
         for line in typing:
             cmd += ["--type", line]
+        if getattr(self.a, "chat_transcript", None):
+            cmd += ["--transcript", self.a.chat_transcript]
         return subprocess.Popen(cmd, cwd=ROOT, env=self.env)
 
     def stop(self):
@@ -214,6 +218,9 @@ def main(argv=None) -> int:
     ap.add_argument("--block-colors", default=None, help="colour name per block, comma-separated (sets the count)")
     ap.add_argument("--wrist-lens", choices=["real", "pinhole"], default=None,
                     help="wrist camera image (default: the scene's lens_mode, real)")
+    ap.add_argument("--task", default=None, help="task scenario run in the loaded scene (e.g. a finals scene "
+                    "written by tools/finals.py chat); its event log and result go next to the file")
+    ap.add_argument("--chat-transcript", default=None, help="chat window: append every shown line to this JSONL")
     ap.add_argument("--no-chat", action="store_true", help="simulator only (no model service, no chat window)")
     ap.add_argument("--start-timeout", type=float, default=None,
                     help="seconds a service may take to become ready (default: per service)")
@@ -241,6 +248,7 @@ def main(argv=None) -> int:
             say("開啟聊天視窗")
             chat = lab.chat(url, name, a.type or ())
         say("環境就緒。Ctrl+C 結束整套環境。")
+        misses = 0      # a single slow frame (e.g. a camera's first render) is not a dead server
         while not stopping["flag"]:
             if chat is not None and chat.poll() is not None:
                 chat = None
@@ -248,7 +256,8 @@ def main(argv=None) -> int:
             if chat is None and not a.no_chat and enter_pressed():
                 say("重開聊天視窗")
                 chat = lab.chat(url, name, a.type_reopen or ())
-            if probe(a.backend, timeout=1.0) is None:
+            misses = misses + 1 if probe(a.backend, timeout=1.0) is None else 0
+            if misses >= 5:
                 say("模擬伺服器沒有回應（視窗可能已關閉），結束")
                 break
             time.sleep(0.5)

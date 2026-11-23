@@ -14,6 +14,11 @@ One skill runs at a time; it only proposes EE targets and gripper goals to the s
 - Delivered beyond the order (released before the change): reported, then retrieved to the storage tray.
 - Shortage: do what can be done first, then ask (substitute colour / reduce / wait). Never substitute on its own.
 - A delivery counts only after the placed block is observed at rest in the tray with the gripper open and clear.
+- Standby (finals): ex.standby() sends the empty arm to the standby (home) point; once it has arrived and settled
+  with the jaw open the executor emits `standby_reached`, waits `standby.observe_after_s` and takes a new storage
+  observation before choosing anything again. With `observation.snapshot` the executor chooses blocks only from its
+  last observation (taken before each choice, at standby, and every `shortage.recheck_s` while waiting for a
+  restock), never from the live scene.
 """
 
 from __future__ import annotations
@@ -26,6 +31,8 @@ import numpy as np
 from agentic_sim.scene_layout import block_in_tray
 from agentic_sim.task.ledger import Ledger
 from agentic_sim.task.skills import Home, Hold, Motion, Obs, Pick, Place, World
+
+ASSOCIATE_M = 0.025   # bookkeeping / scoring only: an observed block is the simulator block within this distance
 
 HELD_OPTIONS = ("return", "place_at", "deliver")
 SHORTAGE_OPTIONS = ("substitute", "reduce", "wait")
@@ -59,6 +66,14 @@ class TaskExecutor:
         self.cancels: list = []
         self.obs: Obs | None = None
         self.t = 0.0
+        self.standby_requested = False
+        self.observe_at: float | None = None      # standby: take the storage observation at this time
+        self.next_recheck: float | None = None    # waiting for a restock: next storage observation
+        self.inventory: dict | None = None        # last storage observation: colour -> blocks (snapshot mode)
+        self.observations = 0
+        self.delivery_seq: list = []              # colours of the verified deliveries, in order
+        self.snapshot_mode = bool((cfg.get("observation") or {}).get("snapshot", False))
+        self.camera = None                        # agentic_sim.task.camera.TaskCamera: observe with the cameras
         self._event_log = None
         if event_log:
             os.makedirs(os.path.dirname(event_log) or ".", exist_ok=True)
@@ -91,6 +106,10 @@ class TaskExecutor:
     def answer(self, qid: int, choice: str, **kw):
         self._inputs.append(("answer", int(qid), str(choice), kw))
 
+    def standby(self):
+        """Go to the standby point once the hand is empty, settle, then look at the storage tray again."""
+        self._inputs.append(("standby",))
+
     # ---- events ------------------------------------------------------------------------------
     def _write(self, e: dict):
         self.events.append(e)
@@ -118,7 +137,11 @@ class TaskExecutor:
         return bool(block_in_tray(self.obs.blocks[b], self.world.trays[tray], self.world.edge))
 
     def available(self, color: str) -> list:
-        """Blocks of `color` lying in the storage tray, not delivered, not held, not given up on."""
+        """Blocks of `color` lying in the storage tray, not delivered, not held, not given up on. Snapshot mode: from
+        the last storage observation only."""
+        if self.snapshot_mode:
+            seen = (self.inventory or {}).get("blocks", {}).get(color, [])
+            return [b for b in seen if b != self.holding and b not in self.delivered_blocks and b not in self.skipped]
         return [b for b, c in enumerate(self.world.colors)
                 if c == color and b != self.holding and b not in self.delivered_blocks and b not in self.skipped
                 and self._in(b, "storage")]
@@ -141,6 +164,67 @@ class TaskExecutor:
             if self._free(xy, ignore=b):
                 return [float(xy[0]), float(xy[1])]
         return None
+
+    def _look(self, reason: str):
+        """Take a storage observation: at once from the simulator (no camera), or by starting the Observe skill
+        (camera; the result arrives when the skill is done, planning waits). Returns the observation or None."""
+        if self.camera is None:
+            return self.observe(reason)
+        from agentic_sim.task.camera import Observe
+        self._start(Observe, purpose=reason, needed=list(self.ledger.needed()))
+        return None
+
+    def associate(self, items: list) -> tuple:
+        """Match each observation to an eligible simulator ID within ASSOCIATE_M for inventory and scoring.
+        Unmatched detections are logged but cannot be picked. Matched targets keep the camera colour and pose."""
+        used, blocks, poses, unmatched = set(), {}, {}, []
+        for it in items:
+            best, bd = None, ASSOCIATE_M
+            for b, p in enumerate(self.obs.blocks):
+                d = float(np.linalg.norm(np.asarray(p[:2]) - np.asarray(it["xy"])))
+                if d < bd and b not in used and b != self.holding and b not in self.delivered_blocks:
+                    best, bd = b, d
+            if best is None:
+                unmatched.append(it)
+                continue
+            used.add(best)
+            blocks.setdefault(it["color"], []).append(best)
+            poses[best] = {"xy": list(it["xy"]), "yaw": float(it["yaw"]), "color": it["color"],
+                           "source": it["source"], "association_mm": round(bd * 1000, 2)}
+        return blocks, poses, unmatched
+
+    def observe(self, reason: str, camera: dict | None = None) -> dict:
+        """A new look at the storage tray: from the simulator, or the evidence of a finished Observe skill (camera).
+        The result: {'clear', 'blocks': colour -> [block], 'poses': block -> observed pose, 'counts', 'source'}."""
+        if camera is not None:
+            blocks, poses, unmatched = self.associate(camera["items"])
+            o = {"clear": bool(camera["clear"]), "blocks": blocks, "poses": poses, "source": "camera",
+                 "reason_unclear": camera.get("reason_unclear", ""), "unmatched": unmatched,
+                 "views": len(camera.get("views", []))}
+        else:
+            blocks, poses = {}, {}
+            for b, c in enumerate(self.world.colors):
+                if b != self.holding and b not in self.delivered_blocks and self._in(b, "storage"):
+                    blocks.setdefault(c, []).append(b)
+                    poses[b] = {"xy": [float(x) for x in self.obs.blocks[b][:2]],
+                                "yaw": float(self.obs.block_yaw[b]), "color": c, "source": "sim_truth"}
+            o = {"clear": True, "blocks": blocks, "poses": poses, "source": "sim_truth"}
+        pan = np.asarray(self.ctrl.pan[:2])     # same colour: the block nearest the base rotation axis first
+        for c in o["blocks"]:
+            o["blocks"][c].sort(key=lambda b: float(np.linalg.norm(np.asarray(o["poses"][b]["xy"]) - pan)))
+        o["counts"] = {c: len(v) for c, v in o["blocks"].items()}
+        self.observations += 1
+        o["n"], o["stale"] = self.observations, False
+        if o["clear"]:
+            self.inventory = o
+        elif getattr(self, "_last_clear", True):    # report once per stretch of unclear views
+            self.emit("observation_unclear", reason=o.get("reason_unclear", ""), n=self.observations)
+        self._last_clear = bool(o["clear"])
+        self.emit("observation", reason=reason, n=self.observations, clear=o["clear"], counts=o["counts"],
+                  source=o["source"], poses={str(b): p for b, p in o["poses"].items()},
+                  **{k: v for k, v in o.items() if k not in ("clear", "blocks", "counts", "source", "n", "stale",
+                                                              "poses")})
+        return o
 
     def _counts_in(self, tray: str) -> dict:
         out = {}
@@ -205,6 +289,20 @@ class TaskExecutor:
                 return self._start(Place, block=b, xy=xy, tray="placement",
                                    purpose="deliver_extra" if self.purpose == "deliver_extra" else "deliver")
             return self._ask_held(b)
+        if self.standby_requested:
+            self.standby_requested = False
+            return self._start(Home, purpose="standby")
+        if self.observe_at is not None:
+            if self.t + 1e-9 < self.observe_at:
+                self.state = "observing"
+                return
+            self.observe_at = None
+            o = self._look("standby")
+            if o is None:
+                return
+            if not o["clear"]:
+                self.observe_at = self.t + float(self.cfg["shortage"]["recheck_s"])   # look again
+                return
         overs = led.overs()
         if overs:
             c = next(iter(overs))
@@ -212,13 +310,37 @@ class TaskExecutor:
             self.purpose = "retrieve"
             return self._start(Pick, block=b, purpose="retrieve")
         needed = led.needed()
+        if self.snapshot_mode and needed:
+            if self.restock_wait:
+                if self.inventory is None or self.inventory.get("stale", True):
+                    if self.next_recheck is not None and self.t + 1e-9 < self.next_recheck:
+                        return
+                    self.next_recheck = self.t + float(self.cfg["shortage"]["recheck_s"])
+                    o = self._look("restock_wait")
+                    if o is None or not o["clear"]:
+                        return
+            elif self.inventory is None or self.inventory.get("stale", True):
+                o = self._look("select")
+                if o is None:
+                    return
+                if not o["clear"]:
+                    self.observe_at = self.t + float(self.cfg["shortage"]["recheck_s"])
+                    return
         for c in needed:
             av = self.available(c)
             if av:
                 self.restock_wait = False
+                self.next_recheck = None
+                if self.inventory is not None:
+                    self.inventory["stale"] = True     # the next choice takes a new observation
                 self.purpose = "deliver"
+                pose = (self.inventory or {}).get("poses", {}).get(av[0]) if self.snapshot_mode else None
+                if self.camera is not None and pose is not None:
+                    return self._start(Pick, block=av[0], purpose="deliver", target=pose)
                 return self._start(Pick, block=av[0], purpose="deliver")
         if needed:
+            if self.snapshot_mode and self.restock_wait and self.inventory is not None:
+                self.inventory["stale"] = True       # looked, nothing yet: the next look is at the next recheck
             if not self.restock_wait and self._asked_shortage != led.revision:
                 self._ask_shortage(needed)
             self.state = "waiting"
@@ -254,16 +376,28 @@ class TaskExecutor:
         led = self.ledger
         self._asked_shortage = led.revision
         stock = {}
-        for b, c in enumerate(self.world.colors):
-            if b != self.holding and b not in self.delivered_blocks and b not in self.skipped and self._in(b, "storage"):
-                stock[c] = stock.get(c, 0) + 1
+        if self.snapshot_mode:
+            for c in (self.inventory or {}).get("blocks", {}):
+                n = len(self.available(c))
+                if n:
+                    stock[c] = n
+        else:
+            for b, c in enumerate(self.world.colors):
+                if b != self.holding and b not in self.delivered_blocks and b not in self.skipped and self._in(b, "storage"):
+                    stock[c] = stock.get(c, 0) + 1
         delivered = {c: n for c, n in led.delivered.items() if n}
+        options = tuple((self.cfg.get("shortage") or {}).get("options") or SHORTAGE_OPTIONS)
+        candidates = [c for c in stock if c not in led.target]
         txt = ("Delivered " + (", ".join(f"{n} {c}" for c, n in delivered.items()) or "nothing") +
                "; still missing " + ", ".join(f"{n} {c}" for c, n in needed.items()) +
                " and none left in the storage tray. Left there: " +
-               (", ".join(f"{n} {c}" for c, n in stock.items()) or "nothing") +
-               ". Substitute another colour (substitute <colour>), reduce the order (reduce), or wait for more (wait)?")
-        self._ask("shortage", txt, SHORTAGE_OPTIONS, delivered=delivered, missing=dict(needed), available=stock)
+               (", ".join(f"{n} {c}" for c, n in stock.items()) or "nothing") + ". " +
+               " or ".join({"substitute": "substitute another colour (substitute <colour>)",
+                            "reduce": "reduce the order (reduce)", "wait": "wait for more (wait)"}[o]
+                           for o in options).capitalize() + "?")
+        self._ask("shortage", txt, options, delivered=delivered, missing=dict(needed), available=stock,
+                  substitute_candidates=candidates, delivery_sequence=list(self.delivery_seq),
+                  observation=None if self.inventory is None else self.inventory.get("n"))
 
     # ---- inputs ---------------------------------------------------------------------------------------------
     def _process_inputs(self):
@@ -271,6 +405,9 @@ class TaskExecutor:
             item = self._inputs.pop(0)
             if item[0] == "order":
                 self._apply_order(item[1], item[2])
+            elif item[0] == "standby":
+                self.standby_requested = True
+                self.emit("standby_requested", holding=self.holding)
             else:
                 self._apply_answer(*item[1:])
 
@@ -283,6 +420,10 @@ class TaskExecutor:
         e = self.ledger.set_order(counts, mode, self.t)
         self._write(e)
         self.restock_wait = False
+        if self.snapshot_mode and self.inventory is not None:
+            # the order changed (e.g. a substitute colour was accepted): what was seen before it may be out of date,
+            # so the next choice takes a new observation of the tray (delivered counts stay in the ledger)
+            self.inventory["stale"] = True
         if self.state == "done":
             self.state = "running"
         q = self.question
@@ -357,11 +498,15 @@ class TaskExecutor:
         if choice == "wait":
             self.question = None
             self.restock_wait = True
+            if self.inventory is not None:
+                self.inventory["stale"] = True
+            self.next_recheck = self.t + float(self.cfg["shortage"]["recheck_s"])
             return
         new = dict(led.target)
         if choice == "substitute":
             sub = kw.get("color")
-            if sub not in set(self.world.colors):
+            if sub not in set(self.world.colors) or (q.get("substitute_candidates") is not None
+                                                      and self.snapshot_mode and sub not in q["substitute_candidates"]):
                 self.emit("answer_rejected", id=qid, choice=choice, reason=f"unknown colour {sub!r}")
                 return
             for c, n in q["missing"].items():
@@ -406,6 +551,7 @@ class TaskExecutor:
                 tray = sk.params.get("tray")
                 if tray == "placement":
                     self.delivered_blocks[b] = c
+                    self.delivery_seq.append(c)
                     self._write(led.verified(c, +1, self.t, b))
                 elif b in self.delivered_blocks:
                     del self.delivered_blocks[b]
@@ -420,8 +566,21 @@ class TaskExecutor:
                 self._write(led.mark_uncertain(self.color(b), self.t, b, r.failure_reason))
                 if r.failure_reason == "dropped":
                     self.skipped.add(b)
-        elif sk.name == "home":
-            pass
+        elif sk.name == "observe":
+            reason = sk.params.get("purpose", "select")
+            if r.status == "succeeded":
+                o = self.observe(reason, camera=sk.evidence)
+                if not o["clear"] and reason in ("standby", "select"):
+                    self.observe_at = self.t + float(self.cfg["shortage"]["recheck_s"])
+            else:
+                self.observe_at = self.t + float(self.cfg["shortage"]["recheck_s"])
+        elif sk.name == "home" and sk.params.get("purpose") == "standby":
+            jaw_open = self.ctrl.state.gripper >= self.ctrl.p.gripper_open - 1e-6
+            settled = r.status == "succeeded" and self.obs.qd_max < float(self.cfg["motion"]["settle_qd"])
+            self.emit("standby_reached", ok=bool(settled and jaw_open and self.holding is None), status=r.status,
+                      jaw_open=bool(jaw_open), holding=self.holding, qd_max=round(float(self.obs.qd_max), 4),
+                      ee=[round(float(x), 4) for x in self.obs.ee])
+            self.observe_at = self.t + float((self.cfg.get("standby") or {}).get("observe_after_s", 0.5))
 
     def _report_over(self):
         led = self.ledger

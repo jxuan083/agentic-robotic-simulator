@@ -34,7 +34,7 @@ flowchart LR
 | 項目 | 狀態 |
 |---|---|
 | 模擬操作與錄製 | 兩個引擎均可鍵鼠控制 EE、進入全螢幕工作區與錄製視窗 MP4。Isaac 另可錄製含雙相機與關節資料的示範 episode，供離線讀回。 |
-| 聊天與整單執行 | `tools/lab.py` 啟動實驗室模擬與聊天。LLM 解析訂單和回答，執行器管理需求帳本；目前整單使用腳本抓取與模擬真值核對。 |
+| 聊天與整單執行 | `tools/lab.py` 啟動實驗室模擬與聊天。LLM 解析訂單和回答，執行器管理需求帳本。MuJoCo 決賽缺料整單（改色／等補料）的選料與缺料複查改用相機，12 次驗收與聊天主秀都通過；抓取為腳本技能，交付核對仍讀模擬真值。[決賽整單](docs/finals-shortage.md) |
 | 抓前定位 B | 獨立基準。MuJoCo 主測首次 233/234、含一次重抓 234/234，相鄰紅塊 21/24。Isaac 三場開啟單次 Z 補償後均通過懸停門檻並提起近顆。[方法與重播](docs/wrist-alignment.md) |
 | 實機資料與 ACT | 單臂錄製與讀回在實機整合分支。規劃以 leader 收集紅、藍、黃雙向共 120 筆；收齊後用實拍做離線定位。單臂積木 ACT 與 DAgger 再訓練待驗。 |
 
@@ -60,6 +60,7 @@ flowchart LR
 | [docs/teleop-data-training.md](docs/teleop-data-training.md) | 遙操作、episode 資料、檢查與分割、ACT 訓練 |
 | [docs/inference-dagger-evaluation.md](docs/inference-dagger-evaluation.md) | 自主推論、DAgger 閉環、再訓練比較與評估 |
 | [docs/agent.md](docs/agent.md) | Agent、任務執行器、需求帳本與缺料流程 |
+| [docs/finals-shortage.md](docs/finals-shortage.md) | MuJoCo 決賽整單：中途缺料、改色或等補料，相機選料與複查、場景事件、驗收批次與聊天主秀 |
 | [docs/task-executor.md](docs/task-executor.md) | 需求帳本與任務執行器的實作、改單規則、驗收場景（#5） |
 | [docs/chat-layer.md](docs/chat-layer.md) | 繁中聊天層：模型服務、意圖規則、語句表與完整對話驗收（#7） |
 | [docs/lab-scene-cameras.md](docs/lab-scene-cameras.md) | 實驗室單臂場景（2026-11-20 配置）、D455／腕部相機視角、相機位姿推算與實機對照 |

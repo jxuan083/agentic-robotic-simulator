@@ -77,6 +77,10 @@ class MujocoServer(TaskCommands):
                             block_colors=opts.block_colors, wrist_lens=opts.wrist_lens,
                             live_perception=opts.live_perception, perception_camera=opts.perception_camera,
                             perception_hz=opts.perception_hz, perception_json=opts.perception_json)
+        if opts.task:   # the scenario's event log and result next to the scenario file
+            base = os.path.splitext(opts.task)[0]
+            cfg.task, cfg.task_log, cfg.result = opts.task, base + ".jsonl", base + ".json"
+            self._task_written = False
         if script:
             cfg.script = f"configs/acceptance/{script}.yaml"
             cfg.log = os.path.join(out_dir, f"{script}.csv")
@@ -213,6 +217,11 @@ class MujocoServer(TaskCommands):
             return False
 
     def after_frame(self):
+        s = self.session
+        if (s is not None and s.task is not None and s.task.done and s.cfg.result
+                and not getattr(self, "_task_written", True)):
+            self._task_written = True
+            s.write_task_result()
         if not self._job_running() or not self.session.script_done:
             return
         s = self.session

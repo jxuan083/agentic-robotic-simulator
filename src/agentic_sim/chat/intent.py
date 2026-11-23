@@ -71,6 +71,7 @@ intent 規則：
 - reject：不是任務需求或系統做不到（例如直接控制手臂往哪裡移動、不在色票裡的顏色、超過 {max_count} 顆），reply 寫一句繁體中文的說明。
 - stop：要求立刻停止、急停、暫停手臂。
 數字「一／二／兩／三…」與阿拉伯數字相同。items 在 answer、status、clarify、reject、stop 時是空陣列。
+items 依使用者要的放置先後排列；說了「藍色先放」「先放藍色」就把藍色排第一，其他照說的順序。
 reply 在 order 與 answer 時可留空字串。只輸出 JSON。"""
 
 
@@ -129,6 +130,19 @@ def ambiguity(text: str, intent: dict, st: dict, words) -> str | None:
     return None
 
 
+FIRST = re.compile(r"先(?:放|送|拿|交)?\s*(?P<a>[^，。,\s]{1,4}?)(?:色|的)?(?=[，。,\s]|$)|(?P<b>[^，。,\s]{1,4}?)(?:色|的)?\s*先(?:放|送|拿|交)")
+
+
+def first_color(text: str, words) -> str | None:
+    """The colour the user wants placed first ("藍色先放", "先放藍色"), from the text itself."""
+    for m in FIRST.finditer(text):
+        said = (m.group("a") or m.group("b") or "").strip()
+        for c, v in words.cfg.items():
+            if said and any(said == w or said == w.rstrip("色的") for w in v.get("words", [])):
+                return c
+    return None
+
+
 def plan(intent: dict, st: dict, words, max_count: int, text: str = "") -> Action:
     from agentic_sim.task.ledger import Ledger
     k = intent.get("intent")
@@ -169,8 +183,12 @@ def plan(intent: dict, st: dict, words, max_count: int, text: str = "") -> Actio
                        f"這樣會變成 {over[c]} 顆，需求沒有改。")
         if mode != "add" and not new:
             return ask("這樣需求就是空的了。要哪些顏色、各幾顆？")
+        first = first_color(text, words) if mode == "total" else None
+        if first in items:      # placement order follows the ledger's colour order: the named colour goes first
+            items = {first: items[first], **{c: n for c, n in items.items() if c != first}}
+            new = Ledger.compose(target, items, mode)
         if mode == "total":
-            confirm = f"好的，需求改為 {words.counts(new)}。"
+            confirm = f"好的，需求改為 {words.counts(new)}" + (f"，{words.color(first)}先放。" if first in items else "。")
         elif mode == "set":   # only the change: the order it applies to may differ from what was read (reported later)
             parts = [f"{words.color(c)}改為 {n} 顆" if n else f"不要{words.color(c)}" for c, n in items.items()]
             confirm = f"好的，{'、'.join(parts)}，其他顏色不變。"

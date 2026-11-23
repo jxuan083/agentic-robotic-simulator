@@ -210,7 +210,16 @@ def grasp_ik_checker(scene, teleop_path):
 
 
 def prepare_session(cfg, scene, log=print):
-    """Resolve a seed once, then materialize the layout before engine creation."""
+    """Resolve a seed once, then materialize the layout before engine creation. A finals task scenario
+    (agentic_sim.task.finals) brings its own seeded layout of its role colours."""
+    if not cfg.random_blocks and getattr(cfg, "task", None):
+        spec = load(cfg.task)
+        if "finals" in spec:
+            from agentic_sim.task.finals import layout, resolve
+            if cfg.block_colors:
+                raise ValueError("a finals scenario sets its own blocks; drop --block-colors")
+            scene, colors, record = layout(scene, resolve(spec), cfg.teleop, log)
+            return replace(cfg, blocks=len(colors)), scene, colors, record
     if not cfg.random_blocks:
         return cfg, scene, None, None
     if cfg.block_colors or cfg.task or cfg.color_dr or load(cfg.color_dr_config).get("enabled"):
