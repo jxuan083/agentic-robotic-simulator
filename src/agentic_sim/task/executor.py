@@ -175,8 +175,8 @@ class TaskExecutor:
         return None
 
     def associate(self, items: list) -> tuple:
-        """Bookkeeping / scoring only: the simulator block each observed block is (nearest within ASSOCIATE_M).
-        The choice of what to pick never reads this; it follows the observed colour and pose."""
+        """Match each observation to an eligible simulator ID within ASSOCIATE_M for inventory and scoring.
+        Unmatched detections are logged but cannot be picked. Matched targets keep the camera colour and pose."""
         used, blocks, poses, unmatched = set(), {}, {}, []
         for it in items:
             best, bd = None, ASSOCIATE_M
@@ -498,6 +498,8 @@ class TaskExecutor:
         if choice == "wait":
             self.question = None
             self.restock_wait = True
+            if self.inventory is not None:
+                self.inventory["stale"] = True
             self.next_recheck = self.t + float(self.cfg["shortage"]["recheck_s"])
             return
         new = dict(led.target)

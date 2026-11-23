@@ -8,6 +8,7 @@ Camera observations need rendering and are covered by the MuJoCo GUI acceptance 
 import copy
 import os
 import sys
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -100,6 +101,44 @@ def test_substitute_is_looked_for_again_after_the_answer(tmp_path):
     seen = looks[0]["poses"][str(pick["block"])]["xy"]
     assert np.linalg.norm(np.subtract(seen, moved["to"]["xy"])) < 1e-3     # found where the scene moved it
     assert w.placed() == {"red": 1, "blue": 1, "yellow": 1}
+
+
+@pytest.mark.parametrize(("shortage", "seen"), [("red", "red"), ("light_green", "yellow")])
+def test_unclear_restock_polls_hold_position(tmp_path, shortage, seen):
+    from agentic_sim.task.camera import TaskCamera
+
+    w = FinalsWorld(tmp_path, roles=(shortage, "blue", "purple"), answer="wait")
+    w.run(lambda w: w.ex.restock_wait)
+    start = len(w.ex.events)
+    joints = w.ctrl.state.q_cmd.copy()
+    cam = TaskCamera(LAB, None, w.ex.world.trays["storage"], w.edge, w.ctrl, {})
+    w.ex.camera = cam
+    cam.record = Mock(side_effect=lambda key: (None, {"frame_number": cam.record.call_count}, None))
+
+    # Red case: an unresolved outline remains even after red is put back. Green case: a yellow fit may be green.
+    def fits(rec):
+        if w.removed:
+            return []
+        b = w.runner.finals.restocked[0]["block"]
+        return [dict(color=seen, xy=list(w.blocks[b][:2]), yaw=0.0, fit=1.0, source="global")]
+
+    cam.tray_fits = fits
+    cam.tray_unfitted = lambda rec: [{"xy": [0.22, 0.20]}] if shortage == "red" and rec["frame_number"] <= 4 else []
+    cam.view_plan = Mock(side_effect=AssertionError("wrist motion during a restock poll"))
+
+    def polls():
+        return [e for e in w.ex.events[start:] if e["kind"] == "observation"]
+
+    w.run(lambda w: len(polls()) >= 4)
+    assert polls()[-1]["clear"] is False
+    assert all(e["reason"] == "restock_wait" and e["views"] == 1 for e in polls())
+    assert w.ex.restock_wait and w.ex.skill is None
+    np.testing.assert_allclose(w.ctrl.state.q_cmd, joints)
+    assert all(call.args == ("global",) for call in cam.record.call_args_list)
+    if shortage == "red":
+        w.run(lambda w: w.ex.skill is not None and w.ex.skill.name == "pick")
+        assert polls()[-1]["clear"] and w.ex.skill.params["color"] == shortage
+        assert w.ex.skill.params["target"]["xy"] == w.runner.finals.restocked[0]["pose"]["xy"]
 
 
 def test_roles_are_read_from_the_scene_not_fixed(tmp_path):

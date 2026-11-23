@@ -8,13 +8,13 @@ camera is known to confuse (configs/target_localization.yaml `global_lookalikes`
 light green seen as yellow) and silhouettes inside the tray that could not be fitted (merged, occluded) are looked
 at with the wrist camera, which decides colour and pose. When a colour the order still needs is not in the global
 image, the wrist sweeps the tray before the executor accepts that it is missing. A silhouette in the tray that stays
-unexplained makes the observation unclear: the executor reports it and does not ask the shortage question.
+unexplained makes the observation unclear. While waiting for restock, only the fixed global camera is used.
 
 Pick alignment: approach over the observed pose, wrist image, move over the wrist estimate, second wrist image (the
 #19 two-view rule); when the first view does not confirm, the camera is re-centred over the estimate once.
 
-Ground truth is never read here. The executor associates each observed block with a simulator block ID only for its
-bookkeeping and the scoring (agentic_sim.task.executor, `associate`).
+Ground truth is never read here. The executor admits only observations it can match to a simulator block ID
+into its inventory (agentic_sim.task.executor, `associate`); grasp targets use the camera pose.
 """
 
 from __future__ import annotations
@@ -133,7 +133,7 @@ def merge(items: list, item: dict, edge: float) -> bool:
 
 class Observe(Skill):
     """Look at the storage tray: global image, wrist checks where the global camera is unsure, a wrist sweep when a
-    needed colour is not seen (purpose standby / select), then back to the standby point (standby / restock_wait)."""
+    needed colour is not seen (standby / select). Restock polls take one stationary global image."""
     name = "observe"
     cancel_phases = ()
 
@@ -156,6 +156,18 @@ class Observe(Skill):
                     (relevant is None or ({k["color"]} | cam.ambiguous(k["color"])) & relevant)]
         unresolved = cam.tray_unfitted(rec)
         views.append({"camera": "global", "fits": len(items), "unfitted": unresolved, "frame": rec["frame_number"]})
+        if purpose == "restock_wait":
+            # Someone may be reaching into the tray. An unclear frame must wait for the next global poll.
+            for item in to_check:
+                item["uncertain"] = True
+            reason = ""
+            if unresolved:
+                reason = f"{len(unresolved)} unresolved silhouette(s) in the global restock view"
+            elif to_check:
+                reason = "needed colour is ambiguous in the global restock view"
+            self.evidence.update(items=items, unresolved=unresolved, views=views, clear=not reason,
+                                 reason_unclear=reason, observation="camera")
+            return
         # wrist checks: look-alike colours, then silhouettes the global camera could not fit
         for k in to_check:
             colors = [k["color"], *sorted(cam.ambiguous(k["color"]))]
@@ -187,7 +199,7 @@ class Observe(Skill):
             reason = "a block's colour could not be confirmed by the wrist"
         self.evidence.update({"items": items, "unresolved": still, "views": views, "clear": clear,
                               "reason_unclear": reason, "observation": "camera"})
-        if purpose in ("standby", "restock_wait") and len(views) > 1:
+        if purpose == "standby" and len(views) > 1:
             self.set_phase("return")
             yield from self.move(self.world.home, 0.0, cancellable=False)
 
