@@ -170,6 +170,9 @@ class Follower(PositionBus):
             states[joint] = value if self.bus._is_comm_success(comm) else None
         return states
 
+    def torque_states(self):
+        return self._torque_states()
+
     def close(self):
         if not self.started:
             return
@@ -184,7 +187,7 @@ class Follower(PositionBus):
 
 
 @contextmanager
-def _open_arm(name, role, spec):
+def _open_arm(name, role, spec, *, managed=False):
     # Keep the LeRobot object alive while using its calibrated motor bus.
     device = _device(role, spec)
     bus = device.bus
@@ -203,7 +206,7 @@ def _open_arm(name, role, spec):
         try:
             yield arm
         finally:
-            if role == "follower":
+            if role == "follower" and not managed:
                 arm.close()
     finally:
         if bus.is_connected:
@@ -214,8 +217,8 @@ def open_leader(name, spec):
     return _open_arm(name, "leader", spec)
 
 
-def open_follower(name, spec):
-    return _open_arm(name, "follower", spec)
+def open_follower(name, spec, *, managed=False):
+    return _open_arm(name, "follower", spec, managed=managed)
 
 
 def encode_png(image):

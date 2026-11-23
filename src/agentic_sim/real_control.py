@@ -51,9 +51,10 @@ class ControlRouter:
         self._policy = deque()
         self._origins = None
         self._takeover = None
+        self._stopped = False
 
     def enqueue_policy(self, chunk, *, generation):
-        if self.source != "policy" or generation != self.generation:
+        if self._stopped or self.source != "policy" or generation != self.generation:
             return False
         actions = []
         for action in chunk:
@@ -72,8 +73,18 @@ class ControlRouter:
         self.source = "manual"
         self._origins = None
 
+    def stop(self):
+        """Invalidate queued and in-flight policy chunks at the end of a round."""
+        discarded = len(self._policy)
+        self._policy.clear()
+        self.generation += 1
+        self._stopped = True
+        return discarded
+
     def step(self, clock):
         """Send one whole step and capture post-command readback from each follower."""
+        if self._stopped:
+            raise RuntimeError("control round has ended")
         event = None
         if self.source == "manual":
             leaders = {name: pose(leader.read()) for name, (leader, _) in self.pairs.items()}
