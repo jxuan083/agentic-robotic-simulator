@@ -200,6 +200,7 @@ class Skill:
         if b is None:
             return
         if float(np.linalg.norm(self.obs.blocks[b] - self.obs.ee)) > float(self.cfg["grasp_check"]["max_block_ee"]):
+            self.evidence["jaw_at_drop"] = round(float(self.obs.jaw), 4)
             self.ctx.emit("dropped", block=b, phase=self.phase)
             self.holding = None
             raise _Fail("dropped")
@@ -436,3 +437,98 @@ class Home(Skill):
     def on_cancel(self):
         return
         yield
+
+
+class PickAt(Pick):
+    """Pick the block at a perceived pose (`pos` centre, `yaw`) rather than at block `block`'s true pose. Whether it
+    holds the block is judged from the robot's own sensors, as on the real arm: the measured jaw angle (a closed
+    jaw stops at the block width) and the EE height from the measured joints. `block` names the block expected there,
+    only to log the simulation truth beside that verdict. `yaw_offset` (optional) sets the finger orientation."""
+    name = "pick_at"
+
+    def body(self):
+        b = self.params["block"]
+        m = self.cfg["motion"]
+        safe = float(m["safe_z"])
+        self.set_phase("rise")
+        yield from self.up_to_safe(cancellable=True)
+        bp, byaw = np.asarray(self.params["pos"], float), float(self.params["yaw"])
+        off = self.params.get("yaw_offset")
+        off = self.yaw_offset_for(bp, byaw) if off is None else float(off)
+        g = self.grasp_xy(bp, off)
+        self.evidence["perceived_pos"] = [round(float(x), 5) for x in bp]
+        self.set_phase("approach")
+        yield from self.move([g[0], g[1], safe], off)
+        self.set_phase("descend")
+        yield from self.move([g[0], g[1], bp[2] + float(m["grasp_dz"])], off)
+        self.set_phase("close")
+        yield from self.gripper(False)
+        self.evidence["jaw_closed"] = round(float(self.obs.jaw), 4)   # measured, as a servo would report it
+        # where the block sits relative to the EE (FK of the measured joints): the held block's place in the wrist view
+        self.evidence["block_from_ee_m"] = [round(float(x), 5) for x in bp - self.obs.ee]
+        self.set_phase("lift")
+        z0, ee_z0 = float(self.obs.blocks[b][2]), float(self.obs.ee[2])
+        self.holding = b
+        self.ctx.on_grasp(b)
+        yield from self.move([g[0], g[1], safe], off)
+        gc = self.cfg["grasp_check"]
+        bz = float(self.obs.blocks[b][2])
+        near = float(np.linalg.norm(self.obs.blocks[b] - self.obs.ee))
+        # the robot's own verdict: the jaw stopped on something and the EE (forward kinematics of the measured
+        # joints) went up; simulation truth is kept only to measure how often the two disagree
+        held = self.jaw_holding() and float(self.obs.ee[2]) - ee_z0 >= float(gc["lifted_dz"])
+        truth_held = bz - z0 >= float(gc["lifted_dz"]) and near <= float(gc["max_block_ee"])
+        self.evidence.update({"jaw_lifted": round(float(self.obs.jaw), 4),
+                              "ee_lift_dz": round(float(self.obs.ee[2]) - ee_z0, 4), "observation": "jaw+ee",
+                              "block_lift_dz": round(bz - z0, 4), "block_ee_dist": round(near, 4),
+                              "truth_held": bool(truth_held)})
+        if not held:
+            self.holding = None
+            self.ctx.on_release(b)
+            yield from self.gripper(True, cancellable=False)
+            yield from self.up_to_safe(cancellable=False)
+            raise _Fail("grasp_missed")
+
+
+    def jaw_holding(self) -> bool:
+        return float(self.obs.jaw) >= float(self.cfg["grasp_check"]["jaw_hold_min_rad"])
+
+    def _check_drop(self):
+        """Dropped = the measured jaw closed past the block width (no simulation truth)."""
+        b = self.holding
+        if b is None or self.phase != "lift" or self.jaw_holding():
+            return
+        self.evidence["jaw_at_drop"] = round(float(self.obs.jaw), 4)
+        self.ctx.emit("dropped", block=b, phase=self.phase)
+        self.holding = None
+        raise _Fail("dropped")
+
+
+class Push(Skill):
+    """Push a block along a straight line with the closed gripper: down behind it at `start`, across to `end`
+    (xy, mount frame) at height `z`, then straight up. For blocks the gripper cannot pick (tilted, crowded)."""
+    name = "push"
+    cancel_phases = ("rise", "approach", "descend")
+
+    def body(self):
+        start, end = np.asarray(self.params["start"], float), np.asarray(self.params["end"], float)
+        z = float(self.params["z"])
+        safe = float(self.cfg["motion"]["safe_z"])
+        d = end - start
+        off = self.yaw_offset_for(start, math.atan2(d[1], d[0]))   # finger faces across the push direction
+        self.set_phase("rise")
+        yield from self.up_to_safe(cancellable=True)
+        yield from self.gripper(False)
+        self.set_phase("approach")
+        yield from self.move([start[0], start[1], safe], off)
+        self.set_phase("descend")
+        yield from self.move([start[0], start[1], z], off)
+        self.set_phase("push")
+        yield from self.move([end[0], end[1], z], off, cancellable=False)
+        self.set_phase("retreat")
+        yield from self.up_to_safe(cancellable=False)
+        yield from self.gripper(True, cancellable=False)
+
+    def on_cancel(self):
+        yield from self.up_to_safe(cancellable=False)
+        yield from self.gripper(True, cancellable=False)
