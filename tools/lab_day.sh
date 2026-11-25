@@ -6,7 +6,7 @@
 #     check        read-only device/calibration check (power on, torque off)
 #     overlay      D455 live overlay against the current tray reference (s saves, q quits)
 #     reference    after moving the trays: save a new D455 reference (markers 40/41/42) that overlay then uses
-#     guide        live D455 placement guide (tray grid + block mm; --target TRAY X Y YAW COLOR), s saves
+#     guide        live D455 placement guide (tray grid + block mm; --target TRAY X Y YAW COLOR or --reach-plan), s saves
 #     locate       D455 snapshot -> block positions in tray-local mm (+ annotated image)
 #     route        teach park -> channel with the leader, reverse to park   (needs SUPPORT="...")
 #     route-tune   remove taught pauses/jitter, fix the gripper opening: GRIP=<pct>, or hold the leader
