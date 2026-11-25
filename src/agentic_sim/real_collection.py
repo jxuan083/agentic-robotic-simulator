@@ -319,8 +319,12 @@ class Collection:
         if selected is None:
             selected = {key: value["frame"] for key, value in report["candidates"].items()}
         frames = confirmed_frames(episode, selected)
-        write_json(directory / "review.json", {"frames": frames, "outcome": outcome,
-                                               "training_range": [frames["handoff"]["frame"], frames["lift"]["frame"]]})
+        located = report.get("d455_blocks") or {}
+        target = {"tray": card["source_tray"], "color": card["color"], "frame": "tray-local mm, deg",
+                  "card_pose": card["pose"], "actual_pose": card.get("actual_pose"),
+                  "d455": located.get("target")}
+        write_json(directory / "review.json", {"frames": frames, "outcome": outcome, "target": target,
+                                               "training_range": [frames["start"]["frame"], frames["lift"]["frame"]]})
         entry["reviewed"] = True
         entry["layout_group"] = card["layout_group"]
         entry["status"] = "accepted" if self.state["first_replay_episode"] else "needs_replay"

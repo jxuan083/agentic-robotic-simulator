@@ -6,6 +6,7 @@
 #     check        read-only device/calibration check (power on, torque off)
 #     overlay      D455 live overlay against the current tray reference (s saves, q quits)
 #     reference    after moving the trays: save a new D455 reference (markers 40/41/42) that overlay then uses
+#     locate       D455 snapshot -> block positions in tray-local mm (+ annotated image)
 #     route        teach park -> channel with the leader, reverse to park   (needs SUPPORT="...")
 #     route-tune   remove taught pauses/jitter, fix the gripper opening: GRIP=<pct>, or hold the leader
 #                  gripper at the cube-ready opening while it reads (read-only); then route-test again.
@@ -81,6 +82,10 @@ case "$step" in
       echo "$root/$name/rgb.png" > outputs/current-reference.txt
       echo "overlay now uses $root/$name/rgb.png; re-teach both drop routes (REPLACE=1) after a tray move"
     fi ;;
+  locate)
+    # D455 coarse block positions in tray-local mm (red/blue/yellow); annotated image to check against the table.
+    out="outputs/$DATE-camera/locate-$(date +%H%M%S)"
+    "$PY" tools/real_locate.py --serial "$D455" --out "$out" ;;
   route)
     [[ -n "${SUPPORT:-}" ]] || { echo 'set SUPPORT="<park support description>"' >&2; exit 1; }
     mkdir -p "$ROUTES"
@@ -123,7 +128,7 @@ case "$step" in
       --version "right-$DATE-v1" --workspace "empty desk verified $DATE" --out "$SETUP" ;;
   collect)
     need "$SETUP"
-    say "first press the empty-desk check; first card: record, review the handoff frame, then real replay"
+    say "first press the empty-desk check; first card: record from the start pose to a stable lift, review start/close/lift, then real replay"
     "$PY" tools/real_collection.py --config "$CONFIG" --setup "$SETUP" --session "$SESSION" --allow-motion ;;
   recover)
     need "$ROUTE"
@@ -157,5 +162,5 @@ PYEOF
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)
-    sed -n '2,30p' "$0"; exit 1 ;;
+    sed -n '2,31p' "$0"; exit 1 ;;
 esac

@@ -355,7 +355,7 @@ class Window:
         if (path / "review.json").exists():
             marks.update({key: value["frame"] for key, value in
                           json.loads((path / "review.json").read_text(encoding="utf-8"))["frames"].items()})
-        frame = tk.IntVar(value=marks.get("handoff", 0))
+        frame = tk.IntVar(value=marks.get("close", 0))
         text = tk.StringVar()
         strip = ttk.Frame(dialog)
         strip.pack()
@@ -410,12 +410,14 @@ class Window:
 
             dialog.after(160, step)
 
-        for key, label in (("coarse", "粗定位"), ("handoff", "接手"), ("close", "閉爪"), ("lift", "抬穩")):
+        for key, label in (("start", "起點"), ("close", "閉爪"), ("lift", "抬穩")):
             ttk.Button(buttons, text=f"標 {label}", command=lambda key=key: mark(key)).pack(side="left")
         ttk.Button(buttons, text="循環前後幀", command=lambda: loop(frame.get())).pack(side="left")
         ttk.Button(buttons, text="停止循環", command=lambda: loop_token.__setitem__(0, loop_token[0] + 1)).pack(side="left")
-        for index in hints.get("handoff", {}).get("alternatives", []):
-            ttk.Button(dialog, text=f"接手候選 {index}", command=lambda index=index: loop(index)).pack(side="left")
+        target = (report.get("d455_blocks") or {}).get("target")
+        ttk.Label(dialog, text=("D455 目標方塊：" + (f"{target['tray']} x {target['x_mm']:.0f} mm, y {target['y_mm']:.0f} mm, "
+                                f"{target['yaw_deg']:.0f}°（與卡片差 {target['card_offset_mm']:.0f} mm）"
+                                if target else "未偵測到"))).pack(anchor="w", padx=12)
 
         def save():
             try:

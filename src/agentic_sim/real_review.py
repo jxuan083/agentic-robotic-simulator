@@ -31,34 +31,19 @@ def _candidates(episode, arm, warnings):
         return all(abs(joints[i][j] - joints[i - 1][j]) <= .25 for j in JOINTS[:-1])
 
     stamps = [row["timestamp_ns"] for row in rows]
-    begin = bisect_left(stamps, stamps[close] - 2_000_000_000)
-    dwells = []
-    for i in range(max(2, begin), close):
-        if quiet(i) and quiet(i - 1) and grip[i] >= grip[close - 1] - 2:
-            if dwells and dwells[-1][-1] == i - 1:
-                dwells[-1].append(i)
-            else:
-                dwells.append([i])
     # The motion cue only proposes a window for the lift. Image evidence verifies it.
     lift = next((i for i in range(close + 2, len(joints) - 1)
                  if grip[i] < grip[close - 1] - 2
                  and (abs(joints[i]["shoulder_lift"] - joints[close]["shoulder_lift"])
                       + abs(joints[i]["elbow_flex"] - joints[close]["elbow_flex"])) >= 1.5), None)
-    hints = {"close": (close, "sustained decrease in measured gripper opening")}
+    # The policy learns the whole approach: training starts at the settled standard start (first task frame).
+    hints = {"start": (0, "first task frame at the settled standard start"),
+             "close": (close, "sustained decrease in measured gripper opening")}
     reasons = []
-    if dwells:
-        hints["coarse"] = (dwells[0][0], "first open-gripper low-speed interval")
-        hints["handoff"] = (dwells[-1][-1], "last open-gripper low-speed interval before closing")
-        if len(dwells) > 1:
-            reasons.append("multiple pre-close dwells; check where the final correction begins")
-    else:
-        reasons.append("no unambiguous open-gripper dwell before closing")
     if lift is None:
         reasons.append("no lift candidate with a closed gripper")
     else:
         hints["lift"] = (lift, "arm motion with gripper closed; check consecutive images for a stable lift")
-    if any(hints.get(key, (0,))[0] >= close for key in ("coarse", "handoff")):
-        reasons.append("dwell ordering is uncertain")
     candidates = {}
     for name, (index, basis) in hints.items():
         stamp = stamps[index]
@@ -72,13 +57,34 @@ def _candidates(episode, arm, warnings):
                 reasons.append(f"{name}: {camera} image is too far from the control sample")
         candidates[name] = {"frame": index, "timestamp_ns": stamp, "basis": basis, "images": images,
                             "command_ns": rows[index]["arms"][arm]["command_ns"]}
-    if "handoff" in candidates and "lift" in candidates:
-        left, right = candidates["handoff"]["frame"], candidates["lift"]["frame"]
-        if any(gap["before_frame"] <= right and gap["after_frame"] >= left for gap in warnings):
-            reasons.append("control timing gap overlaps the grasp segment")
-    if dwells:
-        candidates["handoff"]["alternatives"] = [dwell[-1] for dwell in dwells]
+    if "lift" in candidates:
+        right = candidates["lift"]["frame"]
+        if any(gap["before_frame"] <= right for gap in warnings):
+            reasons.append("control timing gap inside the training segment (start to lift)")
     return candidates, reasons
+
+
+def locate_opening(episode, card=None):
+    """D455 block positions (tray-local mm) in the opening global frame; the card's block if a card is given."""
+    try:
+        import cv2
+
+        from agentic_sim.real_locate import locate, match_target
+    except ImportError as error:  # camera-less test environments
+        return {"error": f"D455 localisation unavailable: {error}"}
+
+    frames = episode.frames.get("global") or []
+    if not frames:
+        return None
+    first = frames[0]
+    image = cv2.imread(str(episode.root / "global" / first["rgb"]))
+    if image is None:
+        return {"error": "opening global frame unreadable"}
+    result = locate(image)
+    result["global_frame"] = first["frame"]
+    if card:
+        result["target"] = match_target(result, card)
+    return result
 
 
 def review_episode(root, *, source, arm, card=None, rgb_depth=None):
@@ -106,7 +112,13 @@ def review_episode(root, *, source, arm, card=None, rgb_depth=None):
     depth = global_info.get("depth") or {}
     depth_frames = sum("depth" in frame and (root / "global" / frame["depth"]).is_file()
                        for frame in episode.frames.get("global", []))
-    report.update(candidates=candidates, review_reasons=reasons, operator_result=result,
+    located = locate_opening(episode, card) if report["ok"] and source == "real" else None  # fake frames are synthetic
+    if card and located is not None and "error" not in located:
+        if not located.get("target"):
+            reasons.append("D455 did not find the target block in the opening frame")
+        elif located["target"]["tray_clipped"]:
+            reasons.append("target tray touches the D455 image border; its D455 position is unreliable")
+    report.update(candidates=candidates, review_reasons=reasons, operator_result=result, d455_blocks=located,
                   opening_global=(f"global/{episode.frames['global'][0]['rgb']}" if episode.frames.get("global") else None),
                   depth_summary={"frames": depth_frames, "units_m": depth.get("units_m"),
                                  "alignment": depth.get("alignment"),
@@ -124,12 +136,12 @@ def review_episode(root, *, source, arm, card=None, rgb_depth=None):
 
 def confirmed_frames(episode, frames):
     """Bind reviewed frame numbers to exact timestamps and the nearest camera files."""
-    order = ("coarse", "handoff", "close", "lift")
-    selected = [frames[key] for key in order]
+    order = ("start", "close", "lift")
+    selected = [frames.get(key, 0 if key == "start" else None) for key in order]
     if any(type(index) is not int or not 0 <= index < len(episode.rows) for index in selected):
         raise ValueError("review frame is outside this episode")
-    if not selected[0] <= selected[1] < selected[2] < selected[3]:
-        raise ValueError("expected coarse ≤ handoff < close < lift")
+    if not selected[0] < selected[1] < selected[2]:
+        raise ValueError("expected start < close < lift")
     arm, = episode.manifest["arms"]
     result = {}
     for key, index in zip(order, selected):
