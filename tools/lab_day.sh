@@ -28,7 +28,8 @@
 #     status       route summaries and collection progress
 #     pack         ZIP the round into AllenHZL/ and archive the handoff dir (NOTES="path ..." optional)
 #
-# Settings (environment): LAB_DATE (default today, YYMMDD), SUPPORT (park support description, for `route`),
+# Settings (environment): LAB_DATE (default today, YYMMDD; session folders), RIG_DATE (day whose routes and tray
+# corners to reuse, default LAB_DATE), SUPPORT (park support description, for `route`),
 # PY (default the conda lerobot python), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
 # with simulated arms), MANUAL_ALIGN=1 (align the leader by hand), GRIP (route-tune gripper %), RATE (route playback speed factor, default 1.0), RELEASE (drop gripper %, default 35).
 set -euo pipefail
@@ -37,15 +38,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 PY="${PY:-$HOME/miniconda3/envs/lerobot/bin/python}"
 DATE="${LAB_DATE:-$(date +%y%m%d)}"
+RIG="${RIG_DATE:-$DATE}"   # routes, tray corners and setup taught on this day (reuse them on a later day)
 CONFIG=outputs/single.local.yaml
-LAYOUT="lab-right-$DATE"
+LAYOUT="lab-right-$RIG"
 ROUTES=outputs/routes
-ROUTE="$ROUTES/right-park-channel-$DATE.json"
-DROP_BEIGE="$ROUTES/right-drop-beige-$DATE.json"
-DROP_PINK="$ROUTES/right-drop-pink-$DATE.json"
+ROUTE="$ROUTES/right-park-channel-$RIG.json"
+DROP_BEIGE="$ROUTES/right-drop-beige-$RIG.json"
+DROP_PINK="$ROUTES/right-drop-pink-$RIG.json"
 CARDS="outputs/$DATE-cards.json"
-TRAYS="outputs/$DATE-trays/trays.json"   # fixed D455 tray corners from the clean reference (step `trays`)
-SETUP="outputs/$DATE-right.setup.json"
+TRAYS="outputs/$RIG-trays/trays.json"   # fixed D455 tray corners from the clean reference (step `trays`)
+SETUP="outputs/$RIG-right.setup.json"
 SESSION="outputs/$DATE-right"
 # D455 tray reference for `overlay`: the latest `reference` capture, else the 11/25 one (REFERENCE=... overrides)
 REFERENCE="${REFERENCE:-$(cat outputs/current-reference.txt 2>/dev/null || echo outputs/261125-camera/global/rgb.png)}"
@@ -61,7 +63,7 @@ say() { printf '\n== %s\n' "$*"; }
 step="${1:-env}"; shift || true
 case "$step" in
   env)
-    say "date $DATE  layout $LAYOUT"
+    say "date $DATE  rig $RIG  layout $LAYOUT"
     git log --oneline -1
     git status --short --untracked-files=no | head
     grep -E '^control_hz' "$CONFIG" || true
