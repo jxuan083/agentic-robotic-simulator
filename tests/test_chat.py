@@ -88,6 +88,13 @@ def test_templates():
     e = {"kind": "over_delivery", "color": "red", "over": 1, "delivered": 2, "target": 1}
     assert "取回" in W.event(e)
     assert W.event({"kind": "phase"}) is None
+    assert W.event({"kind": "skill_start", "skill": "pick"}) is None      # progress is a separate line kind
+    assert W.progress({"kind": "skill_start", "skill": "pick", "color": "red", "nth": 2, "purpose": "deliver"}) \
+        == "正在夾取第二顆紅色積木…"
+    assert "取回" in W.progress({"kind": "skill_start", "skill": "pick", "color": "blue", "purpose": "retrieve"})
+    assert "放回原位" in W.progress({"kind": "skill_start", "skill": "place", "color": "red", "purpose": "return"})
+    assert W.progress({"kind": "skill_start", "skill": "home"}) == "回到待命位置…"
+    assert W.progress({"kind": "order"}) is None
     q = {"kind": "shortage", "id": 2, "delivered": {"red": 1, "blue": 1}, "missing": {"blue": 1},
          "available": {"red": 2, "yellow": 1}, "options": ["substitute", "reduce", "wait"]}
     t = W.question(q)
@@ -151,6 +158,9 @@ def test_hold_return_dialogue_replay():
     run_until(w, lambda w: w.ex.state == "done")
     reports += agent.poll_reports()
     assert any(r.startswith("完成") for r in reports)
+    prog = [r for r in reports if r.startswith("[進度]")]
+    assert "[進度] 正在夾取第一顆紅色積木…" in prog and "[進度] 把紅色積木放回原位…" in prog
+    assert "[進度] 正在夾取第一顆藍色積木…" in prog and prog[-1] == "[進度] 回到待命位置…"
     led = w.ex.ledger.snapshot()
     assert led["delivered"] == {"red": 1, "blue": 2} and led["revision"] == 2 and led["done"]
     sent = [a["sent"] for r in agent.transcript if "attempts" in r for a in r["attempts"] if "sent" in a]

@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 os.chdir(ROOT)
 
 from agentic_sim.chat.agent import ChatAgent  # noqa: E402
+from agentic_sim.chat.zh import report_line  # noqa: E402
 from agentic_sim.chat.llm import LLMError, OpenAICompatLLM  # noqa: E402
 from agentic_sim.config import load  # noqa: E402
 from agentic_sim.server.client import RemoteError, SimClient  # noqa: E402
@@ -110,12 +111,12 @@ class Repl:
     def connect(self):
         self.reporter.events_seen = self.poll("task_events").get("next", 0)   # later questions arrive as events
         for line in self.agent.show_open_question():                         # its event was before the cursor
-            self.say(f"[系統] {line}")
+            self.say(report_line(line))
         self.reporter.q_shown = self.copied = self.agent.q_shown
 
     def pump(self):
         for line in self.reporter.poll_reports():
-            self.say(f"[系統] {line}")
+            self.say(report_line(line))
         if self.reporter.q_shown != self.copied:          # printed above: the user has now seen it
             self.agent.q_shown = self.copied = self.reporter.q_shown
 
@@ -150,7 +151,7 @@ def run_script(agent: ChatAgent, call, spec: dict, out_dir: str, say) -> dict:
     def pump():
         nonlocal agent
         for line in agent.poll_reports():
-            say(f"[系統] {line}")
+            say(report_line(line))
             log.append({"t": round(time.monotonic() - t0, 3), "who": "system", "text": line})
         seen_events[:] = [r for r in agent.transcript if "event" in r]
 
@@ -178,7 +179,7 @@ def run_script(agent: ChatAgent, call, spec: dict, out_dir: str, say) -> dict:
             log.append({"t": round(time.monotonic() - t0, 3), "who": "system", "text": "reconnect"})
             agent.transcript.append({"reconnect": True, "events_from": agent.events_seen})
             for line in agent.show_open_question():
-                say(f"[系統] {line}")
+                say(report_line(line))
                 log.append({"t": round(time.monotonic() - t0, 3), "who": "system", "text": line})
         if "say" in turn:
             say(f"> {turn['say']}")

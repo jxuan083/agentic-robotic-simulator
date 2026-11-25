@@ -20,8 +20,8 @@ from __future__ import annotations
 from agentic_sim.task.ledger import MODES
 
 
-# events a client (chat layer) needs; phase / skill_start events stay on the simulator panel
-REPORT_EVENTS = ("order", "order_rejected", "question", "question_dropped", "answer", "answer_rejected", "over_delivery", "verified",
+# events a client (chat layer) needs; phase events stay on the simulator panel. skill_start: the chat's progress lines
+REPORT_EVENTS = ("skill_start", "order", "order_rejected", "question", "question_dropped", "answer", "answer_rejected", "over_delivery", "verified",
                  "uncertain", "dropped", "block_skipped", "task_done", "skill_done")
 
 

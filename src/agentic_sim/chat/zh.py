@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 NUM = {0: "零", 1: "一", 2: "兩", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九", 10: "十"}
+ORD = {**NUM, 2: "二"}   # ordinals: 第二顆, not 第兩顆
 CHOICE_ZH = {"return": "放回原位", "place_at": "放到指定位置", "deliver": "照樣送出", "substitute": "換成其他顏色",
              "reduce": "減少數量", "wait": "等補料"}
+
+
+def report_line(line: str) -> str:
+    """A report as shown: progress lines keep their own [進度] prefix, everything else is a [系統] report."""
+    return line if line.startswith("[進度]") else f"[系統] {line}"
 
 
 class Words:
@@ -80,6 +86,29 @@ class Words:
             return f"異常：{self.color(e['color'])}積木夾取失敗 {e.get('attempts')} 次，先跳過。"
         if k == "skill_done":
             return f"異常：{e['skill']} 動作{'失敗' if e['status'] == 'failed' else '結果不確定'}（{e.get('failure_reason', '')}）。"
+        return None
+
+    # ---- skill progress (what the arm starts doing now; shown with the [進度] prefix) ------------------------
+    def progress(self, e: dict) -> str | None:
+        """skill_start -> one line about the motion that starts now (fixed templates; None = not shown)."""
+        if e.get("kind") != "skill_start":
+            return None
+        sk, why, c = e.get("skill"), e.get("purpose"), e.get("color")
+        zc = self.color(c) if c else "積木"
+        if sk == "pick":
+            if why == "retrieve":
+                return f"正在把多交的{zc}積木從放置盤取回…"
+            nth = e.get("nth")
+            return f"正在夾取{f'第{ORD.get(nth, nth)}顆' if nth else ''}{zc}積木…"
+        if sk == "place":
+            return {"return": f"把{zc}積木放回原位…", "place_at": f"把{zc}積木放到指定位置…",
+                    "deliver_extra": f"照你的意思，把{zc}積木送進放置盤…"}.get(why, f"把{zc}積木放進放置盤…")
+        if sk == "observe":
+            return "正在觀察備料盤，確認還有哪些積木…"
+        if sk == "hold":
+            return f"先拿著{zc}積木，等你決定…"
+        if sk == "home":
+            return "回到待命位置…"
         return None
 
     def status(self, st: dict) -> str:
