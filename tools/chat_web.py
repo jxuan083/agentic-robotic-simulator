@@ -76,6 +76,7 @@ class WebChat:
         self.cv = threading.Condition()
         self.busy = False
         self.question = None          # (text, id, quick replies) shown in the question card
+        self.scene = None             # storage blocks for the page's map (task state storage_blocks)
         self.conn = True
 
     # ---- message log ------------------------------------------------------------------------------
@@ -108,7 +109,15 @@ class WebChat:
         lines = [report_line(x) for x in self.reporter.poll_reports()]
         after = self.reporter.q_shown
         self.lines(lines, after if after != before else ...)
-        qn = self.reporter.state().get("question")
+        st = self.reporter.state()
+        qn = st.get("question")
+        scene = None
+        if "storage_blocks" in st:     # the block map: what "左上角那顆" is measured against
+            scene = {"blocks": st["storage_blocks"], "frame": st.get("pick_frame"), "pan": st.get("pan_xy"),
+                     "names": {c: self.reporter.words.color(c) for c in {b["color"] for b in st["storage_blocks"]}}}
+        if scene != self.scene:
+            self.scene = scene
+            self.put("scene", scene=scene)
         card = (self.reporter.words.question(qn), qn["id"], quick_replies(qn, self.reporter.words)) if qn else None
         if card != self.question:
             self.question = card

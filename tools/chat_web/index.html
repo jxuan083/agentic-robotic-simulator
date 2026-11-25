@@ -70,6 +70,11 @@ button { font: inherit; cursor: pointer; }
 .chip:active { transform: scale(.96); }
 .chip:disabled { opacity: .5; cursor: default; }
 
+.map { margin: 0 16px 8px; padding: 8px 12px 10px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
+.map[hidden] { display: none; }
+.map summary { cursor: pointer; color: var(--muted); font-size: 12.5px; user-select: none; }
+.map svg { display: block; width: 100%; max-height: 96px; margin-top: 6px; }
+.map .legend { color: var(--muted); font-size: 12px; margin-top: 2px; }
 main { flex: 1; overflow-y: auto; padding: 8px 16px 16px; scroll-behavior: smooth; }
 .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
 .empty p { margin: 4px 0 14px; }
@@ -138,6 +143,12 @@ textarea {
     <div class="text" id="qtext"></div>
     <div class="quick" id="qquick"></div>
   </section>
+
+  <details class="map" id="map" hidden open>
+    <summary>備料盤（上＝<span id="upword">遠離手臂</span>）</summary>
+    <svg id="mapsvg" viewBox="0 0 100 60" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="legend">虛線＝手臂夾不到。說「左上角那顆紅色」時以這張圖的方向為準。</div>
+  </details>
 
   <main id="log">
     <div class="empty" id="empty">
@@ -266,6 +277,7 @@ function handle(m) {
       break;
     case "question": showQuestion(m.text, m.qid, m.quick); break;
     case "idle": setBusy(false); break;
+    case "scene": drawMap(m.scene); break;
     case "paused": $("pause").hidden = m.paused; $("resume").hidden = !m.paused; break;
   }
 }
@@ -274,6 +286,37 @@ function connect() {
   const es = new EventSource("/api/events");
   es.onmessage = (ev) => handle(JSON.parse(ev.data));
   es.onerror = () => { if (es.readyState === EventSource.CLOSED) setTimeout(connect, 1000); };
+}
+
+// ---- block map: screen up = frame.up, screen left = frame.left -----------------------------------------------
+const SWATCH = { red: "#e5484d", orange: "#f76b15", yellow: "#f5d90a", light_green: "#94ce4a", dark_green: "#2f7d3a",
+  blue: "#3e63dd", cyan: "#23b0c9", purple: "#8e4ec6" };
+function drawMap(scene) {
+  const box = $("map"), svg = $("mapsvg");
+  if (!scene || !scene.blocks.length) { box.hidden = true; return; }
+  const f = scene.frame || { up: [1, 0], left: [0, 1] };
+  const pts = scene.blocks.map((b) => ({ ...b, sx: -(b.xy[0] * f.left[0] + b.xy[1] * f.left[1]),
+                                              sy: -(b.xy[0] * f.up[0] + b.xy[1] * f.up[1]) }));
+  const xs = pts.map((p) => p.sx), ys = pts.map((p) => p.sy);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 0.08);
+  const k = 44 / span, r = Math.min(5, 0.03 * k / 2 + 2);
+  svg.innerHTML = "";
+  const NS = "http://www.w3.org/2000/svg";
+  for (const p of pts) {
+    const el = document.createElementNS(NS, "rect");
+    const x = 50 + (p.sx - cx) * k, y = 30 + (p.sy - cy) * k;
+    el.setAttribute("x", x - r); el.setAttribute("y", y - r);
+    el.setAttribute("width", 2 * r); el.setAttribute("height", 2 * r); el.setAttribute("rx", 1.2);
+    el.setAttribute("fill", SWATCH[p.color] || "#999");
+    if (!p.reachable) { el.setAttribute("fill-opacity", ".25"); el.setAttribute("stroke", SWATCH[p.color] || "#999");
+      el.setAttribute("stroke-dasharray", "1.5 1"); el.setAttribute("stroke-width", ".6"); }
+    const t = document.createElementNS(NS, "title");
+    t.textContent = `${scene.names[p.color] || p.color}（${p.xy[0].toFixed(2)}, ${p.xy[1].toFixed(2)} m）${p.reachable ? "" : "，夾不到"}`;
+    el.appendChild(t);
+    svg.appendChild(el);
+  }
+  box.hidden = false;
 }
 
 // ---- sending ------------------------------------------------------------------------------------------------

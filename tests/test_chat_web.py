@@ -144,3 +144,15 @@ def test_http_page_send_and_events():
         assert any(m["kind"] == "lines" and m["lines"][0]["text"] == "好的，需求改為 紅色 1。" for m in got)
     finally:
         srv.shutdown()
+
+
+def test_block_map_follows_the_task_state():
+    w, app = make(["red", "red", "blue"], [])
+    w.step()
+    app.pump()
+    m = [x for x in app.log if x["kind"] == "scene"][-1]["scene"]
+    assert sorted(b["block"] for b in m["blocks"]) == [0, 1, 2] and all(b["reachable"] for b in m["blocks"])
+    assert m["names"] == {"red": "紅色", "blue": "藍色"} and m["frame"]["up"] == [1.0, 0.0]
+    n = len(app.log)
+    app.pump()
+    assert len(app.log) == n          # unchanged: not sent again
