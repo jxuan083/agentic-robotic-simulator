@@ -144,6 +144,14 @@ class Follower(PositionBus):
             raise RuntimeError("not all follower motors acknowledged torque enable")
         self.read()
 
+    def resume(self):
+        """Take over a follower left holding with torque on (e.g. after an interrupted session)."""
+        if self._torque_states() != dict.fromkeys(JOINTS, 1):
+            raise RuntimeError("resume requires torque confirmed on for all six axes")
+        self.started = True
+        current = self.read()
+        self.bus.sync_write("Goal_Position", current, num_retry=2)
+
     def send(self, target):
         if not self.started:
             raise RuntimeError("follower has not been armed")
@@ -187,7 +195,7 @@ class Follower(PositionBus):
 
 
 @contextmanager
-def _open_arm(name, role, spec, *, managed=False):
+def _open_arm(name, role, spec, *, managed=False, resume=False):
     # Keep the LeRobot object alive while using its calibrated motor bus.
     device = _device(role, spec)
     bus = device.bus
@@ -196,7 +204,9 @@ def _open_arm(name, role, spec, *, managed=False):
         bus.connect()
         if not bus.is_calibrated:
             raise RuntimeError(f"{name} {role}: calibration disagrees with the device")
-        if any(bus.sync_read("Torque_Enable", normalize=False, num_retry=2).values()):
+        # resume: a follower already holding with torque on, taken over by Follower.resume().
+        if not (resume and role == "follower") and any(
+                bus.sync_read("Torque_Enable", normalize=False, num_retry=2).values()):
             raise RuntimeError(f"{name} {role}: expected torque off before connecting")
         if role == "follower":
             from lerobot.motors.feetech.feetech import OperatingMode
@@ -217,8 +227,8 @@ def open_leader(name, spec):
     return _open_arm(name, "leader", spec)
 
 
-def open_follower(name, spec, *, managed=False):
-    return _open_arm(name, "follower", spec, managed=managed)
+def open_follower(name, spec, *, managed=False, resume=False):
+    return _open_arm(name, "follower", spec, managed=managed, resume=resume)
 
 
 def encode_png(image):

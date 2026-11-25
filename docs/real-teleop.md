@@ -58,6 +58,28 @@ python3 -S tools/real_collection.py --fake --demo --session outputs/261123-fake-
 
 接管行帶 `event.type=takeover`、`switch_ns`、清空數與對齊姿態。人工修正可依 `task_is_policy=0` 切出。資料來源是 episode manifest 的欄位，和每個動作的命令來源各自追蹤。RealSense manifest 保留深度單位、內參和 depth-to-color 變換方向。`read` 逐路核對相機 index、檔案、PNG 完整性、序號與時間。發現缺幀會指出相機和幀號。實機臂校正版本以原始 JSON 的雜湊比對，episode 只保留識別資訊。
 
+## 停放位與通道位路線
+
+`tools/real_route.py` 管理單臂的兩個固定姿態。停放位是 follower 靠在固定支撐上、可以解扭力的姿勢；通道位是夾取任務的出入口。路線只錄一次：follower 直接跟隨 leader 的關節角（原版 LeRobot 的絕對映射），從停放位走到通道位後按 `c`。去程照錄下的命令播放，回程反向播放。
+
+```bash
+conda activate lerobot
+python tools/real_route.py record --config outputs/single.local.yaml --route outputs/routes/right-park-channel.json \
+  --layout lab-right-20261125 --support "前臂靠在固定墊塊上" --allow-motion
+python tools/real_route.py run --config outputs/single.local.yaml --route outputs/routes/right-park-channel.json --allow-motion
+python tools/real_route.py recover --config outputs/single.local.yaml --route outputs/routes/right-park-channel.json --allow-motion
+python tools/real_route.py show --route outputs/routes/right-park-channel.json
+```
+
+- `record`：在扭力關閉時讀取停放位，然後顯示 leader 與 follower 各軸的差距。各軸差距都在門檻內（身體 12°、夾爪 40%）才能按 Enter 開扭力。開扭力後的 1.5 秒內，限速由 20°/s 漸增到 90°/s。到通道位按 `c` 存檔，接著按 `r` 反向播放回停放位。目視確認支撐後按 `y` 解扭力，路線檔會記下反向驗證通過。
+- `run`：從停放位去程到通道位並保持。可選 `t` 用 leader 操作一段，按 `c` 沿實走路徑退回通道位；或選 `r` 反向回停放位並解扭力。`--rate` 可調整相對錄製時間的播放速度。
+- `recover`：上一輪中斷、follower 扭力仍開時使用。程式接手後找出路線上最近的點（8° 以內），沿路線退回停放位再解扭力。
+- 超出校正範圍只會截斷命令，畫面顯示「到範圍邊界」，不會停機。播放時，follower 落後超過 4° 會暫停播放時鐘，等跟上再走；同一處卡住約 1 秒會判定受阻。Esc 或 Ctrl-C 也一樣：原地保持扭力，選單提供 `g` 繼續、`b` 原路退回、`x` 緊急原地解扭力（須輸入 OFF）。
+- 正常解扭力只發生在停放位 4° 以內、已停穩、操作者按 `y` 之後。
+- leader 與 follower 的校正零點不一致、絕對映射無法對齊時，可改用 `--relative`。
+- 每次執行都在 `<route>-runs/<時間>-<指令>/` 保存 `control.jsonl`（每幀命令、回讀與 leader）、`events.jsonl` 和 `status.json`。路線檔保存停放位取樣、通道位命令與回讀、簡化後的路徑點（0.35° 容差）、各段錄製時間及兩向驗證紀錄。校正雜湊改變時拒絕使用舊路線。
+- 假裝置演練：`python tools/real_route.py record --fake --route /tmp/r.json --layout fake --support test`，之後用 `run --fake --no-leader` 跑同一檔。
+
 ## 指定 follower 的實機回放
 
 `tools/replay_real_follower.py` 是獨立的硬體入口。它先檢查實機 episode、臂名、校正、起姿版本和首幀實測。回放和採集共用對齊、停放及扭力流程。舊版 episode 可用資料讀回檢查，實機重播需要有相符起姿的版本。
@@ -74,5 +96,7 @@ LeHome 舊的 `scripts/replay_real_robot.py` 讀取其 12 軸 LeRobot dataset。
 ## 盤位參考與腕部標定
 
 `tools/calibrate_real_cameras.py` 沿用正式相機設定。先執行 `measure` 輸入標定紙實測尺寸，再用 `global` 存 D455 的三標記 RGB-D 參考，或用 `wrist` 收 ChArUco 原圖。現場預覽使用含 OpenCV GUI 和 ArUco 的 Python 環境。預覽結束會釋放相機。也可用 `global --episode <目錄>` 從已錄下的標準起姿影格讀取盤位參考。
+
+托盤擺位用 `tools/tray_overlay.py` 對齊。以 `outputs/261125-camera/global/rgb.png` 為基準，`--serial 038122250316` 開 D455 即時疊圖，用滑桿調基準比例，把盤緣移到和基準重合；`s` 存疊圖與當前原圖，`q` 離開。離線比較用 `--image <新圖> --output <疊圖.png>`。兩張圖須是相同原生解析度、未裁切未鏡像的全局 RGB。
 
 `fit-wrist` 在同一批原圖比較 Brown 和 fisheye，保存留出影格的全畫面與邊緣誤差。腕部手眼外參另需固定板與同期關節。D455 若有實測的 `base_from_marker40_m`，可用 `check-global --links <JSON> --holdout <點位 JSON>` 分報獨立近／遠點的 XY 和 Z 誤差。轉換以 `destination_from_source` 命名，平移以 m 表示。
