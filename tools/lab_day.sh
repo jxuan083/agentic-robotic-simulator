@@ -185,7 +185,7 @@ PYEOF
     fi ;;
   pack)
     items=()
-    for f in "$SESSION" "outputs/$DATE-park" "$ROUTES" "$SETUP" "$CARDS" "$(dirname "$TRAYS")" "outputs/$DATE-camera"; do [[ -e "$f" ]] && items+=("$f"); done
+    for f in "$SESSION" "outputs/$DATE-park" "outputs/$DATE-park-rejected" "$ROUTES" "$SETUP" "$CARDS" "$(dirname "$TRAYS")" "outputs/$DATE-camera"; do [[ -e "$f" ]] && items+=("$f"); done
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)

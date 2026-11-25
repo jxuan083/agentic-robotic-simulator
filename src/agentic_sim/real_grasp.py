@@ -285,7 +285,7 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
                 f"，離旁邊方塊只有 {landed['neighbour_mm']:.0f} mm（太擠，下一顆可能撞到）" if
                 landed["neighbour_mm"] is not None and landed["neighbour_mm"] < CROWDED_MM else "") + "。"
             if landed else "D455 沒在目的盤看到新放的方塊。")
-    outcome = driver.menu(seen + "結果：s 成功／f 失敗", {"s": "成功", "f": "失敗"})
+    outcome = driver.menu(seen + "結果：s 成功（收進資料）／f 失敗（移出、重錄這一格）", {"s": "成功", "f": "失敗"})
     return {"color": color, "destination": destination, "slot": slot, "target_choice": target, "scene": scene,
             "landed": landed, "placed": landed is not None and outcome == "s", "success": outcome == "s" and kept,
             "demo_frames": demo_frames, "cancelled": not kept}

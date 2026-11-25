@@ -189,6 +189,19 @@ def episode_capture(root, config, arm, refs, hz, layout):
             writer.close(error=error)
 
 
+def set_aside(root, session, why, line=None):
+    """Move a cancelled or failed episode out of the session into <session>-rejected/ (raw files kept, as the lab
+    rules ask, but never seen by training or the session counters) and log it there. Returns the new path."""
+    rejected = session.parent / f"{session.name}-rejected"
+    rejected.mkdir(parents=True, exist_ok=True)
+    target = rejected / f"{root.name}-{time.strftime('%H%M%S')}"
+    root.rename(target)
+    with (rejected / "index.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps((line or {}) | {"episode": root.name, "moved_to": target.name, "why": why},
+                            ensure_ascii=False) + "\n")
+    return target
+
+
 def round_state(index):
     """(round number, successful placements in it, blocks left in the source tray) from the session index."""
     state = (0, 0, 0)
@@ -283,6 +296,8 @@ def grasp_session(driver, hand, data, args, refs, hz):
                 result = pick_place_round(driver, hand, data, writer, check, color=color, destination=destination,
                                           slot=slot, quads=quads, choose=random_pick(rng, source) if rounds else None)
         if result.get("demo_frames") is None:
+            if root.exists():
+                set_aside(root, args.session, "cancelled before the demonstration")
             term.say("這筆取消，未錄到示範。")
             if rounds and result.get("scene", {}).get("candidates") == 0:
                 placed = size
@@ -304,13 +319,20 @@ def grasp_session(driver, hand, data, args, refs, hz):
                                   target_pose=choice and (choice["x_mm"], choice["y_mm"]),
                                   slot=None if args.auto_place else slot, landed=result.get("landed"),
                                   extra=round_info and {"round": round_info, "scene": result["scene"]})
-        used[destination] = used.get(destination, 0) + 1
         target = review["target"]["d455"]
         line = {"episode": root.name, "color": color, "result": result, "ok": report["ok"],
                 "target": target and {k: target[k] for k in ("tray", "x_mm", "y_mm", "yaw_deg")},
                 "training_ranges": review.get("training_ranges"), "reasons": report["review_reasons"]}
         if round_info:
             line["round"] = round_info
+        if not result.get("success"):
+            # Failed or discarded: set aside and record the same step again, so the session holds successes only.
+            moved = set_aside(root, args.session, "failed" if not result.get("cancelled") else "discarded", line)
+            term.say(f"這筆不收（原檔移到 {moved.parent.name}/{moved.name}）。"
+                     + ("掉落或夾走的方塊放回粉盤（可以換新位置）、這一格若有方塊請拿走，按 a 重錄這一格。" if rounds
+                        else "重擺後再錄。"))
+            continue
+        used[destination] = used.get(destination, 0) + 1
         with index.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
         where = f"{target['tray']} x {target['x_mm']:.0f} y {target['y_mm']:.0f} mm" if target else "D455 未找到目標"
@@ -319,8 +341,6 @@ def grasp_session(driver, hand, data, args, refs, hz):
                  + ("" if not report["review_reasons"] else f"；待確認：{'；'.join(report['review_reasons'])}"))
         if round_info:
             placed = round_info["placed_after"]
-            if not result.get("success"):
-                term.say("這筆失敗：掉落的方塊放回粉盤任一新位置、格位上若有方塊請拿走，同一格重錄。")
             if round_info["left_after"] <= 0:
                 placed = size
 

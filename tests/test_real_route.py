@@ -583,3 +583,21 @@ def test_placed_block_is_the_new_one_and_reports_crowding():
     assert (landed["x_mm"], landed["y_mm"]) == (75, 130)          # not the blue already there
     assert landed["slot_offset_mm"] == 30.4 and landed["neighbour_mm"] == 35.4
     assert placed_block(before, after, "yellow", "beige", {"index": 3, "xy": [70, 160]}) is None
+
+
+def test_set_aside_moves_the_episode_out_of_the_session(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("real_route_tool2", Path(__file__).resolve().parents[1] / "tools/real_route.py")
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    session = tmp_path / "261126-park"
+    ep = session / "episodes" / "P0003"
+    ep.mkdir(parents=True)
+    (ep / "manifest.json").write_text("{}")
+    moved = tool.set_aside(ep, session, "failed", {"round": {"n": 1}})
+    assert not ep.exists() and (moved / "manifest.json").exists()
+    assert moved.parent == tmp_path / "261126-park-rejected" and moved.name.startswith("P0003-")
+    row = json.loads((moved.parent / "index.jsonl").read_text())
+    assert row["why"] == "failed" and row["moved_to"] == moved.name and row["round"] == {"n": 1}
+    assert not list((session / "episodes").glob("P*"))         # the next episode reuses the number
