@@ -26,7 +26,7 @@ from agentic_sim.mujoco_backend.model import ROBOT_CONFIG  # noqa: E402
 from agentic_sim.mujoco_backend.session import MjSession, SessionConfig, session_config_with  # noqa: E402
 from agentic_sim.server.core import SimServer  # noqa: E402
 from agentic_sim.task.server_cmds import TaskCommands  # noqa: E402
-from agentic_sim.teleop.keys import KeyState  # noqa: E402
+from agentic_sim.teleop.keys import MJ_ACTION_KEYS, KeyState  # noqa: E402
 
 BACKEND = "mujoco"
 
@@ -77,6 +77,10 @@ class MujocoServer(TaskCommands):
                             block_colors=opts.block_colors, wrist_lens=opts.wrist_lens,
                             live_perception=opts.live_perception, perception_camera=opts.perception_camera,
                             perception_hz=opts.perception_hz, perception_json=opts.perception_json)
+        if opts.task:   # the scenario's event log and result next to the scenario file
+            base = os.path.splitext(opts.task)[0]
+            cfg.task, cfg.task_log, cfg.result = opts.task, base + ".jsonl", base + ".json"
+            self._task_written = False
         if script:
             cfg.script = f"configs/acceptance/{script}.yaml"
             cfg.log = os.path.join(out_dir, f"{script}.csv")
@@ -213,6 +217,11 @@ class MujocoServer(TaskCommands):
             return False
 
     def after_frame(self):
+        s = self.session
+        if (s is not None and s.task is not None and s.task.done and s.cfg.result
+                and not getattr(self, "_task_written", True)):
+            self._task_written = True
+            s.write_task_result()
         if not self._job_running() or not self.session.script_done:
             return
         s = self.session
@@ -234,7 +243,7 @@ class MujocoServer(TaskCommands):
 
 def main():
     host, port = (lambda s: (s["host"], int(s["port"])))(load("configs/sim_server.yaml")["servers"][BACKEND])
-    keys = KeyState(actions={"P": "pause", "R": "reset"})
+    keys = KeyState(actions=MJ_ACTION_KEYS)
     viewer = None
     if not args.headless:
         from agentic_sim.mujoco_backend.viewer import Viewer

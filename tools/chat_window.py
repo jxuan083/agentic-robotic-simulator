@@ -100,6 +100,11 @@ class ChatWindow:
         r.protocol("WM_DELETE_WINDOW", self.close)
 
     def write(self, text: str, tag: str = "agent"):
+        if getattr(self.a, "transcript", None):     # every shown line, for the evidence of a run
+            import json
+            import time as _time
+            with open(self.a.transcript, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"wall": round(_time.time(), 3), "tag": tag, "text": text}, ensure_ascii=False) + "\n")
         self.log.configure(state="normal")
         self.log.insert("end", text + "\n", tag)
         self.log.configure(state="disabled")
@@ -277,6 +282,7 @@ def main(argv=None) -> int:
     ap.add_argument("--model", default=None, help="served model name (default: configs/chat.yaml llm.model)")
     ap.add_argument("--type", action="append", default=None, metavar="LINE",
                     help="acceptance: type this line into the window (repeatable, in order; '?text' waits for a question)")
+    ap.add_argument("--transcript", default=None, help="append every shown line (JSONL: wall time, tag, text)")
     ap.add_argument("--type-gap", type=float, default=3.0, help="seconds between typed lines after each answer")
     a = ap.parse_args(argv)
     cfg = load(a.config)

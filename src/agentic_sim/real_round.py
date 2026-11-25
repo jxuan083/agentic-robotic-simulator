@@ -113,6 +113,13 @@ def capture_round(root, backend, plan, operator, *, policy=None, card=None):
                                task_card=card)
         with managed_motion(backend, plan, root / "motion.jsonl", operator, leader=True,
                             episode_clock=writer.clock) as (leader, motion, start):
+            if not policy and hasattr(leader, "drive_on"):
+                # Bring the leader to the follower's start pose and hand it over before recording starts.
+                from agentic_sim.real_leader import handover
+
+                handover(leader, start, route=list(plan.route), clock=backend.clock, wait=backend.wait,
+                         hz=backend.hz, say=getattr(operator, "say", lambda _text: None), halted=operator.halted,
+                         event=lambda kind, **fields: motion.event(kind, **fields))
             router = ControlRouter({plan.arm: (leader, motion)}, start="policy" if policy else "manual")
             if policy:
                 router.enqueue_policy([{plan.arm: start}], generation=router.generation)
@@ -137,6 +144,13 @@ def capture_round(root, backend, plan, operator, *, policy=None, card=None):
             finally:
                 discarded = router.stop()
             motion.event("task_ended", frames=writer.count, discarded_policy_actions=discarded)
+            destination = (card or {}).get("destination")
+            if (destination in (plan.drops or {}) and writer.count and not getattr(operator, "cancelled", False)
+                    and operator.carry(destination)):
+                # The block is lifted: the taught drop route places it, outside the training segment.
+                operator.status("place")
+                motion.place(destination)
+                writer.manifest["placement"] = {"tray": destination, "mode": "taught_drop_route"}
             operator.status("return")
             result = {}
 
@@ -205,6 +219,11 @@ def replay_round(episode, backend, plan, root, operator):
                 if not near(after, sent, TRACKING):
                     raise RuntimeError(f"replay tracking error at frame {i}")
             complete = result["frames_sent"] == len(steps)
+            destination = (episode.manifest.get("task_card") or {}).get("destination")
+            if complete and destination in (plan.drops or {}) and operator.carry(destination):
+                operator.status("place")
+                motion.place(destination)
+                result["placement"] = {"tray": destination, "mode": "taught_drop_route"}
             operator.status("return")
             outcome = {}
 

@@ -81,9 +81,9 @@ tools/run_acceptance_mujoco.sh keyboard_pick_place            # 不經伺服器�
 
 ## 操作
 
-視窗分成左邊的 3D 畫面與右邊的操作面板，功能和 Isaac 版一致（Isaac 的專注模式除外：MuJoCo 視窗沒有編輯器面板要藏）。
+視窗分成左邊的 3D 畫面與右邊的操作面板，功能和 Isaac 版一致。按 M（或啟動時加 `--focus`）進入全螢幕的操作工作區：相機移到下方並排，旁邊是狀態欄。見 [operator-workspace.md](operator-workspace.md)。
 
-**鍵盤**（和 Isaac 相同）：W/S、A/D、E/Q 移動，Z/X 轉 yaw，O/C 開合夾爪，P 暫停，R reset。按住的鍵只在新的按下時開始；放開、視窗失焦、暫停、reset 都會丟掉輸入，不會補做。
+**鍵盤**（和 Isaac 相同）：W/S、A/D、E/Q 移動，Z/X 轉 yaw，O/C 開合夾爪，P 暫停，R reset，M 操作工作區，1／2 切換相機格的原圖或標註。按住的鍵只在新的按下時開始；放開、視窗失焦、暫停、reset 都會丟掉輸入，不會補做。
 
 **3D 畫面的滑鼠**（和 Isaac 的目標環規則相同）：
 - 目標畫成面向相機、固定螢幕大小的圓環，往下有一條線指到桌面；實際 EE 是藍色小球。圓環顏色：綠＝OK、黃＝工作區邊界、紅＝被拒絕。
@@ -100,6 +100,10 @@ tools/run_acceptance_mujoco.sh keyboard_pick_place            # 不經伺服器�
 - Top view（預設展開）：正交相機從正上方看真實場景，+X 朝上、+Y 朝左（和 Isaac 的俯視圖相同），疊上托盤外框、目標環與 EE。左鍵拖曳相對移動目標、滾輪調高度、右鍵切換夾爪開合。
 
 **為什麼自己開 GLFW 視窗**：MuJoCo 內建 viewer 的按鍵回呼只回報按下、不回報放開，做不出「按住才移動」與失焦處理，而且它自己的快捷鍵佔用了 W/S/A/D/E/Q/C。面板與俯視圖都用 MuJoCo 自己的 2D 繪圖（`mjr_label`、`mjr_text`、`mjr_rectangle`）與第二次 `mjr_render` 畫出，沒有新增套件。
+
+### 畫面錄影
+
+面板 CONTROLS 最下面的 **Record screen**／**Stop screen video**，會把這個模擬器視窗錄成 MP4，存在 `outputs/screen_video/`。下方會顯示錄影狀態和存檔路徑。細節見 [operator-workspace.md](operator-workspace.md#畫面錄影右欄)。
 
 ## 模型與對齊
 

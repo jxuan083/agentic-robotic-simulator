@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Read a recorded demonstration back from disk (issue #13): completeness, the three grasp moments, figures.
 
-  uv run tools/read_episode.py outputs/demos/<episode>                       # report (stdout + readback.json)
+  uv run tools/read_episode.py outputs/demos/<episode>                       # report (text + readback.json)
+  uv run tools/read_episode.py outputs/demos/<episode> --json                # the summary JSON on stdout
   uv run --with matplotlib tools/read_episode.py outputs/demos/<episode> --figures
 
 Report: frames, duration, missing fields / frames / images, and the moments "gripper closes", "block leaves the
@@ -112,6 +113,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("episode")
     ap.add_argument("--figures", action="store_true")
+    ap.add_argument("--json", action="store_true", help="print the summary JSON instead of the text report")
     a = ap.parse_args(argv)
     ep = Episode(a.episode)
     m = ep.manifest
@@ -135,7 +137,12 @@ def main(argv=None) -> int:
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "readback.json"), "w") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
-    print(json.dumps(summary, indent=2, ensure_ascii=False))
+    if a.json:
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+    else:
+        from agentic_sim.capture.report import text
+        print(text(summary, a.episode))
+        print(f"報告：{os.path.join(out, 'readback.json')}")
     if a.figures:
         figures(ep, mo, out)
         print(f"figures: {out}/moments.png, {out}/timeline.png")

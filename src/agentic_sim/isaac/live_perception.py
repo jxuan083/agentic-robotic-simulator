@@ -48,9 +48,12 @@ class _Capture(ByteCapture):
 
 
 class LivePerception:
-    def __init__(self, scene, views, camera='wrist', hz=2.0, log=print, json_path=None):
+    def __init__(self, scene, views, camera='wrist', hz=2.0, log=print, json_path=None, stage='estimate',
+                 delay_s=0.0, fault=None):
+        self.stage = stage
         if camera == 'both':
-            self.children = {name: LivePerception(scene, views, name, hz, log)
+            self.children = {name: LivePerception(scene, views, name, hz, log, stage=stage, delay_s=delay_s,
+                                                  fault=fault)
                              for name in ('global', 'wrist')}
             self.json_path = None if json_path is None else Path(json_path)
             self._write_json()
@@ -65,6 +68,10 @@ class LivePerception:
         self.base = CameraGeometry.from_scene(scene, camera, [0.]*5 if camera == 'wrist' else None)
         self.estimator = LiveEstimator(float(v(scene['block']['edge'])),
                                        block_support_top(scene))
+        self.work = self.estimator.worker(stage, delay_s, fault if fault is not None and fault.camera == camera
+                                          else None)
+        self.snapshot_rgb = None          # the annotated image of `latest` (boxes drawn on the image they came from)
+        self.display = False              # someone shows the annotated image (workspace cell or this window)
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='block-perception')
         self.inbox = queue.SimpleQueue()
         self.period = 1/hz
@@ -101,6 +108,7 @@ class LivePerception:
             return
         self.generation += 1
         self.latest = None
+        self.snapshot_rgb = None
         self.pending_at = None
         self.error = None
         self.coordinates.text = 'Reset: waiting for a new image.'
@@ -124,10 +132,12 @@ class LivePerception:
                 if generation == self.generation:
                     record['completed_at_monotonic_s'] = now
                     self.latest = record
+                    self.snapshot_rgb = rgb
                     self.error = None
                     self._write_json()
-                    rgba = np.concatenate([rgb, np.full((*rgb.shape[:2], 1), 255, np.uint8)], axis=2)
-                    self.provider.set_data_array(rgba.reshape(-1), [rgb.shape[1], rgb.shape[0]])
+                    if self.window.visible:       # the preview window costs an upload; skipped while hidden
+                        rgba = np.concatenate([rgb, np.full((*rgb.shape[:2], 1), 255, np.uint8)], axis=2)
+                        self.provider.set_data_array(rgba.reshape(-1), [rgb.shape[1], rgb.shape[0]])
                     lines = ['Mount XYZ (m). Corners inferred; IDs are per frame.']
                     for d in record['detections']:
                         g = d['geometry']
@@ -156,7 +166,7 @@ class LivePerception:
                 if self.future is None:
                     cam = rendered_camera(self.base, view, projection, rgb.shape[1], rgb.shape[0])
                     self.future_generation = generation
-                    self.future = self.pool.submit(self.estimator.predict, rgb, cam, frame, captured_at)
+                    self.future = self.pool.submit(self.work, rgb, cam, frame, captured_at)
             except Exception as exc:
                 self.error = str(exc)
         if self.pending_at is not None and now-self.pending_at > 5:
@@ -178,6 +188,22 @@ class LivePerception:
         if self.error:
             text += f' | ERROR: {self.error}'
         self.status.text = text
+
+    def cameras(self) -> dict:
+        """camera key -> the LivePerception of that camera."""
+        return dict(self.children) if self.children is not None else {self.base.name: self}
+
+    def set_windows_visible(self, visible: bool):
+        """The floating preview windows (hidden in the operator workspace: the camera cells show the snapshots)."""
+        for p in self.cameras().values():
+            p.window.visible = bool(visible)
+
+    def snapshot(self, key):
+        """(annotated RGB, latest record) of a camera, or None before its first result."""
+        p = self.cameras().get(key)
+        if p is None or p.latest is None or p.snapshot_rgb is None:
+            return None
+        return p.snapshot_rgb, p.latest
 
     def state(self):
         if self.children is not None:

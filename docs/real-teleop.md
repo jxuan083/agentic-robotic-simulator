@@ -71,6 +71,7 @@ python tools/real_route.py recover --config outputs/single.local.yaml --route ou
 python tools/real_route.py show --route outputs/routes/right-park-channel.json
 ```
 
+- **leader 交接（預設）**：每次要用 leader 接手（`record`、`record-drop`、`try` 的 `t`、暫停後繼續）時，程式先把 leader 的目標寫成它目前的姿勢再開 leader 扭力，以 30°/s 把 leader 帶到 follower 的姿勢（手先離開 leader）。到位後倒數 3 秒，操作者握住 leader；倒數結束時在 follower 保持住的情況下解 leader 扭力，再保持 0.8 秒，這段時間 leader 的下垂不算操作。之後 follower 跟隨 leader 從交接姿勢起算的位移。解扭力後若 leader 偏離超過 12°（沒扶穩），改用手動對齊。leader 移動中或倒數中按 Esc，leader 原地保持，要按 Enter 確認已扶住才解扭力。`--manual-align`（`MANUAL_ALIGN=1`）改回手動對齊。參考 LeHome `scripts/record_real_dagger.py` 的交接順序。
 - `record`：在扭力關閉時讀取停放位，然後顯示 leader 與 follower 各軸的差距。各軸差距都在門檻內（身體 12°、夾爪 40%）才能按 Enter 開扭力。開扭力後的 1.5 秒內，限速由 20°/s 漸增到 90°/s。到通道位按 `c` 存檔，接著按 `r` 反向播放回停放位。目視確認支撐後按 `y` 解扭力，路線檔會記下反向驗證通過。
 - `run`：從停放位去程到通道位並保持。可選 `t` 用 leader 操作一段，按 `c` 沿實走路徑退回通道位；或選 `r` 反向回停放位並解扭力。`--rate` 可調整相對錄製時間的播放速度。
 - `recover`：上一輪中斷、follower 扭力仍開時使用。程式接手後找出路線上最近的點（8° 以內），沿路線退回停放位再解扭力。
@@ -78,7 +79,27 @@ python tools/real_route.py show --route outputs/routes/right-park-channel.json
 - 正常解扭力只發生在停放位 4° 以內、已停穩、操作者按 `y` 之後。
 - leader 與 follower 的校正零點不一致、絕對映射無法對齊時，可改用 `--relative`。
 - 每次執行都在 `<route>-runs/<時間>-<指令>/` 保存 `control.jsonl`（每幀命令、回讀與 leader）、`events.jsonl` 和 `status.json`。路線檔保存停放位取樣、通道位命令與回讀、簡化後的路徑點（0.35° 容差）、各段錄製時間及兩向驗證紀錄。校正雜湊改變時拒絕使用舊路線。
+- `drop-test --drop <drop.json>`（`tools/lab_day.sh drop-test-beige|drop-test-pink`）：不用 leader，停放位 → 通道位 → 放開位（`g` 空爪，或 `b` 把方塊放進爪間後閉爪夾住）→ 張到放開開度 → 倒放回通道位 → 停放位解扭力，順序和採集的自動放置相同。搬運時夾爪維持比夾住時的讀回再緊 3%。
+- `record-drop --tray pink|beige --out <drop.json>`：從停放位回放到通道位，再用 leader 從通道位帶到該盤上方的放開位置（方塊離盤面數公分）按 `c`。`--release` 是放開時的夾爪開度（預設 60%）。存檔後倒放回通道位、回停放位並解扭力。
+- `setup --route <park-channel.json> --drop <pink.json> --drop <beige.json> --cards <cards.json> --version <起姿版本> --workspace <工作區> --out <setup.json>`：把路線合成採集用的 setup。停放位、途經點、通道位（標準起姿）和放開路線都取自實走路線，關節範圍取自校正。輸出前用採集端的同一套檢查驗證。`configs/real_collection.cards.template.json` 是由托盤尺寸產生的候選擺位，現場刪掉夾不到的點後當 `--cards`。座標原點是托盤內緣、離基座最近的右側角，+x 朝前、+y 朝左。
 - 假裝置演練：`python tools/real_route.py record --fake --route /tmp/r.json --layout fake --support test`，之後用 `run --fake --no-leader` 跑同一檔。
+
+### 採集日入口
+
+`tools/lab_day.sh <步驟>` 依序包好當天的指令：`env`、`check`、`overlay`、`route`（需 `SUPPORT="…"`）、`route-test`、`drop-beige`、`drop-pink`、`try`、`cards`、`cards-drop`、`setup`、`collect`、`recover`、`status`、`pack`。日期預設今天（`LAB_DATE` 可改），檔名都帶日期：`outputs/routes/right-park-channel-<日期>.json`、`outputs/<日期>-cards.json`、`outputs/<日期>-right.setup.json`、session `outputs/<日期>-right/`。`FAKE=1` 以假手臂演練路線步驟，`REPLACE=1` 重教既有路線。
+
+- 任務卡：每張卡一個目標位置（120 個），另外依卡片輪替三種盤面：只有目標、一顆鄰近方塊（中心距 55–75 mm，一半同色）、一到三顆遠處方塊（≥ 90 mm）。採集視窗列出其他方塊的大約位置，開場全局圖記錄實際擺位。
+- `tools/real_cards.py`：列出、刪除任務卡擺位（依編號、`--max-x 盤=mm` 或 `--yaw`），每次刪完檢查是否仍能產生 120 張卡與 20 個保留擺位，舊檔另存。
+- `tools/pack_handoff.py`：第一次執行產生交接索引 `handoff/<日期>_2080Ti_實機採集/README.md`，補完現場欄位後再執行一次：打包成 `AllenHZL/<日期>_2080Ti_實機採集交接.zip`（含 SHA256SUMS），做 CRC 與必要項目檢查，通過後把交接目錄移到 `handoff_origin/`。
+
+### 採集流程的動作規則（11/25 起）
+
+`real_collection.py` 的對位、復位與重播共用 `real_motion.Motion`，和路線工具採用相同的寬鬆規則：
+- 路線插值在 follower 落後超過 4° 時暫停等待，同一處卡住約 1 秒才判定受阻，並先原地保持再報錯。
+- 遙操作命令只截斷到核准範圍，每幀變化量受限；不會因單筆超出 5° 就停止送令。
+- 停穩判定容許 2.5° 的負載下垂；起始走廊為 3°；讀回可超出核准範圍 3°（例如靠在支撐上的停放位）。
+
+setup 有 `drops` 時，操作者夾起抬穩後按「結束」，確認對話框選「是」：程式直接移回通道位、回放到目的盤的放開位、張爪，再倒放回通道位，之後只走固定路線回停放位。放置不在 `control.jsonl` 裡，manifest 記 `placement`。實機重播在重放完夾取段後，以同樣方式放置。
 
 ## 指定 follower 的實機回放
 

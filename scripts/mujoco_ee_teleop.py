@@ -22,13 +22,19 @@ os.chdir(ROOT)
 from agentic_sim.config import load  # noqa: E402
 from agentic_sim.mujoco_backend.model import ROBOT_CONFIG  # noqa: E402
 from agentic_sim.mujoco_backend.session import MjSession, SessionConfig, session_config_with  # noqa: E402
-from agentic_sim.teleop.keys import KeyState  # noqa: E402
+from agentic_sim.teleop.keys import MJ_ACTION_KEYS, KeyState  # noqa: E402
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 from agentic_sim.random_blocks import add_arguments
 add_arguments(parser)
 from agentic_sim.perception_cli import add_arguments as add_perception_arguments
 add_perception_arguments(parser)
+parser.add_argument("--metrics_log", default=None, help="one JSON line per host second: UI FPS, RTF, perception "
+                    "result age and latency (benchmarks)")
+parser.add_argument("--screen_video_dir", default=None, help="control directory of the right-column screen video "
+                    "(this script runs an agent in its own process when none is running; default: outputs/screen_video/control/<new id>)")
+parser.add_argument("--metrics_run_id", default=None, help="id written into every --metrics_log line (benchmarks bind "
+                    "their report to this run)")
 parser.add_argument("--scene", default="configs/scenes/lab_current_minimal.yaml")
 parser.add_argument("--teleop", default="configs/teleop.yaml")
 parser.add_argument("--script", default=None, help="YAML input script for automated runs")
@@ -52,8 +58,23 @@ parser.add_argument("--wrist_lens", choices=["real", "pinhole"], default=None,
 parser.add_argument("--headless", action="store_true", help="no window (keyboard-only scripts)")
 parser.add_argument("--hidden", action="store_true",
                     help="development checks only: invisible window, focus treated as present (not an acceptance run)")
-parser.add_argument("--focus", action="store_true", help="accepted for menu compatibility (no editor panels here)")
+parser.add_argument("--focus", action="store_true", help="start in the operator workspace (fullscreen, cameras below; "
+                    "M toggles it)")
 args = parser.parse_args()
+try:
+    from agentic_sim.perception_cli import parse_fault
+    parse_fault(args.perception_fault)
+except ValueError as e:
+    parser.error(str(e))
+
+
+def screen_video_dir(_d=[]):
+    """Control directory of the right-column screen video, the same for every session of this run."""
+    if not _d:
+        import uuid
+        from agentic_sim.screen_video import control_dir
+        _d.append(args.screen_video_dir or control_dir(uuid.uuid4().hex[:12]))
+    return _d[0]
 
 
 def log(msg):
@@ -61,7 +82,7 @@ def log(msg):
 
 
 def main():
-    keys = KeyState(actions={"P": "pause", "R": "reset"})
+    keys = KeyState(actions=MJ_ACTION_KEYS)
     viewer = None
     if not args.headless:
         from agentic_sim.mujoco_backend.viewer import Viewer
@@ -70,6 +91,11 @@ def main():
     if args.script and viewer is None:
         log("headless: scripted keys only")
     focused = (lambda: True) if args.hidden else (viewer.focused if viewer else None)
+    agent = None
+    if viewer is not None and not args.hidden:   # on the host already: record this window without tools/sim.py
+        from agentic_sim.screen_video import AgentThread, agent_running, platform_support
+        if platform_support()[0] and not agent_running(screen_video_dir()):   # Linux / X11 only
+            agent = AgentThread(screen_video_dir(), log=log)
     session = MjSession(SessionConfig(
         scene=args.scene, teleop=args.teleop,
         random_blocks=args.random_blocks, random_seed=args.random_seed,
@@ -79,10 +105,15 @@ def main():
         block_colors=args.block_colors.split(",") if args.block_colors else None,
         live_perception=args.live_perception, perception_camera=args.perception_camera,
         perception_hz=args.perception_hz,
-        perception_json=args.perception_json), log, keys=keys, focused=focused,
-        viewer=viewer)
+        perception_json=args.perception_json, perception_stage=args.perception_stage,
+        perception_delay=args.perception_delay, perception_fault=args.perception_fault, annotations=args.annotations,
+        metrics_log=args.metrics_log, metrics_run_id=args.metrics_run_id,
+        screen_video_dir=screen_video_dir()), log,
+        keys=keys, focused=focused, viewer=viewer)
     if viewer:
         viewer.attach(session, reset_camera=True)
+        if args.focus:
+            viewer.set_workspace(True)
     t_start = time.monotonic()
     while True:
         now = time.monotonic()
@@ -107,7 +138,10 @@ def main():
             time.sleep(spare)
     session.finish()
     if viewer:
-        viewer.close()
+        viewer.close()                       # the window is gone: a running screen video ends and is joined
+    if agent is not None:
+        for path in agent.close():
+            log(f"screen video saved: {path}")
 
 
 main()

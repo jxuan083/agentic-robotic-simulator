@@ -2,7 +2,7 @@
 
 ## 自主推論
 
-推論可獨立執行，不需要 agent：載入 checkpoint 與 policy manifest → 依 manifest 前處理觀察 → 取得動作段 → 經命令契約送往 backend → 回報技能結果與 rollout 紀錄。
+以下是單臂積木 ACT 的預計推論流程，可獨立於 agent：載入 checkpoint 與 policy manifest → 依 manifest 前處理觀察 → 取得動作段 → 經命令契約送往 backend → 回報技能結果與 rollout 紀錄。
 
 - 政策可在本機執行，或由推論服務提供、執行端透過網路取得動作段（既有實機程式採 WebSocket 推論服務與執行端分離）。
 - 動作段佇列在接管、任務變更、斷線時清空。
@@ -47,7 +47,7 @@ flowchart LR
 
 ### 模擬端 DAgger
 
-模擬端同樣支援接管，輸入可為 keyboard／mouse 或 leader。模擬修正資料與實機 DAgger 資料使用不同命名空間，納入訓練前需另行宣告。
+模擬端規劃支援政策執行中的接管，輸入可為 keyboard／mouse 或 leader。模擬修正資料與實機 DAgger 資料使用不同命名空間，納入訓練前需另行宣告。
 
 ## 評估
 

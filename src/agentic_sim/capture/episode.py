@@ -232,7 +232,8 @@ def check(ep: Episode) -> dict:
             rep["errors"].append({"camera": cam, "frame": k, "reason": "camera index entry without a control row"})
         for k in duplicate:
             rep["errors"].append({"camera": cam, "frame": k, "reason": "camera index lists this frame twice"})
-        rep["images"][cam] = {"listed": len(listed), **{k: v[:20] for k, v in bad.items()},
+        rep["images"][cam] = {"listed": len(listed), "counts": {k: len(v) for k, v in bad.items()},
+                              **{k: v[:20] for k, v in bad.items()},
                               "extra_in_frames_jsonl": extra[:20], "duplicate_in_frames_jsonl": duplicate[:20]}
     n_err = len(rep["errors"])
     rep["errors"] = rep["errors"][:50]

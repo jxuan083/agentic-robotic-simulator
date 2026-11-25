@@ -1,0 +1,17 @@
+scene: configs/scenes/lab_20261120.yaml
+teleop: configs/teleop.yaml
+layout: configs/random_blocks_finals.yaml
+train_seeds: {start: 47000, count: 54}
+eval_seeds: {start: 73000, count: 42}
+target_cycle: [red, blue, yellow]
+# Offset an actual RGB estimate. Independently randomized in xy and mod-90 yaw.
+coarse_xy_error_mm: 14.0
+coarse_yaw_error_deg: 20.0
+association_gate_m: 0.036
+hover_z_m: 0.080
+grasp_z_m: 0.029
+lift_z_m: 0.105
+finger_offset_m: 0.005
+stable_lift_height_m: 0.035
+stable_lift_hold_s: 0.40
+sim_horizon_s: 8.0

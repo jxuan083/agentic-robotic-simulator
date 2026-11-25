@@ -115,8 +115,9 @@ class TaskScenario:
     def step(self, obs):
         if not self.started:
             self.started = True
-            self.ex.order(self.spec["order"], "total")
-            self.log(f"scenario {self.name}: order {self.spec['order']}")
+            if self.spec.get("order"):     # no order: it comes from the chat / server
+                self.ex.order(self.spec["order"], "total")
+                self.log(f"scenario {self.name}: order {self.spec['order']}")
         self._fire_due(obs.t)
         for i, p in enumerate(obs.blocks):
             d = float(np.linalg.norm(p - self.init[i])) * 1000.0

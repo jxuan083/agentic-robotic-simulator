@@ -1,5 +1,6 @@
 """Park <-> channel route: teach with the leader, reverse replay, pause/obstruction, recovery."""
 
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -8,12 +9,13 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agentic_sim.real_motion import OFF, ON  # noqa: E402
+from agentic_sim.real_motion import MotionPlan  # noqa: E402
 from agentic_sim.real_route import (  # noqa: E402
-    BODY, RELEASE_LAG, Driver, Released, Track, body_gap, compress, load_route, recover, record,
-    roundtrip, sample_park,
+    BODY, RELEASE_LAG, Driver, Released, Track, body_gap, build_setup, compress, load_route, record_drop,
+    recover, record, roundtrip, sample_park,
 )
 from agentic_sim.real_route_fake import (  # noqa: E402
-    CHANNEL, PARK, FakeClock, FakeFollower, FakeLeader, ScriptedTerminal, operator_path,
+    CHANNEL, PARK, VIA, FakeClock, FakeFollower, FakeLeader, ScriptedTerminal, operator_path,
 )
 
 META = {"arm": "right", "layout_id": "fake-layout", "park_support": "fake support",
@@ -153,6 +155,49 @@ class RouteCase(unittest.TestCase):
         self.assertLess(body_gap(load_route(self.route)[0]["channel"]["readback"], CHANNEL), 3.0)
 
 
+class DropCase(unittest.TestCase):
+    setUp = RouteCase.setUp
+    driver = RouteCase.driver
+    teach = RouteCase.teach
+    assert_released_at_park = RouteCase.assert_released_at_park
+
+    def test_drop_route_and_collection_setup(self):
+        self.teach()
+        data, track = load_route(self.route)
+        drop_pose = dict(CHANNEL) | {"shoulder_pan": 20.0, "shoulder_lift": -40.0}
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        leader = FakeLeader(clock, [(0.0, CHANNEL), (22.0, CHANNEL), (26.0, drop_pose)])
+        term = ScriptedTerminal(clock, [(20.0, "enter"), (30.0, "c")], ("r", "y"))
+        driver = self.driver(follower, term, clock, "drop")
+        out = record_drop(driver, leader, data, track, self.tmp / "drop-pink.json", "pink", 60.0)
+        driver.close_logs()
+        self.assertIsNotNone(out)
+        self.assert_released_at_park(follower)
+        self.assertLess(body_gap(out["drop_readback"], drop_pose), 3.0)
+        self.assertLess(body_gap(out["waypoints"][0], data["channel"]["command"]), 1e-9)
+        cards = {"seed": 1, "reserve_distance_mm": 20, "zones": {}}
+        setup = build_setup(data, track, [out], version="v1", workspace="fake", cards=cards)
+        plan = MotionPlan.load(setup["motion"])
+        self.assertEqual(sorted(plan.drops), ["pink"])
+        self.assertLess(body_gap(plan.start, data["channel"]["command"]), 1e-9)
+
+        # Replay it without the leader, holding a block: close at the channel, carry, open, back home.
+        from agentic_sim.real_route import drop_test
+
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        term = ScriptedTerminal(clock, answers=("b", "r", "y"))
+        driver = self.driver(follower, term, clock, "drop-test")
+        self.assertTrue(drop_test(driver, data, track, out))
+        driver.close_logs()
+        self.assert_released_at_park(follower)
+        at_drop = [cmd for _, cmd in follower.sent if body_gap(cmd, drop_pose) < 1.0]
+        self.assertTrue(at_drop)
+        self.assertLess(min(cmd["gripper"] for cmd in at_drop), 1.0)        # carried closed
+        self.assertGreaterEqual(max(cmd["gripper"] for cmd in at_drop), 60.0)  # released at the drop pose
+
+
 class TrackCase(unittest.TestCase):
     def test_compress_drops_idle_time_and_keeps_shape(self):
         a, b = dict(PARK), dict(CHANNEL)
@@ -176,3 +221,340 @@ class TrackCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_tune_route_removes_pauses_and_fixes_gripper():
+    from agentic_sim.real_route import PLAY_SPEED, Track, body_gap, tune_route
+
+    park = {"shoulder_pan": 0.0, "shoulder_lift": -100.0, "elbow_flex": 90.0, "wrist_flex": 60.0,
+            "wrist_roll": 0.0, "gripper": 1.0}
+    points = [park | {"shoulder_lift": -100.0 + 5 * i, "elbow_flex": 90.0 - 4 * i, "gripper": 1.0 + (i % 3) * 4}
+              for i in range(13)]
+    seconds = [0.2] * 12
+    seconds[2] = 25.0  # operator paused while teaching
+    data = {"waypoints": points, "segment_seconds": seconds, "park": {"pose": park},
+            "channel": {"command": points[-1], "readback": points[-1]},
+            "verified": {"reverse_to_park": "run", "forward_to_channel": "run"}}
+    tuned = tune_route(data, grip=45.0)
+    track = Track(tuned["waypoints"], tuned["segment_seconds"])
+    assert max(track.seconds) < 2.0
+    assert all(s >= body_gap(a, b) / PLAY_SPEED - 1e-9 for a, b, s in zip(track.points, track.points[1:], track.seconds))
+    grips = [p["gripper"] for p in track.points]
+    assert grips[0] == 1.0 and grips[-1] == 45.0 and set(grips) == {1.0, 45.0}
+    opened = grips.index(45.0)
+    assert track.points[opened]["shoulder_lift"] - park["shoulder_lift"] >= 45.0
+    assert tuned["channel"]["command"]["gripper"] == 45.0
+    assert tuned["verified"] == {"reverse_to_park": None, "forward_to_channel": None}
+    assert track.points[0] == park
+    held = tune_route(data, grip=45.0, hold_roll=True)
+    assert {p["wrist_roll"] for p in held["waypoints"]} == {park["wrist_roll"]}
+
+
+class DrivenHandoverCase(RouteCase):
+    """Leader driven to the follower pose, countdown, release while the follower holds, clutch from there."""
+
+    def teach_driven(self, start, moves, keys, answers, sag=None):
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        leader = FakeDrivenLeader(clock, start, moves, sag=sag)
+        term = ScriptedTerminal(clock, keys, answers)
+        driver = self.driver(follower, term, clock, "record")
+        data = record(driver, leader, self.route, META, sample_park(follower, clock.sleep))
+        driver.close_logs()
+        return data, follower, leader, term, driver
+
+    def test_driven_handover_teaches_route_and_ignores_sag(self):
+        from agentic_sim.real_route import HANDOVER_COUNTDOWN_S, HANDOVER_GUARD_S
+
+        start = dict(PARK) | {"wrist_roll": 50.0, "shoulder_pan": 20.0}  # leader left far from the follower
+        to_via = {j: VIA[j] - PARK[j] for j in VIA}
+        to_channel = {j: CHANNEL[j] - PARK[j] for j in CHANNEL}
+        moves = [(1.0, dict.fromkeys(PARK, 0.0)), (3.0, to_via), (5.5, to_channel)]
+        data, follower, leader, term, driver = self.teach_driven(start, moves, [(16.0, "c")], ("a", "r", "y"))
+        self.assertIsNotNone(data)
+        self.assert_released_at_park(follower)
+        self.assertEqual([kind for kind, _ in leader.log], ["on", "off"])
+        on, off = leader.log[0][1], leader.log[1][1]
+        self.assertGreaterEqual((off - on) / 1e9, HANDOVER_COUNTDOWN_S)  # released only after the countdown
+        self.assertFalse(leader.driven)
+        # The follower never followed the sag: its first teleop targets stay at park.
+        first = [cmd for t, cmd in follower.sent if t <= off + (HANDOVER_GUARD_S + 0.15) * 1e9]
+        self.assertTrue(first and all(body_gap(cmd, PARK) < 1.0 for cmd in first))
+        saved, _ = load_route(self.route)
+        self.assertLess(body_gap(saved["channel"]["readback"], CHANNEL), 3.0)
+        self.assertTrue(any("已交接" in line for line in term.lines))
+
+    def test_leader_dropped_after_release_falls_back_to_manual(self):
+        data, follower, leader, term, _ = self.teach_driven(
+            PARK, [], [(12.0, "esc")], ("a",), sag={"shoulder_lift": -25.0})
+        self.assertIsNone(data)
+        self.assertFalse(leader.driven)
+        self.assertTrue(any("沒有扶穩" in line for line in term.lines))
+        self.assertEqual(follower.torque_states(), OFF)
+
+    def test_cancel_during_countdown_releases_only_when_supported(self):
+        # Esc during the countdown: leader keeps torque until the operator presses Enter.
+        data, follower, leader, term, _ = self.teach_driven(
+            PARK, [], [(1.5, "esc"), (6.0, "enter")], ("a", "q"))
+        self.assertIsNone(data)
+        on, off = leader.log[0][1], leader.log[1][1]
+        self.assertGreaterEqual(off / 1e9, 6.0)
+        self.assertFalse(leader.driven)
+        self.assertEqual(follower.torque_states(), OFF)
+
+
+class ReseatCase(RouteCase):
+    def test_small_offset_from_park_is_reseated_under_torque(self):
+        clock = FakeClock()
+        follower = FakeFollower(clock, start=dict(PARK) | {"wrist_roll": PARK["wrist_roll"] - 9.8})
+        term = ScriptedTerminal(clock, answers=("s",))
+        driver = self.driver(follower, term, clock, "reseat")
+        driver.arm_at(PARK)
+        self.assertEqual(follower.torque_states(), ON)
+        self.assertLess(body_gap(follower.read(), PARK), 2.0)
+        self.assertTrue(all(abs(cmd["wrist_roll"] - PARK["wrist_roll"]) <= 9.8 + 1e-6 for _, cmd in follower.sent))
+
+    def test_declined_or_large_offset_is_not_moved(self):
+        for start, answers in ((dict(PARK) | {"wrist_roll": PARK["wrist_roll"] - 9.8}, ("q",)),
+                               (dict(PARK) | {"shoulder_pan": PARK["shoulder_pan"] + 25.0}, ())):
+            clock = FakeClock()
+            follower = FakeFollower(clock, start=start)
+            driver = self.driver(follower, ScriptedTerminal(clock, answers=answers), clock, f"reseat-{len(answers)}")
+            with self.assertRaises(RuntimeError):
+                driver.arm_at(PARK)
+            self.assertEqual(follower.torque_states(), OFF)
+            self.assertFalse(follower.sent)
+
+
+class SagCase(RouteCase):
+    def test_steady_gravity_sag_above_gate_does_not_pause(self):
+        from agentic_sim.real_route import GATE_LAG, PUSH_LAG
+
+        clock = FakeClock()
+        sag = dict.fromkeys(PARK, 0.0) | {"shoulder_lift": (GATE_LAG + PUSH_LAG) / 2}  # e.g. stretched arm
+        follower = FakeFollower(clock, sag=sag)
+        term = ScriptedTerminal(clock)
+        driver = self.driver(follower, term, clock, "sag")
+        driver.arm_at(PARK)
+        driver.play(Track([PARK, CHANNEL], [1.0]), "往通道位")  # raises Paused if treated as a stall
+        self.assertLess(body_gap(follower.goal, CHANNEL), 1e-9)
+
+    def test_lag_beyond_push_still_pauses(self):
+        from agentic_sim.real_route import PUSH_LAG, Paused
+
+        clock = FakeClock()
+        sag = dict.fromkeys(PARK, 0.0) | {"shoulder_lift": PUSH_LAG + 3.0}
+        follower = FakeFollower(clock, sag=sag)
+        driver = self.driver(follower, ScriptedTerminal(clock), clock, "blocked")
+        driver.arm_at(PARK)
+        with self.assertRaises(Paused):
+            driver.play(Track([PARK, CHANNEL], [1.0]), "往通道位")
+
+
+def test_lift_home_raises_first_then_goes_straight():
+    from agentic_sim.real_route import lift_home
+
+    grasp = dict(CHANNEL) | {"shoulder_pan": -56.0, "shoulder_lift": 0.4, "elbow_flex": 28.7, "gripper": 16.5}
+    track = lift_home(grasp, CHANNEL)
+    assert len(track.points) == 3
+    assert track.points[1] == grasp | {"shoulder_lift": CHANNEL["shoulder_lift"]}
+    assert body_gap(track.points[-1], CHANNEL) < 1e-9 and track.points[-1]["gripper"] == 16.5
+    assert len(lift_home(CHANNEL | {"shoulder_pan": 10.0}, CHANNEL).points) == 2  # already at channel height
+
+
+class LeaderRouteCase(RouteCase):
+    def test_folded_leader_follows_route_and_opens_gripper_last(self):
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        term = ScriptedTerminal(clock)
+        driver = self.driver(follower, term, clock, "leader-route")
+        route = Track([PARK, VIA, CHANNEL], [1.0, 1.0])
+        driver.leader_route = route
+        start = dict(PARK) | {"shoulder_pan": PARK["shoulder_pan"] + 4.0, "gripper": 1.0}
+        reference = dict(CHANNEL) | {"gripper": 26.0}
+        goals = driver._leader_goals(start, reference)
+        self.assertEqual(len(goals), 4)  # VIA, CHANNEL (gripper held), reference body, then gripper
+        self.assertTrue(all(g["gripper"] == 1.0 for g in goals[:-1]))
+        self.assertEqual(goals[-1]["gripper"], 26.0)
+        leader = FakeDrivenLeader(clock, start)
+        leader.drive_on()
+        self.assertEqual(driver._drive_leader(leader, reference), "arrived")
+        # Passed close to the route's via pose on the way (not a straight joint move).
+        driver.leader_route = None
+        self.assertEqual(len(driver._leader_goals(start, reference)), 2)
+
+
+def test_retrace_home_reverses_the_driven_path():
+    from agentic_sim.real_route import retrace_home
+
+    out = [(i, dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 4 * i,
+                                "elbow_flex": CHANNEL["elbow_flex"] - 5 * min(i, 8), "gripper": 17.0})
+           for i in range(16)]
+    track = retrace_home(out, CHANNEL)
+    lifts = [p["shoulder_lift"] for p in track.points]
+    assert lifts == sorted(lifts, reverse=True)          # monotonically back, no swing past the channel
+    assert body_gap(track.points[-1], CHANNEL) < 1e-9 and track.points[-1]["gripper"] == 17.0
+    assert body_gap(track.points[0], out[-1][1]) < 1e-9
+
+
+class FakeWriter:
+    def __init__(self, clock):
+        self.clock_fn, self.origin, self.rows, self.count = clock, clock(), [], 0
+
+    def clock(self):
+        return self.clock_fn() - self.origin
+
+    def add_control(self, row):
+        self.rows.append(row)
+        self.count += 1
+
+
+class GraspRoundCase(RouteCase):
+    def test_park_start_round_records_only_the_demo_and_places(self):
+        from agentic_sim.real_grasp import grasp_round
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        channel = data["channel"]["command"]
+        drop = {"tray": "pink", "waypoints": [channel, dict(channel) | {"shoulder_pan": channel["shoulder_pan"] - 15}],
+                "release_gripper": 35.0}
+        grasp = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 20, "elbow_flex": CHANNEL["elbow_flex"] - 10}
+        moves = [(0.5, dict.fromkeys(PARK, 0.0)), (3.0, {j: VIA[j] - PARK[j] for j in PARK}),
+                 (6.0, {j: grasp[j] - PARK[j] for j in PARK})]
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        leader = FakeDrivenLeader(clock, PARK, moves)
+        term = ScriptedTerminal(clock, [(16.0, "c")], ("a", "p", "r", "y", "s"))
+        driver = self.driver(follower, term, clock, "grasp")
+        writer = FakeWriter(clock)
+        checks = []
+        result = grasp_round(driver, leader, data, {"pink": drop}, writer, lambda: checks.append(1), "red")
+        driver.close_logs()
+        self.assertEqual(result["destination"], "pink")
+        self.assertTrue(result["success"] and result["placed"])
+        self.assert_released_at_park(follower)
+        self.assertEqual(result["demo_frames"], writer.count)          # rows stop at c
+        self.assertGreater(writer.count, 100)
+        self.assertTrue(checks)
+        first = writer.rows[0]["arms"]["right"]["readback"]
+        self.assertLess(body_gap(first, PARK), 4.0)                    # the demo starts at park
+        # Placement went out along the drop route (pan turned) after the demo.
+        self.assertTrue(any(cmd["shoulder_pan"] < channel["shoulder_pan"] - 10 for _, cmd in follower.sent))
+
+
+def test_retrace_to_stops_where_the_demo_passed_the_start_pose():
+    from agentic_sim.real_grasp import retrace_to
+
+    path = [dict(PARK)] + [dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 3 * i} for i in range(10)]
+    samples = list(enumerate(path))
+    track = retrace_to(samples, CHANNEL)
+    self_lifts = [p["shoulder_lift"] for p in track.points]
+    assert all(p["shoulder_lift"] >= CHANNEL["shoulder_lift"] - 1e-9 for p in track.points)  # never back toward park
+    assert self_lifts == sorted(self_lifts, reverse=True)
+
+
+class PickPlaceRoundCase(RouteCase):
+    def test_demonstrated_place_ends_near_start_then_parks(self):
+        from agentic_sim.real_grasp import pick_place_round
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        grasp = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 20, "elbow_flex": CHANNEL["elbow_flex"] - 10}
+        place = dict(grasp) | {"shoulder_pan": grasp["shoulder_pan"] + 40}
+        d = lambda pose_: {j: pose_[j] - PARK[j] for j in PARK}  # noqa: E731
+        moves = [(0.5, dict.fromkeys(PARK, 0.0)), (3.0, d(VIA)), (6.0, d(grasp)), (9.0, d(place)),
+                 (12.0, d(CHANNEL) | {"shoulder_pan": 4.0})]
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        leader = FakeDrivenLeader(clock, PARK, moves)
+        term = ScriptedTerminal(clock, [(22.0, "c")], ("a", "y", "s"))
+        driver = self.driver(follower, term, clock, "pick-place")
+        writer = FakeWriter(clock)
+        result = pick_place_round(driver, leader, data, writer, lambda: None, color="red", destination="beige",
+                                  slot={"index": 1, "xy": [70, 60]}, quads=None)
+        driver.close_logs()
+        self.assert_released_at_park(follower)
+        self.assertTrue(result["success"]) and self.assertEqual(result["demo_frames"], writer.count)
+        last = writer.rows[-1]["arms"]["right"]["readback"]
+        self.assertLess(body_gap(last, CHANNEL), 30)          # the demonstration ended near the start pose
+        self.assertTrue(any(cmd["shoulder_pan"] > grasp["shoulder_pan"] + 30 for _, cmd in follower.sent))
+
+    def test_round_chooser_sets_the_colour_and_cancels_on_an_empty_tray(self):
+        from agentic_sim.real_grasp import pick_place_round
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        term = ScriptedTerminal(clock, [], ())
+        driver = self.driver(follower, term, clock, "pick-empty")
+        result = pick_place_round(driver, FakeDrivenLeader(clock, PARK, []), data, FakeWriter(clock), lambda: None,
+                                  color=None, destination="beige", slot={"index": 1, "xy": [70, 30]}, quads=None,
+                                  choose=lambda blocks: (None, {"source": "pink", "candidates": 0}))
+        driver.close_logs()
+        self.assertIsNone(result["demo_frames"])
+        self.assertFalse(follower.sent)                       # nothing moved: no block to pick
+
+
+def _block(color, x, y, tray="pink"):
+    return {"color": color, "tray": tray, "x_mm": x, "y_mm": y, "yaw_deg": 0.0}
+
+
+def test_random_pick_only_takes_source_tray_blocks_and_counts_the_scene():
+    import random
+
+    from agentic_sim.real_grasp import random_pick
+
+    blocks = [_block("blue", 40, 50), _block("blue", 60, 120), _block("red", 80, 180), _block("yellow", 70, 30, "beige")]
+    choose = random_pick(random.Random(0), "pink")
+    seen = set()
+    for _ in range(50):
+        target, scene = choose(blocks)
+        assert target["tray"] == "pink"
+        seen.add(id(target))
+    assert len(seen) == 3                                     # every pink block gets picked at some point
+    assert scene["counts"] == {"blue": 2, "red": 1} and scene["candidates"] == 3 and scene["elsewhere"] == 1
+    assert choose([_block("red", 70, 30, "beige")])[0] is None
+
+
+def test_describe_names_the_side_among_same_colour_blocks():
+    from agentic_sim.real_grasp import describe
+
+    left, right, red = _block("blue", 60, 150), _block("blue", 65, 60), _block("red", 50, 100)
+    blocks = [left, right, red]
+    assert "靠左" in describe(left, blocks) and "靠右" in describe(right, blocks)
+    assert "同色" not in describe(red, blocks)
+    near, far = _block("blue", 40, 100), _block("blue", 110, 105)
+    assert "較近" in describe(near, [near, far]) and "較遠" in describe(far, [near, far])
+
+
+def test_round_state_resumes_from_the_last_round_row(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("real_route_tool", Path(__file__).resolve().parents[1] / "tools/real_route.py")
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    index = tmp_path / "index.jsonl"
+    assert tool.round_state(index) == (0, 0, 0)
+    rows = [{"episode": "P0001"}, {"episode": "P0002", "round": {"n": 1, "placed_after": 1, "left_after": 3}},
+            {"episode": "P0003", "round": {"n": 1, "placed_after": 2, "left_after": 2}}]
+    index.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert tool.round_state(index) == (1, 2, 2)
+
+
+def test_placed_block_is_the_new_one_and_reports_crowding():
+    from agentic_sim.real_grasp import placed_block
+
+    before = [_block("blue", 70, 30, "beige"), _block("red", 70, 95, "beige"), _block("blue", 60, 120)]
+    after = [_block("blue", 72, 32, "beige"), _block("red", 70, 95, "beige"), _block("blue", 75, 130, "beige")]
+    landed = placed_block(before, after, "blue", "beige", {"index": 3, "xy": [70, 160]})
+    assert (landed["x_mm"], landed["y_mm"]) == (75, 130)          # not the blue already there
+    assert landed["slot_offset_mm"] == 30.4 and landed["neighbour_mm"] == 35.4
+    assert placed_block(before, after, "yellow", "beige", {"index": 3, "xy": [70, 160]}) is None

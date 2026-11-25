@@ -1,0 +1,19 @@
+# Finals whole order (MuJoCo): a shortage in the middle of the order, answered by a substitute colour or a restock.
+# Storage tray: shortage colour A x2, priority colour B x1, substitute colour C x1 (seeded legal layout); the
+# placement tray starts empty. Order: B x1 then A x2 (B first). After the second verified delivery the arm goes to
+# standby; once settled with an empty open gripper the scene removes the A left in the storage tray. The executor
+# notices from its next observation and asks "substitute C or wait for A". See docs/finals-shortage.md.
+#   uv run tools/finals.py run --roles red,blue,yellow --seed 1 --answer substitute    # one run (batch answer)
+#   uv run tools/finals.py batch                                                       # the 12-run acceptance
+name: finals_shortage
+finals:
+  roles: {shortage: red, priority: blue, substitute: yellow}
+  layout: {config: configs/random_blocks_finals.yaml, seed: 1}
+  standby_after: 2              # verified deliveries before the standby step
+  answer: substitute            # substitute | wait: injected (bound to the question ID) once the question exists;
+                                # leave empty to answer from the chat
+  answer_after_s: 2.0
+  restock_after_observations: 3 # "wait": storage observations before the scene puts one removed block back
+  perception: camera            # camera: choose and recheck with the global / wrist cameras; sim_truth: task flow only
+timeout_s: 240
+checks: [no_drop, no_stale_commands, skills_ok]

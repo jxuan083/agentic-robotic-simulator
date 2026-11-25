@@ -1,0 +1,11 @@
+# Screen video that cannot start (PR #17 round 3): run with an agent whose tool is missing
+# (ARS_SCREEN_VIDEO_TOOL=/nonexistent), or with no agent at all. The right column must give the reason and never
+# claim a file; the simulator keeps running.
+- {wait: 4.0}
+- {click: screen_video}
+- {hold: [], until: "screen.get('state') == 'failed' or 'not started' in screen_text", timeout: 15}
+- {mark: failed}
+- {check: "'failed' in screen_text or 'not started' in screen_text", label: "fail: the right column gives the reason"}
+- {check: "'saved' not in screen_text and not (screen.get('saved') or [])", label: "fail: no file is claimed"}
+- {check: "screen.get('state') != 'recording'", label: "fail: not shown as recording"}
+- {wait: 3.0}

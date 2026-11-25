@@ -12,7 +12,8 @@ from agentic_sim.real_review import _nearest, native_depth, save_depth_compariso
 
 
 PHASES = {"align": "正在對齊標準起姿", "recording": "採集中，可操作 leader",
-          "replay": "follower 正在重播", "return": "任務結束，準備復位"}
+          "replay": "follower 正在重播", "return": "任務結束，準備復位",
+          "place": "自動移到目的盤放下，請保持淨空"}
 COLOR = {"red": "紅", "blue": "藍", "yellow": "黃"}
 TRAY = {"pink": "粉盤", "beige": "米盤"}
 
@@ -27,6 +28,9 @@ class WindowOperator:
 
     def status(self, state):
         self.events.put(("status", PHASES[state]))
+
+    def say(self, text):
+        self.events.put(("status", text))
 
     def halted(self):
         return self.abort.is_set()
@@ -56,6 +60,9 @@ class WindowOperator:
 
     def support(self, support):
         return self.ask("support", support)
+
+    def carry(self, tray):
+        return self.ask("carry", tray)
 
 
 def _thumbnail(parent, path):
@@ -128,9 +135,13 @@ class Window:
             kind = "小偏差" if card["kind"] == "small_offset" else "正常"
             region = "近" if card["region"] == "near" else "遠"
             cue = "　張爪停穩後，保留一次局部對準。" if card["kind"] == "small_offset" else ""
+            others = card.get("distractors") or []
+            extra = ("\n其他方塊（大約位置即可）：" + "；".join(
+                f"{COLOR[d['color']]} x {d['pose'][0]:g}，y {d['pose'][1]:g}，yaw {d['pose'][2]:g}°"
+                + ("（鄰近）" if d["relation"] == "near" else "") for d in others)) if others else "\n盤內只放目標方塊"
             self.card_text.set(f"{source}  {card['id']}  {COLOR[card['color']]}塊  "
                                f"{TRAY[card['source_tray']]} → {TRAY[card['destination']]}　{region}區／{kind}\n"
-                               f"盤相對座標 x {x:g} mm，y {y:g} mm，yaw {yaw:g}°{cue}")
+                               f"盤相對座標 x {x:g} mm，y {y:g} mm，yaw {yaw:g}°{cue}{extra}")
         else:
             self.card_text.set(f"{source}  批次已完成")
         quotas = "　".join(
@@ -224,6 +235,12 @@ class Window:
         self.root.after(50, self.poll)
 
     def prompt(self, kind, text, response):
+        if kind == "carry":
+            self.status_text.set("follower 保持抬起姿態，等待確認")
+            response.put(messagebox.askyesno(
+                "自動放置", f"方塊已夾穩並抬離盤面？\n「是」：自動回通道位、移到{TRAY.get(text, text)}放下，再回通道位。\n"
+                "「否」：不自動放置（抓空或要現場處理）。", parent=self.root))
+            return
         if kind == "support":
             self.status_text.set("已抵達停放位並停穩")
             response.put(messagebox.askyesno("確認停放支撐", f"請確認已接觸支撐且手臂可卸力。\n{text}",
@@ -341,7 +358,7 @@ class Window:
         if (path / "review.json").exists():
             marks.update({key: value["frame"] for key, value in
                           json.loads((path / "review.json").read_text(encoding="utf-8"))["frames"].items()})
-        frame = tk.IntVar(value=marks.get("handoff", 0))
+        frame = tk.IntVar(value=marks.get("close", 0))
         text = tk.StringVar()
         strip = ttk.Frame(dialog)
         strip.pack()
@@ -396,12 +413,14 @@ class Window:
 
             dialog.after(160, step)
 
-        for key, label in (("coarse", "粗定位"), ("handoff", "接手"), ("close", "閉爪"), ("lift", "抬穩")):
+        for key, label in (("start", "起點"), ("close", "閉爪"), ("lift", "抬穩")):
             ttk.Button(buttons, text=f"標 {label}", command=lambda key=key: mark(key)).pack(side="left")
         ttk.Button(buttons, text="循環前後幀", command=lambda: loop(frame.get())).pack(side="left")
         ttk.Button(buttons, text="停止循環", command=lambda: loop_token.__setitem__(0, loop_token[0] + 1)).pack(side="left")
-        for index in hints.get("handoff", {}).get("alternatives", []):
-            ttk.Button(dialog, text=f"接手候選 {index}", command=lambda index=index: loop(index)).pack(side="left")
+        target = (report.get("d455_blocks") or {}).get("target")
+        ttk.Label(dialog, text=("D455 目標方塊：" + (f"{target['tray']} x {target['x_mm']:.0f} mm, y {target['y_mm']:.0f} mm, "
+                                f"{target['yaw_deg']:.0f}°（與卡片差 {target['card_offset_mm']:.0f} mm）"
+                                if target else "未偵測到"))).pack(anchor="w", padx=12)
 
         def save():
             try:

@@ -272,6 +272,8 @@ class Episode:
                 issue("control", i, str(error))
 
         cameras = {}
+        task_first = self.rows[0].get("timestamp_ns") if self.rows else None
+        task_last = self.rows[-1].get("timestamp_ns") if self.rows else None
         for name, frames in self.frames.items():
             camera = m["cameras"][name]
             folder = self.root / name
@@ -284,6 +286,22 @@ class Episode:
             references = {}
             previous = -1
             previous_sequence = None
+            gaps = {"outside_task": 0, "single_drop_in_task": 0, "max_in_task_ms": 0.0}
+            period = 1e9 / camera["fps"]
+
+            def gap(index, stamp, reason):
+                # Startup/park gaps do not touch the recorded task; a single dropped frame in the task is kept as
+                # a counted gap (each control row still has an image within one frame period).
+                if not (_timestamp(task_first) and _timestamp(task_last) and task_first <= stamp <= task_last):
+                    gaps["outside_task"] += 1
+                    return
+                interval = stamp - previous
+                gaps["max_in_task_ms"] = max(gaps["max_in_task_ms"], round(interval / 1e6, 1))
+                if interval <= 2.5 * period:
+                    gaps["single_drop_in_task"] += 1
+                else:
+                    issue(name, index, reason, interval_ms=round(interval / 1e6, 1))
+
             for index, row in enumerate(frames):
                 try:
                     frame = row["frame"]
@@ -295,9 +313,9 @@ class Episode:
                     sequence = (row.get("device_timing") or {}).get("color", {}).get("number")
                     if previous_sequence is not None and sequence is not None:
                         if sequence != previous_sequence + 1:
-                            issue(name, index, f"device color sequence: {previous_sequence} -> {sequence}")
+                            gap(index, stamp, f"device color sequence: {previous_sequence} -> {sequence}")
                     elif previous >= 0 and stamp - previous > 1.5e9 / camera["fps"]:
-                        issue(name, index, "camera timestamp gap exceeds 1.5 nominal frame periods")
+                        gap(index, stamp, "camera timestamp gap exceeds 2.5 nominal frame periods in the task")
                     previous, previous_sequence = stamp, sequence
                     timestamps[index] = stamp
                     image_kinds = ("rgb", "depth") if camera.get("depth") or "depth" in row else ("rgb",)
@@ -331,6 +349,7 @@ class Episode:
                 "frames": len(frames), "first_ns": timestamps.get(0),
                 "last_ns": timestamps.get(len(frames) - 1),
                 "observed_fps": _observed_hz(len(frames), timestamps.get(0), timestamps.get(len(frames) - 1)),
+                "gaps": gaps,
             }
         first = self.rows[0].get("timestamp_ns") if self.rows else None
         last = self.rows[-1].get("timestamp_ns") if self.rows else None

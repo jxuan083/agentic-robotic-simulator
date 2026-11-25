@@ -29,9 +29,11 @@ from agentic_sim.kinematics import ARM_JOINTS, So101Chain
 from agentic_sim.mujoco_backend.model import ROBOT_CONFIG, build
 from agentic_sim.scene_layout import block_count_range, block_in_tray
 from agentic_sim.teleop.ee_target import REASONS, load_controller
+from agentic_sim.teleop.script_core import input_dt, marks_summary
+from agentic_sim.workspace_status import perception_items
 from agentic_sim.mujoco_backend.handle import Handle
 from agentic_sim.mujoco_backend.panel import MjPanel
-from agentic_sim.teleop.keys import HELP, KeyState
+from agentic_sim.teleop.keys import HELP, MJ_ACTION_KEYS, KeyState
 
 MJ_HELP = HELP.replace("  M: focus view", "")
 
@@ -68,6 +70,13 @@ class SessionConfig:
     perception_camera: str = "both"
     perception_hz: float = 2.0
     perception_json: str | None = None
+    perception_stage: str = "estimate"   # "capture": capture only, no estimation (benchmark)
+    perception_delay: float = 0.0        # test only: extra seconds before each estimate completes
+    perception_fault: str | None = None  # test only: CAMERA:AFTER:DURATION, estimates of CAMERA fail for a while
+    annotations: str = "on"              # camera cells start annotated ("on") or raw ("off")
+    metrics_log: str | None = None       # one JSON line per host second: UI FPS, RTF, perception age
+    metrics_run_id: str | None = None    # written into every metrics line (a benchmark binds its report to it)
+    screen_video_dir: str | None = None  # control directory of the right-column screen video (agentic_sim.screen_video)
 
 
 class MjColorRandomizer:
@@ -166,7 +175,7 @@ class MjSession:
         count); viewer: the window that scripted mouse steps go through (None: keyboard-only scripts)."""
         self.cfg = cfg
         self.log = log
-        self.keys = keys or KeyState(actions={"P": "pause", "R": "reset"})
+        self.keys = keys or KeyState(actions=MJ_ACTION_KEYS)
         self._focused = focused or (lambda: True)
         self._requests: list[str] = []
         self._finished = None
@@ -220,8 +229,11 @@ class MjSession:
         self.live_perception = None
         if cfg.live_perception:
             from agentic_sim.mujoco_backend.live_perception import MjLivePerception
+            from agentic_sim.perception.live import InjectedFault
             self.live_perception = MjLivePerception(self.scene_cfg, self.m, cfg.perception_hz, log,
-                                                    cfg.perception_camera, cfg.perception_json)
+                                                    cfg.perception_camera, cfg.perception_json,
+                                                    stage=cfg.perception_stage, delay_s=cfg.perception_delay,
+                                                    fault=InjectedFault.parse(cfg.perception_fault))
 
         self.log_f = self.log_w = None
         if cfg.log:
@@ -232,6 +244,22 @@ class MjSession:
             if not cont:
                 self.log_w.writerow(CSV_HEADER)
         self.paused = False
+        # operator workspace (the viewer draws it): M toggles, keys 1 / 2 or a click switch a camera cell
+        from agentic_sim.workspace_status import Clocks, MetricsLog
+        self.clocks = Clocks()
+        self.metrics_log = MetricsLog(cfg.metrics_log, run_id=cfg.metrics_run_id)
+        from agentic_sim.screen_video import ScreenVideoClient
+
+        def window_id():
+            if viewer is None:
+                raise RuntimeError("no window (headless)")
+            return viewer.x11_window_id()
+        self.screen_video = ScreenVideoClient(cfg.screen_video_dir, window_id, "mujoco", log)
+        self.workspace_toggle = False         # set by M; the viewer applies it
+        self.workspace_active = False         # reported back by the viewer
+        self.fullscreen = False
+        self.annotate = {"global": cfg.annotations == "on", "wrist": cfg.annotations == "on"}
+        self.cells = {}                       # camera key -> what the cell shows (the viewer fills it)
         self.t_start = self.last = time.monotonic()
         self.t_sim = 0.0
         self.frames = 0
@@ -253,8 +281,62 @@ class MjSession:
             self.task.close()
         colors = self.block_color_names or default_color_names(self.scene_cfg, len(self.sc.block_bodies))
         self.task = TaskRunner(self.ctrl, self.scene_cfg, self.sc.block_init_pos, colors, self.control_dt, self.log,
-                               scenario=self.cfg.task, event_log=self.cfg.task_log)
+                               scenario=self.cfg.task, event_log=self.cfg.task_log, world_ops=self,
+                               teleop_path=self.cfg.teleop)
+        if self.task.finals is not None and self.task.finals.perception == "camera":
+            self.task.ex.camera = self._task_camera()
         return self.task
+
+    def _task_camera(self):
+        """Synchronous global / wrist captures of the current frame for the executor (finals scenes)."""
+        from agentic_sim.mujoco_backend.live_perception import MjLivePerception
+        from agentic_sim.task.camera import TaskCamera
+        from agentic_sim.scene_layout import sensor_cameras
+        if set(sensor_cameras(self.scene_cfg)) != {"global", "wrist"}:
+            raise ValueError("finals scenes with perception: camera need a scene with the global and wrist cameras "
+                             "(--scene configs/scenes/lab_20261120.yaml)")
+        if getattr(self, "_cam_perception", None) is None:
+            self._cam_perception = MjLivePerception(self.scene_cfg, self.m, log=lambda _: None)
+        p = self._cam_perception
+        tray = self.task.ex.world.trays["storage"]
+        for est in p.estimators.values():
+            est.floor = tray["floor_top"]
+        for key in ("global", "wrist"):   # warm up: renderers and lens maps are built on the first capture
+            p.capture_rgb(key, self.d)
+        return TaskCamera(self.scene_cfg, lambda key: p.capture_rgb(key, self.d), tray, self.task.ex.world.edge,
+                          self.ctrl, p.estimators)
+
+    # ---- scene operations (finals scenarios: the scene removes / restocks blocks) ----------------------
+    PARK = (-1.2, -0.6, 0.4)   # far outside the table and both cameras' views
+
+    def block_pose(self, b: int):
+        a = self.sc.block_qpos[b]
+        return self.d.qpos[a:a + 3].copy(), self.d.qpos[a + 3:a + 7].copy()
+
+    def remove_block(self, b: int):
+        """Take block b out of the scene: parked, floating, without contacts."""
+        a, dv, g, body = self.sc.block_qpos[b], self.sc.block_qvel[b], self.sc.block_geoms[b], self.sc.block_bodies[b]
+        if not hasattr(self, "_contacts"):
+            self._contacts = {}
+        self._contacts.setdefault(g, (int(self.m.geom_contype[g]), int(self.m.geom_conaffinity[g])))
+        self.m.geom_contype[g] = self.m.geom_conaffinity[g] = 0
+        self.m.body_gravcomp[body] = 1.0
+        self.d.qpos[a:a + 3] = [self.PARK[0], self.PARK[1] + 0.06 * b, self.PARK[2]]
+        self.d.qpos[a + 3:a + 7] = [1.0, 0.0, 0.0, 0.0]
+        self.d.qvel[dv:dv + 6] = 0.0
+        mujoco.mj_forward(self.m, self.d)
+
+    def place_block(self, b: int, xyz, yaw_deg: float):
+        """Put block b (back) into the scene at rest at xyz with yaw_deg about +Z."""
+        from agentic_sim.scene_layout import yaw_quat
+        a, dv, g, body = self.sc.block_qpos[b], self.sc.block_qvel[b], self.sc.block_geoms[b], self.sc.block_bodies[b]
+        if g in getattr(self, "_contacts", {}):
+            self.m.geom_contype[g], self.m.geom_conaffinity[g] = self._contacts.pop(g)
+        self.m.body_gravcomp[body] = 0.0
+        self.d.qpos[a:a + 3] = xyz
+        self.d.qpos[a + 3:a + 7] = yaw_quat(yaw_deg)
+        self.d.qvel[dv:dv + 6] = 0.0
+        mujoco.mj_forward(self.m, self.d)
 
     def stop_task(self):
         """Give the arm back to the operator (keyboard / mouse) where it is."""
@@ -338,10 +420,16 @@ class MjSession:
 
     def do_reset(self):
         ctrl, sc, d = self.ctrl, self.sc, self.d
+        if getattr(self, "clocks", None) is not None:
+            self.clocks.reset()           # no RTF across a Reset
         self.carry["rejected"] += ctrl.state.rejected
         for r in REASONS:
             self.carry["reasons"][r] += ctrl.state.reject_counts[r]
         ctrl.reset()
+        for g, (ct, ca) in getattr(self, "_contacts", {}).items():   # blocks a finals scene had removed
+            self.m.geom_contype[g], self.m.geom_conaffinity[g] = ct, ca
+        self._contacts = {}
+        self.m.body_gravcomp[sc.block_bodies] = 0.0
         mujoco.mj_resetData(self.m, d)
         for adr, q, off in zip(sc.arm_qpos, ctrl.state.q_cmd, sc.arm_offset):
             d.qpos[adr] = q + off
@@ -407,6 +495,13 @@ class MjSession:
                 self.log(f"pause={self.paused}")
             elif a == "reset_view":
                 self.reset_view_requested = True
+            elif a == "focus":
+                self.workspace_toggle = True
+            elif a in ("annotate_global", "annotate_wrist"):   # display only: perception keeps running
+                k = a.split("_")[1]
+                self.annotate[k] = not self.annotate[k]
+            elif a == "screen_video":   # the window's MP4 (agent on the host); no simulation state changes
+                self.screen_video.toggle()
             elif a in ("open", "close") and not self.paused:
                 ctrl.set_gripper(a == "open", "mouse")
             elif a == "toggle_gripper" and not self.paused:
@@ -440,9 +535,12 @@ class MjSession:
                 panel.cancel()
                 handle.cancel()
                 self.task.step(self.task_obs())
+            # a person's keys move by host time (the operator's feel); injected script keys by simulated time, so
+            # the same script commands the same motion however fast the window draws
+            dt_in = input_dt(dt, self.control_dt, self.script is not None)
             lin, yaw, grip = keys.directions()
-            ctrl.step_velocity(lin, yaw, dt, "keyboard")
-            ctrl.step_gripper(grip, dt, "keyboard")
+            ctrl.step_velocity(lin, yaw, dt_in, "keyboard")
+            ctrl.step_gripper(grip, dt_in, "keyboard")
             # mouse: 3D handle (primary) + top view (auxiliary), both relative, one IK update per frame
             d1, t1 = handle.pop_drag()
             d2, t2 = panel.pop_drag()
@@ -455,7 +553,7 @@ class MjSession:
                 ctrl.wheel(w1["coarse"] + w2["coarse"])
             if w1["fine"] + w2["fine"]:
                 ctrl.wheel(w1["fine"] + w2["fine"], fine=True)
-            ctrl.step_goals(dt)
+            ctrl.step_goals(dt_in)
             times = t1 + t2
             if times:
                 input_lat_ms = (time.monotonic() - min(times)) * 1000.0
@@ -514,8 +612,10 @@ class MjSession:
         panel.update(mode, self.paused, keys.shift, s.status, s.message, s.pos, s.yaw_offset, ee, all_pos, s.gripper,
                      self.color_dr.block_rgbs(self.sc.block_colors), tilt_deg=tilt_deg, in_placement=n_placed)
         panel.set_task(self.task.ex.panel_lines() if self.task is not None else None)
+        panel.set_screen(self.screen_video.button_text(), self.screen_video.text(), self.screen_video.enabled)
         if self.script is not None:
-            ns = {"target": s.pos, "ee": ee, "block": bpos, "status": s.status, "gripper": s.gripper, "jaw": jaw,
+            ns = {"t_sim": self.t_sim, "target": s.pos, "ee": ee, "block": bpos, "status": s.status,
+                  "gripper": s.gripper, "jaw": jaw,
                   "paused": self.paused, "session": s.session, "focused": focused, "held": set(keys.held),
                   "rejected": s.rejected, "yaw_offset": s.yaw_offset,
                   "block_in_placement": block_in_tray(bpos, self.placement, edge),
@@ -531,10 +631,37 @@ class MjSession:
                   "pending": panel.pending(), "dragging": handle.dragging, "hover": handle.hover,
                   "fine": keys.shift, "cam": np.asarray(self.camera_position(), float),
                   "selection": [],  # MuJoCo has no scene selection: a drag can never select anything
+                  "focus_mode": self.workspace_active, "fullscreen": self.fullscreen, "cells": dict(self.cells),
+                  "ui_fps": self.clocks.ui_fps, "rtf": self.clocks.rtf,
+                  "screen": dict(self.screen_video.status() or {}), "screen_text": self.screen_video.text(),
+                  "perception": perception_items(self.live_perception, time.monotonic()),
                   "reasons": {r: self.carry["reasons"][r] + s.reject_counts[r] for r in REASONS}}
             self.script.step(ns)
         self.frames += 1
+        self.clocks.frame(now, self.t_sim, self.paused)
+        if self.metrics_log.path:
+            self.metrics_log.sample(now, self.t_sim, self.clocks, self.perception_items(now),
+                                    {"workspace": self.workspace_active})
         return not self.script_done
+
+    def perception_items(self, now):
+        """camera key -> perception age / latency (agentic_sim.workspace_status), or None when perception is off."""
+        if self.live_perception is None:
+            return None
+        from agentic_sim.workspace_status import perception_item
+        return {k: perception_item(v, now) for k, v in self.live_perception.state()["cameras"].items()}
+
+    def status_info(self, now):
+        s, p = self.ctrl.state, self.ctrl.p
+        task = None
+        if self.task is not None:
+            lines = self.task.ex.panel_lines() or []
+            task = lines[0] if lines else "task executor"
+        return {"clocks": self.clocks, "target_color": None, "task": task, "jaw": self.last_frame.get("jaw"),
+                "gripper_cmd": s.gripper, "gripper_open": s.gripper > 0.5 * (p.gripper_open + p.gripper_closed),
+                "recording": None, "screen_video": self.screen_video.text(), "paused": self.paused,
+                "perception": self.perception_items(now),
+                "perception_stage": getattr(self.live_perception, "stage", "estimate")}
 
     def block_in_placement(self) -> bool:
         return bool(block_in_tray(self.last_frame["block"], self.placement, self.sc.edge))
@@ -575,9 +702,26 @@ class MjSession:
             out["task"] = self.task.ex.view()
         return out
 
+    def write_task_result(self, metrics: dict | None = None) -> dict:
+        """The scenario's checks (and the finals record) to cfg.result; also called by the server when a scenario
+        loaded through it is done."""
+        extra = {"mujoco": mujoco.__version__, "stats": self.stats, "blocks": self.block_color_names}
+        if metrics is not None:
+            extra["metrics"] = metrics
+        if self.random_spawn is not None:
+            extra["random_spawn"] = self.random_spawn
+        res = self.task.result(self.task_obs(), "mujoco", extra)
+        self._task_result_written = True
+        os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
+        with open(self.cfg.result, "w") as f:
+            json.dump(res, f, indent=2, ensure_ascii=False)
+        self.log(f"wrote {self.cfg.result}: {res['passed']}/{res['checks_total']} checks passed")
+        return {"result": self.cfg.result, "passed": res["passed"], "checks": res["checks_total"]}
+
     def finish(self) -> dict:
         if self._finished is not None:
             return self._finished
+        self.metrics_log.close()
         if self.script is not None:
             self.script.finish()
         if self.log_f:
@@ -595,21 +739,16 @@ class MjSession:
         out = {"metrics": summary}
         if self.traj is not None and self.cfg.result:
             out.update(self._write_trajectory_result(summary))
-        if self.task is not None and self.task.scenario is not None and self.cfg.result:
-            res = self.task.result(self.task_obs(), "mujoco", {"mujoco": mujoco.__version__, "stats": self.stats,
-                                                               "metrics": summary, "blocks": self.block_color_names})
-            os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
-            with open(self.cfg.result, "w") as f:
-                json.dump(res, f, indent=2, ensure_ascii=False)
-            self.log(f"wrote {self.cfg.result}: {res['passed']}/{res['checks_total']} checks passed")
-            out.update({"result": self.cfg.result, "passed": res["passed"], "checks": res["checks_total"]})
+        if (self.task is not None and self.task.scenario is not None and self.cfg.result
+                and not getattr(self, "_task_result_written", False)):   # the server wrote it when the order was done
+            out.update(self.write_task_result(summary))
         if self.task is not None:
             self.task.close()
         if self.script is not None and self.cfg.result:
             os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
             passed = sum(x["ok"] for x in self.script.results)
             with open(self.cfg.result, "w") as f:
-                json.dump({"backend": "mujoco", "mujoco": mujoco.__version__, "checks": self.script.results,
+                json.dump({"backend": "mujoco", "mujoco": mujoco.__version__, "checks": self.script.results, "marks": marks_summary(self.script.marks),
                            "stats": self.stats, "metrics": summary, "script": self.cfg.script,
                            "settings": self.settings(),
                            "color_dr": {"enabled": self.color_dr.enabled, "seed": self.color_dr.seed,

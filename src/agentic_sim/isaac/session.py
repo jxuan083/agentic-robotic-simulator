@@ -28,6 +28,7 @@ import numpy as np
 import torch
 
 import isaaclab.sim as sim_utils
+import omni.ui
 import omni.usd
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 
@@ -43,6 +44,8 @@ from agentic_sim.isaac.so101 import WORKSHOP_COMMIT
 from agentic_sim.isaac.viewport_handle import EEHandle
 from agentic_sim.kinematics import ARM_JOINTS, GRIPPER_JOINT
 from agentic_sim.teleop.ee_target import REASONS, load_controller
+from agentic_sim.teleop.script_core import input_dt, marks_summary
+from agentic_sim.workspace_status import perception_items
 
 CONTROL_DT = 1.0 / 60.0
 PHYSICS_DT = 1.0 / 240.0
@@ -87,9 +90,17 @@ class SessionConfig:
     perception_camera: str = "both"
     perception_hz: float = 2.0
     perception_json: str | None = None
+    perception_stage: str = "estimate"   # "capture": capture only, no estimation (benchmark)
+    perception_delay: float = 0.0        # test only: extra seconds before each estimate completes
+    perception_fault: str | None = None  # test only: CAMERA:AFTER:DURATION, estimates of CAMERA fail for a while
+    annotations: str = "on"              # camera cells start annotated ("on") or raw ("off")
+    metrics_log: str | None = None       # one JSON line per host second: UI FPS, RTF, perception age
+    metrics_run_id: str | None = None    # written into every metrics line (a benchmark binds its report to it)
+    screen_video_dir: str | None = None  # control directory of the right-column screen video (agentic_sim.screen_video)
     record: str | None = None          # demonstration capture (issue #13): episodes are written under this directory
     target_color: str | None = None    # colour of the block to pick (capture); default: the first block's colour
     record_hz: float = 20.0            # recorded control rate (images and rows), like the lab captures
+    record_run_id: str | None = None   # id in every recorder event / manifest (the launcher follows its own run)
     profile: bool = False
     device: str = "cpu"
 
@@ -168,6 +179,17 @@ class TeleopSession:
         # the layout state can outlive a session (server): reuse it, pointed at this session's panel
         self.focus_mode = focus_layout or FocusMode(self.panel.window, log)
         self.focus_mode.set_panel(self.panel.window)
+        # operator workspace hooks into this session (the layout object outlives sessions)
+        self.focus_mode.extra_windows = lambda: list(self.sensor_views.windows.values())
+        self.focus_mode.perception_windows = (
+            lambda visible: self.live_perception.set_windows_visible(visible)
+            if getattr(self, "live_perception", None) is not None else None)
+        self.focus_mode.cells(cfg.annotations == "on").annotate_default = cfg.annotations == "on"
+        from agentic_sim.workspace_status import Clocks, MetricsLog
+        self.clocks = Clocks()
+        self.metrics_log = MetricsLog(cfg.metrics_log, run_id=cfg.metrics_run_id)
+        from agentic_sim.screen_video import ScreenVideoClient, isaac_window_id
+        self.screen_video = ScreenVideoClient(cfg.screen_video_dir, isaac_window_id, "isaac", log)
         self.block_colors = [abgr(c) for c in h.block_colors]
         self.script = None
         set_camera = lambda eye, tgt: sim.set_camera_view(eye, tgt)  # noqa: E731
@@ -203,9 +225,12 @@ class TeleopSession:
         self.live_perception = None
         if cfg.live_perception:
             from agentic_sim.isaac.live_perception import LivePerception
+            from agentic_sim.perception.live import InjectedFault
             self.live_perception = LivePerception(scene_cfg, self.sensor_views,
                                                   cfg.perception_camera, cfg.perception_hz, log,
-                                                  cfg.perception_json)
+                                                  cfg.perception_json, stage=cfg.perception_stage,
+                                                  delay_s=cfg.perception_delay,
+                                                  fault=InjectedFault.parse(cfg.perception_fault))
         self.log_f = self.log_w = None
         if cfg.log:
             os.makedirs(os.path.dirname(cfg.log) or ".", exist_ok=True)
@@ -262,7 +287,7 @@ class TeleopSession:
             block_colors=self.block_color_names, trays=trays(self.scene_cfg), edge=self.edge,
             gripper={"open": self.ctrl.p.gripper_open, "closed": self.ctrl.p.gripper_closed}, cameras=cams,
             control_dt=CONTROL_DT, record_hz=cfg.record_hz, operator="scripted_input" if cfg.script else "human",
-            lens_mode=cams.get("wrist", {}).get("lens_mode"), log=self.log)
+            lens_mode=cams.get("wrist", {}).get("lens_mode"), log=self.log, run_id=cfg.record_run_id)
 
     def _record(self, q_meas):
         robot = self.robot
@@ -387,6 +412,8 @@ class TeleopSession:
         self.handle.cancel()
         if getattr(self, "live_perception", None) is not None:
             self.live_perception.invalidate()
+        if getattr(self, "clocks", None) is not None:
+            self.clocks.reset()           # no RTF across a Reset
         self.log(f"reset: session={ctrl.state.session}")
         if getattr(self, "recorder", None) is not None:
             self.recorder.reset()
@@ -448,6 +475,10 @@ class TeleopSession:
         for a in actions:
             if a == "focus":  # layout only: does not touch the teleop state
                 self.focus_mode.toggle()
+            elif a in ("annotate_global", "annotate_wrist"):   # display only: perception keeps running
+                self.focus_mode.cells().toggle(a.split("_")[1])
+            elif a == "screen_video":   # the window's MP4 (host agent); the demo recorder is not affected
+                self.screen_video.toggle()
             elif a == "pause":
                 self.paused = not self.paused
                 kb.clear()
@@ -493,9 +524,12 @@ class TeleopSession:
                 panel.cancel()
                 handle.cancel()
                 self.task.step(self.task_obs())
+            # a person's keys move by host time (the operator's feel); injected script keys by simulated time, so
+            # the same script commands the same motion however fast the window draws
+            dt_in = input_dt(dt, CONTROL_DT, script is not None)
             lin, yaw, grip = kb.directions()
-            ctrl.step_velocity(lin, yaw, dt, "keyboard")
-            ctrl.step_gripper(grip, dt, "keyboard")
+            ctrl.step_velocity(lin, yaw, dt_in, "keyboard")
+            ctrl.step_gripper(grip, dt_in, "keyboard")
             # mouse: viewport handle (primary) + top view (auxiliary), both relative, one IK update per frame
             d1, t1 = handle.pop_drag()
             d2, t2 = panel.pop_drag()
@@ -508,7 +542,7 @@ class TeleopSession:
                 ctrl.wheel(w1["coarse"] + w2["coarse"])
             if w1["fine"] + w2["fine"]:
                 ctrl.wheel(w1["fine"] + w2["fine"], fine=True)
-            ctrl.step_goals(dt)
+            ctrl.step_goals(dt_in)
             times = t1 + t2
             if times:
                 input_lat_ms = (time.monotonic() - min(times)) * 1000.0
@@ -549,6 +583,17 @@ class TeleopSession:
         handle.update(s.pos, kind_of(s.status))
         self.focus_mode.update()
         self.sensor_views.update()
+        self.clocks.frame(now, self.t_sim, self.paused)
+        if self.focus_mode.active or self.metrics_log.path:
+            from agentic_sim.isaac.workspace import status_info
+            from agentic_sim.workspace_status import status_lines
+            info = status_info(self, now)
+            self.focus_mode.frame(status_lines(info) if self.focus_mode.active else None, self.live_perception,
+                                  self.sensor_views.windows, now)
+            self.metrics_log.sample(now, self.t_sim, self.clocks, info["perception"],
+                                    {"workspace": self.focus_mode.active})
+        else:
+            self.focus_mode.frame(None, self.live_perception, self.sensor_views.windows, now)
         if self.focus_at_frame >= 0:
             self.focus_at_frame -= 1
             if self.focus_at_frame < 0:
@@ -560,6 +605,7 @@ class TeleopSession:
         if self.task is not None:
             mode = "task executor"
         panel.set_task(self.task.ex.panel_lines() if self.task is not None else None)
+        panel.set_screen(self.screen_video.button_text(), self.screen_video.text(), self.screen_video.enabled)
         panel.update(mode, self.paused, kb.shift, s.status, s.message, s.pos, s.yaw_offset, ee, all_pos, s.gripper,
                      self.block_colors, tilt_deg=tilt_deg, in_placement=n_placed)
         follow_mm = float(np.linalg.norm(s.pos - ee)) * 1000.0
@@ -599,7 +645,7 @@ class TeleopSession:
 
         if script is not None:
             h, usd_ctx, color_dr = self.h, self.usd_ctx, self.color_dr
-            ns = {"target": s.pos, "ee": ee, "block": bpos, "status": s.status, "gripper": s.gripper,
+            ns = {"t_sim": self.t_sim, "target": s.pos, "ee": ee, "block": bpos, "status": s.status, "gripper": s.gripper,
                   "jaw": jaw, "paused": self.paused, "session": s.session,
                   "focused": focused, "held": set(kb.held), "rejected": s.rejected, "yaw_offset": s.yaw_offset,
                   "block_in_placement": block_in_tray(bpos, h.trays["placement_beige"], self.edge),
@@ -617,6 +663,20 @@ class TeleopSession:
                   "selection": list(usd_ctx.get_selection().get_selected_prim_paths()),
                   "focus_mode": self.focus_mode.active, "editors_visible": self.focus_mode.editor_windows_visible(),
                   "front_tabs": self.focus_mode.front_tabs(),
+                  "fullscreen": bool(__import__("omni.appwindow").appwindow.get_default_app_window().is_fullscreen()),
+                  "cells": self.focus_mode.cells().state(),
+                  "status_visible": bool(self.focus_mode.status.window.visible),
+                  "panel_front": _in_front(self.panel.window), "status_front": _in_front(self.focus_mode.status.window),
+                  "tab_bars": [w.title for w in [omni.ui.Workspace.get_window("Viewport"), self.panel.window,
+                                                 self.focus_mode.status.window, *self.sensor_views.windows.values()]
+                               if w is not None and w.visible and getattr(w, "dock_tab_bar_enabled", False)],
+                  "dup_windows": _duplicate_windows(),
+                  "ui_fps": self.clocks.ui_fps, "rtf": self.clocks.rtf,
+                  "screen": dict(self.screen_video.status() or {}), "screen_text": self.screen_video.text(),
+                  "demo_recording": bool(self.recorder is not None and self.recorder.w is not None
+                                         and self.recorder.step0 is not None),
+                  "demo_frames": self.recorder.w.n if self.recorder is not None and self.recorder.w is not None else 0,
+                  "perception": perception_items(self.live_perception, time.monotonic()),
                   "dr": color_dr.current, "dr_records": len(color_dr.records),
                   "block_mat_rgb": [round(float(x), 6) for x in
                                     usd_ctx.get_stage().GetPrimAtPath("/World/Block/geometry/material/Shader")
@@ -712,7 +772,7 @@ class TeleopSession:
             os.makedirs(os.path.dirname(self.cfg.result) or ".", exist_ok=True)
             passed = sum(r["ok"] for r in self.script.results)
             with open(self.cfg.result, "w") as f:
-                json.dump({"checks": self.script.results, "stats": self.stats, "metrics": summary,
+                json.dump({"checks": self.script.results, "marks": marks_summary(self.script.marks), "stats": self.stats, "metrics": summary,
                            "script": self.cfg.script, "settings": self.settings(),
                            "color_dr": {"enabled": self.color_dr.enabled, "seed": self.color_dr.seed,
                                         "records": self.color_dr.records}}, f, indent=2)
@@ -728,6 +788,9 @@ class TeleopSession:
         if self.closed:
             return
         self.finish()
+        self.metrics_log.close()
+        self.focus_mode.extra_windows = lambda: []
+        self.focus_mode.perception_windows = lambda visible: None
         if self.live_perception is not None:
             self.live_perception.close()
             self.live_perception = None
@@ -755,6 +818,29 @@ class TeleopSession:
         self.sim = None
         sim_utils.create_new_stage()
         self.closed = True
+
+
+def _in_front(w) -> bool:
+    """Docked and the visible tab of its dock node (not hidden behind another window)."""
+    try:
+        return bool(w.visible and w.docked and w.is_selected_in_dock())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _duplicate_windows() -> list:
+    """Titles of visible windows that exist more than once (a rebuilt scene must not leave copies behind)."""
+    import omni.ui as ui
+    seen, dup = set(), set()
+    for w in ui.Workspace.get_windows():
+        try:
+            if not w.visible:
+                continue
+            t = w.title
+        except Exception:  # noqa: BLE001
+            continue
+        (dup if t in seen else seen).add(t)
+    return sorted(dup)
 
 
 def session_config_with(cfg: SessionConfig, settings: dict) -> SessionConfig:

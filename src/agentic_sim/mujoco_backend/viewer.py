@@ -15,8 +15,11 @@ skipped), with cursor positions in window coordinates.
 
 from __future__ import annotations
 
+import time
+
 import glfw
 import mujoco
+
 import numpy as np
 
 from agentic_sim.mujoco_backend import panel as P
@@ -28,6 +31,7 @@ from agentic_sim.teleop.keys import KeyState
 # sensor camera insets in the top-right corner of the 3D view: (key, label, inset height in window units)
 SENSOR_INSETS = (("global", "D455 global", 200), ("wrist", "wrist camera", 180))
 INSET_MARGIN = 8
+STRIP_RATIO = 0.32      # operator workspace: share of the window height for the bottom camera strip
 RING_RGBA = {"ok": (0.25, 0.82, 0.25, 1.0), "limit": (1.0, 0.63, 0.13, 1.0), "blocked": (1.0, 0.25, 0.25, 1.0)}
 EXTRA_KEYS = {glfw.KEY_BACKSPACE: "BACKSPACE", glfw.KEY_ENTER: "ENTER", glfw.KEY_KP_ENTER: "KP_ENTER",
               glfw.KEY_ESCAPE: "ESCAPE", glfw.KEY_TAB: "TAB", glfw.KEY_LEFT_SHIFT: "LEFT_SHIFT",
@@ -36,6 +40,7 @@ EXTRA_KEYS = {glfw.KEY_BACKSPACE: "BACKSPACE", glfw.KEY_ENTER: "ENTER", glfw.KEY
 
 def _key_names():
     names = {getattr(glfw, f"KEY_{c}"): c for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
+    names.update({glfw.KEY_1: "KEY_1", glfw.KEY_2: "KEY_2"})   # carb's names for the digit keys (camera cells)
     names.update(EXTRA_KEYS)
     return names
 
@@ -128,6 +133,9 @@ class Viewer:
         self.show_sensor_cameras = True   # scenes with sensor cameras show them as insets in the 3D view
         self._sensor = {}                 # key -> (MjvCamera, MjvScene, aspect)
         self._inset_rects = []
+        self._cell_rects = {}             # camera key -> rect: a click switches raw / annotated
+        self.workspace = False            # operator workspace (M): fullscreen, cameras in a strip below, status
+        self._windowed = None
         glfw.set_key_callback(self.window, self._on_key)
         glfw.set_char_callback(self.window, self._on_char)
         glfw.set_window_focus_callback(self.window, self._on_focus)
@@ -185,6 +193,13 @@ class Viewer:
         fwd = np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)])
         return np.array(self.cam.lookat, float) - self.cam.distance * fwd
 
+    def x11_window_id(self) -> int:
+        """X window id of this window (the screen video records exactly this window)."""
+        wid = glfw.get_x11_window(self.window)
+        if not wid:
+            raise RuntimeError("no X11 window")
+        return int(wid)
+
     def focused(self) -> bool:
         return bool(glfw.get_window_attrib(self.window, glfw.FOCUSED))
 
@@ -209,6 +224,12 @@ class Viewer:
             self.keys.clear()  # the session also drops input every frame without focus
 
     def _on_button(self, window, button, action, mods):
+        if button == glfw.MOUSE_BUTTON_LEFT and action == glfw.PRESS and self.session is not None:
+            x, y = self._cursor
+            for key, (rx, ry, rw, rh) in self._cell_rects.items():
+                if rx <= x < rx + rw and ry <= y < ry + rh:     # a camera cell: switch raw / annotated
+                    self.session.annotate[key] = not self.session.annotate.get(key, True)
+                    return
         name = {glfw.MOUSE_BUTTON_LEFT: "left", glfw.MOUSE_BUTTON_RIGHT: "right",
                 glfw.MOUSE_BUTTON_MIDDLE: "middle"}.get(button)
         if name is not None:
@@ -362,8 +383,18 @@ class Viewer:
             glfw.poll_events()
             return
         s = session
+        if getattr(s, "workspace_toggle", False):
+            s.workspace_toggle = False
+            self.set_workspace(not self.workspace)
+        # pyGLFW returns a NULL pointer (falsy), not None, for a windowed window
+        s.workspace_active, s.fullscreen = self.workspace, bool(glfw.get_window_monitor(self.window))
         if getattr(s, "live_perception", None) is not None:
+            had_focus, n_ctx = self.focused(), len(getattr(s.live_perception, "renderers", {}))
             s.live_perception.update(s.d)
+            if had_focus and len(getattr(s.live_perception, "renderers", {})) > n_ctx:
+                # a new offscreen renderer opens a hidden GLFW window, which takes the keyboard focus from this one
+                # on X11: the operator's keys and drags would be dropped as "focus lost" until a click; take it back
+                glfw.focus_window(self.window)
         if getattr(s, "reset_view_requested", False):
             s.reset_view_requested = False
             self.reset_camera()
@@ -375,8 +406,10 @@ class Viewer:
             return
         cv = Canvas(self.con, win_w, win_h, fb_w, fb_h)
         view_w = max(100, win_w - P.WIDTH)
-        self.view_rect = (0, 0, view_w, win_h)
-        layout = self._inset_layout(view_w)
+        strip_h = int(win_h * STRIP_RATIO) if (self.workspace and self.show_sensor_cameras and self._sensor) else 0
+        self.view_rect = (0, 0, view_w, win_h - strip_h)
+        layout, status_rect = (self._strip_layout(view_w, win_h, strip_h) if strip_h
+                               else (self._inset_layout(view_w), None))
         lens_images = self._prerender_lens(cv, s, layout)
         # 3D view
         mujoco.mjv_updateScene(self.model, s.d, self.opt, self.pert, self.cam, mujoco.mjtCatBit.mjCAT_ALL, self.scene)
@@ -387,7 +420,7 @@ class Viewer:
         banner = ("PAUSED" if s.paused else "") or ("" if s.focused() else "focus lost: input dropped")
         if extra:
             banner = (banner + "   " if banner else "") + extra
-        if getattr(s, "live_perception", None) is not None:
+        if getattr(s, "live_perception", None) is not None and not self.workspace:   # workspace: status column
             pstate = s.live_perception.state()["cameras"]
             parts = []
             for key in ("global", "wrist"):
@@ -411,7 +444,9 @@ class Viewer:
             mujoco.mjr_overlay(mujoco.mjtFont.mjFONT_NORMAL, mujoco.mjtGridPos.mjGRID_TOPLEFT,
                                cv.mjrect(*self.view_rect), banner, "", self.con)
         self._draw_sensor_insets(cv, s, layout, lens_images)
-        if getattr(s, "live_perception", None) is not None:
+        if status_rect is not None:
+            self._draw_status(cv, s, status_rect)
+        elif getattr(s, "live_perception", None) is not None:
             self._draw_perception_centers(cv, s, view_w, layout)
         # panel + top view
         s.panel.draw(cv, view_w, 0, win_h)
@@ -444,6 +479,42 @@ class Viewer:
             y += h + INSET_MARGIN
         return out
 
+    def _strip_layout(self, view_w, win_h, strip_h):
+        """Operator workspace: global and wrist side by side along the bottom, the status box after them."""
+        out, x, m = [], INSET_MARGIN, INSET_MARGIN
+        y, h = win_h - strip_h + m, strip_h - 2 * m
+        for key, label, _ in SENSOR_INSETS:
+            if key not in self._sensor:
+                continue
+            w = h * self._sensor[key][2]
+            out.append((key, label, x, y, w, h))
+            x += w + m
+        status = (x, y, max(0, view_w - x - m), h)
+        return out, (status if status[2] > 120 else None)
+
+    def set_workspace(self, on: bool):
+        """Fullscreen on the primary monitor (operator workspace) or back to the window as it was."""
+        if on == self.workspace:
+            return
+        if on:
+            self._windowed = (glfw.get_window_pos(self.window), glfw.get_window_size(self.window))
+            mon = glfw.get_primary_monitor()
+            mode = glfw.get_video_mode(mon)
+            glfw.set_window_monitor(self.window, mon, 0, 0, mode.size.width, mode.size.height, mode.refresh_rate)
+        elif self._windowed is not None:
+            (x, y), (w, h) = self._windowed
+            glfw.set_window_monitor(self.window, None, x, y, w, h, 0)
+        self.workspace = on
+        self.log(f"operator workspace {'on (fullscreen)' if on else 'off'}")
+
+    def _draw_status(self, cv, s, rect):
+        from agentic_sim.workspace_status import status_lines
+        x, y, w, h = rect
+        cv.rect(x, y, w, h, (0.08, 0.09, 0.11, 0.92))
+        line_h = max(14, int(cv.line_h)) + 2
+        for i, row in enumerate(status_lines(s.status_info(time.monotonic()))[:max(0, int(h // line_h))]):
+            cv.text(x + 8, y + 6 + i * line_h, row, (0.95, 0.95, 0.95))
+
     def _prerender_lens(self, cv, s, layout) -> dict:
         """Wrist camera in "real" lens mode: render the wider pinhole offscreen at 1.5x the inset's framebuffer size,
         read it back and resample it to the raw sensor (agentic_sim.wrist_lens). Returns key -> bottom-up RGB image
@@ -474,15 +545,27 @@ class Viewer:
         return out
 
     def _draw_sensor_insets(self, cv, s, layout, lens_images):
-        """Sensor cameras (global D455, wrist) rendered from the scene's camera models, top-right of the 3D view."""
+        """Sensor cameras (global D455, wrist) from the scene's camera models: insets top-right of the 3D view, or the
+        workspace's bottom strip. Each cell shows the raw camera or, switched on (key 1 / 2 or a click), the annotated
+        snapshot of the image the estimate came from (agentic_sim.workspace_status.cell_view: a missing or stale
+        result leaves the raw camera, with the reason in the cell's label)."""
+        from agentic_sim.workspace_status import cell_view, perception_item
         self._inset_rects = []
+        self._cell_rects = {}
+        perc = getattr(s, "live_perception", None)
+        pstate = perc.state()["cameras"] if perc is not None else {}
+        now = time.monotonic()
         for key, label, x, y, w, h in layout:
             cam, scn, _, _, _ = self._sensor[key]
             cv.rect(x - 2, y - 2, w + 4, h + 4, (0.1, 0.1, 0.12, 1.0))
-            if (getattr(s, "live_perception", None) is not None and key in s.live_perception.selected
-                    and s.live_perception.overlay(key) is not None):
+            if perc is None or key not in perc.selected:
+                mode, text = "raw", "raw (perception off)"
+            else:
+                mode, text = cell_view(s.annotate.get(key, True), perception_item(pstate.get(key), now))
+            s.cells[key] = {"annotate": s.annotate.get(key, True), "text": text, "image_visible": mode == "annotated"}
+            if mode == "annotated" and perc.overlay(key) is not None:
                 import cv2
-                overlay = s.live_perception.overlay(key)
+                overlay = perc.overlay(key)
                 rect = cv.mjrect(x, y, w, h)
                 pixels = cv2.resize(overlay, (rect.width, rect.height), interpolation=cv2.INTER_AREA)
                 mujoco.mjr_drawPixels(np.flipud(pixels).copy().ravel(), None, rect, self.con)
@@ -492,7 +575,11 @@ class Viewer:
                 mujoco.mjv_updateScene(self.model, s.d, self.opt, self.pert, cam, mujoco.mjtCatBit.mjCAT_ALL, scn)
                 mujoco.mjr_render(cv.mjrect(x, y, w, h), scn, self.con)
             cv.label(x, y, cv.text_width(label) + 12, cv.line_h + 4, label, (0.1, 0.1, 0.12, 0.8))
+            hint = f"[{1 if key == 'global' else 2}] {text}"
+            cv.label(x, y + h - cv.line_h - 4, min(w, cv.text_width(hint) + 12), cv.line_h + 4, hint,
+                     (0.0, 0.0, 0.0, 0.7))
             self._inset_rects.append((x - 2, y - 2, w + 4, h + 4))
+            self._cell_rects[key] = (x, y, w, h)
 
     def _draw_perception_centers(self, cv, s, view_w, layout):
         """Readable XYZ rows for every estimated candidate, in separate global/wrist sections."""

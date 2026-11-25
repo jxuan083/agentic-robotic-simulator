@@ -1,0 +1,38 @@
+# Screen video next to a demonstration (PR #17 round 3), test only: the episode starts first, then the right-column
+# screen video; the MP4 is stopped once the block is lifted, and the place / release continue in the episode only.
+# Same keyboard pick and place as test_keyboard_yellow.yaml (simulated-time key motion and waits). Needs an agent:
+#   uv run tools/screen_video.py agent outputs/screen_video/control/<id> &   (tools/sim.py starts its own)
+- {wait: 4.0}
+- {hold: [], until: "demo_recording", timeout: 90}
+- {mark: episode_started}
+- {click: screen_video}
+- {hold: [], until: "screen.get('state') == 'recording'", timeout: 10}
+- {mark: screen_started}
+- {check: "m['screen_started']['demo_frames'] > 0", label: "order: the episode was already recording when the screen video started"}
+- {hold: [O], until: "gripper >= 0.5", sim_timeout: 3}
+- {hold: [W], until: "target[0] >= 0.230", sim_timeout: 5}
+- {hold: [A], until: "target[1] >= 0.155", sim_timeout: 5}
+- {hold: [Z], until: "yaw_offset <= -0.60", sim_timeout: 3}
+- {hold: [Q], until: "target[2] <= 0.029", sim_timeout: 5}
+- {settle: 1.2}
+- {mark: grasp}
+- {hold: [C], until: "gripper <= -0.17", sim_timeout: 3}
+- {settle: 1.0}
+- {check: "jaw > 0.05", label: "grasp: jaw stopped by the block"}
+- {hold: [E], until: "target[2] >= 0.105", sim_timeout: 5}
+- {settle: 0.8}
+- {check: "blocks[1][2] > 0.06", label: "lift: yellow block raised"}
+- {click: screen_video}
+- {mark: screen_stop}
+- {hold: [], until: "screen.get('state') == 'saved'", timeout: 60}
+- {check: "screen['path'] == m['screen_started']['screen']['path']", label: "screen video: saved after the lift"}
+- {hold: [D], until: "target[1] <= -0.130", sim_timeout: 8}
+- {settle: 0.8}
+- {hold: [Q], until: "target[2] <= 0.045", sim_timeout: 5}
+- {settle: 0.6}
+- {hold: [O], until: "gripper >= 0.5", sim_timeout: 3}
+- {mark: released}
+- {settle: 0.8}
+- {hold: [E], until: "target[2] >= 0.105", sim_timeout: 5}
+- {settle: 3.0}
+- {check: "screen.get('state') == 'saved' and len(screen['saved']) == 1", label: "screen video: one file, not restarted by the episode"}

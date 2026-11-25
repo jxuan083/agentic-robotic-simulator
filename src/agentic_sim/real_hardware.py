@@ -118,6 +118,70 @@ class PositionBus:
         return dict(self.last_read)
 
 
+LEADER_TORQUE_LIMIT = 500  # of 1000
+
+
+class Leader(PositionBus):
+    """Leader arm. Torque stays off except while it is driven to the follower pose for a hand-over."""
+
+    def __init__(self, bus):
+        super().__init__(bus)
+        self.driven = False
+        self.resolution = bus.model_resolution_table["sts3215"] - 1
+
+    def _torque_states(self):
+        return Follower._torque_states(self)
+
+    def drive_on(self):
+        """Hold the current pose with torque on: the goal is written and verified before torque enable."""
+        if set(self.bus.sync_read("Operating_Mode", normalize=False, num_retry=2).values()) != {0}:
+            raise RuntimeError("leader must be in position mode to be driven")
+        raw = self.bus.sync_read("Present_Position", normalize=False, num_retry=2)
+        self.driven = True
+        self.bus.sync_write("Goal_Position", raw, normalize=False, num_retry=2)
+        goals = {j: self.bus.read("Goal_Position", j, normalize=False, num_retry=2) for j in JOINTS}
+        if any(abs(goals[j] - raw[j]) > 2 for j in JOINTS):
+            self.release()
+            raise RuntimeError("could not verify the leader's stationary goal")
+        # Half torque while driven: a blocked leader stops instead of drawing enough current to drop the bus.
+        self.torque_limit = self.bus.sync_read("Torque_Limit", normalize=False, num_retry=3)
+        self.bus.sync_write("Torque_Limit", dict.fromkeys(JOINTS, LEADER_TORQUE_LIMIT), normalize=False, num_retry=3)
+        self.bus.sync_write("Torque_Enable", dict.fromkeys(JOINTS, 1), normalize=False, num_retry=2)
+        if self._torque_states() != dict.fromkeys(JOINTS, 1):
+            self.release()
+            raise RuntimeError("not all leader motors acknowledged torque enable")
+
+    def drive(self, target):
+        if not self.driven:
+            raise RuntimeError("leader torque is off")
+        target = pose(target)
+        for joint in JOINTS[:-1]:
+            c = self.bus.calibration[joint]
+            limit = (c.range_max - c.range_min) * 180 / self.resolution
+            target[joint] = max(-limit, min(limit, target[joint]))
+        target["gripper"] = max(0.0, min(100.0, target["gripper"]))
+        self.bus.sync_write("Goal_Position", target, num_retry=3)
+
+    def read(self):
+        self.last_read = pose(self.bus.sync_read("Present_Position", num_retry=3))
+        return dict(self.last_read)
+
+    def release(self):
+        off = dict.fromkeys(JOINTS, 0)
+        for _ in range(6):
+            try:
+                self.bus.sync_write("Torque_Enable", off, normalize=False, num_retry=3)
+                if self.bus.sync_read("Torque_Enable", normalize=False, num_retry=3) == off:
+                    self.driven = False
+                    if getattr(self, "torque_limit", None):
+                        self.bus.sync_write("Torque_Limit", self.torque_limit, normalize=False, num_retry=3)
+                    return
+            except (ConnectionError, RuntimeError, OSError):
+                pass
+            sleep(.05)
+        raise RuntimeError("could not verify leader torque off")
+
+
 class Follower(PositionBus):
     def __init__(self, bus):
         super().__init__(bus)
@@ -199,7 +263,7 @@ def _open_arm(name, role, spec, *, managed=False, resume=False):
     # Keep the LeRobot object alive while using its calibrated motor bus.
     device = _device(role, spec)
     bus = device.bus
-    arm = PositionBus(bus) if role == "leader" else Follower(bus)
+    arm = Leader(bus) if role == "leader" else Follower(bus)
     try:
         bus.connect()
         if not bus.is_calibrated:
@@ -218,6 +282,8 @@ def _open_arm(name, role, spec, *, managed=False, resume=False):
         finally:
             if role == "follower" and not managed:
                 arm.close()
+            if role == "leader" and arm.driven:
+                arm.release()  # never leave the leader stiff after the program ends
     finally:
         if bus.is_connected:
             bus.disconnect(disable_torque=False)

@@ -112,6 +112,66 @@ class FakeLeader:
         return dict(frames[-1][1])
 
 
+class FakeDrivenLeader:
+    """Leader with torque: servoes to its goal while driven; after release it sags, then follows the operator's
+    displacement keyframes (seconds after release, joint delta)."""
+
+    def __init__(self, clock, start, moves=(), *, sag=None, tau=0.08):
+        self.clock = clock
+        self.state = pose(start)
+        self.goal = None
+        self.driven = False
+        self.released_at = None
+        self.base = None
+        self.moves = [(t, pose(d)) for t, d in moves]
+        self.sag = sag if sag is not None else {"shoulder_lift": -4.0, "elbow_flex": 3.0}
+        self.tau = tau
+        self.t = clock()
+        self.log = []
+
+    def _delta(self, s):
+        zero = dict.fromkeys(JOINTS, 0.0)
+        frames = [(0.0, zero), *self.moves]
+        for (t0, a), (t1, b) in zip(frames, frames[1:]):
+            if s <= t1:
+                return lerp(a, b, max(0.0, (s - t0) / (t1 - t0)))
+        return dict(frames[-1][1])
+
+    def _advance(self):
+        dt = (self.clock() - self.t) / 1e9
+        self.t = self.clock()
+        if self.driven and dt > 0:
+            k = 1 - exp(-dt / self.tau)
+            for j in JOINTS:
+                self.state[j] += (self.goal[j] - self.state[j]) * k
+        elif self.released_at is not None:
+            s = (self.clock() - self.released_at) / 1e9
+            delta = self._delta(s)
+            self.state = {j: self.base[j] + self.sag.get(j, 0.0) * min(1.0, s / 0.3) + delta[j] for j in JOINTS}
+
+    def read(self):
+        self._advance()
+        return dict(self.state)
+
+    def drive_on(self):
+        self.goal = self.read()
+        self.driven = True
+        self.log.append(("on", self.clock()))
+
+    def drive(self, target):
+        if not self.driven:
+            raise RuntimeError("fake leader driven with torque off")
+        self._advance()
+        self.goal = pose(target)
+
+    def release(self):
+        self._advance()
+        self.driven = False
+        self.released_at = self.clock()
+        self.base = dict(self.state)
+        self.log.append(("off", self.clock()))
+
+
 def operator_path(start=PARK, offset=3.0):
     """Leader near park, then out of the support, then to the channel."""
     near = {j: v + (offset if j in BODY else 0.0) for j, v in start.items()}
