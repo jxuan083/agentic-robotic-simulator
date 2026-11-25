@@ -485,6 +485,31 @@ class PickPlaceRoundCase(RouteCase):
         self.assertLess(body_gap(last, CHANNEL), 30)          # the demonstration ended near the start pose
         self.assertTrue(any(cmd["shoulder_pan"] > grasp["shoulder_pan"] + 30 for _, cmd in follower.sent))
 
+    def test_wrist_turned_at_the_end_still_goes_straight_and_is_restored_before_the_route(self):
+        from agentic_sim.real_grasp import pick_place_round
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        grasp = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 20, "wrist_roll": CHANNEL["wrist_roll"] + 30}
+        d = lambda pose_: {j: pose_[j] - PARK[j] for j in PARK}  # noqa: E731
+        moves = [(0.5, dict.fromkeys(PARK, 0.0)), (3.0, d(VIA)), (6.0, d(grasp)),
+                 (9.0, d(CHANNEL) | {"wrist_roll": CHANNEL["wrist_roll"] + 35 - PARK["wrist_roll"]})]
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        term = ScriptedTerminal(clock, [(18.0, "c")], ("a", "y", "s"))   # no "far from the start pose" menu
+        driver = self.driver(follower, term, clock, "pick-wrist")
+        result = pick_place_round(driver, FakeDrivenLeader(clock, PARK, moves), data, FakeWriter(clock), lambda: None,
+                                  color="red", destination="beige", slot={"index": 1, "xy": [70, 30]}, quads=None)
+        driver.close_logs()
+        self.assert_released_at_park(follower)
+        self.assertTrue(result["success"])
+        sent = [cmd for _, cmd in follower.sent]
+        # the demo turned the wrist past the start-pose angle (the fake route itself only turns it the other way)
+        turned = max(i for i, cmd in enumerate(sent) if cmd["wrist_roll"] - CHANNEL["wrist_roll"] > 20)
+        at_start = next(i for i in range(turned, len(sent)) if body_gap(sent[i], CHANNEL) < 1.0)
+        self.assertLess(turned, at_start)                     # the wrist is back before the route to park starts
+
     def test_round_chooser_sets_the_colour_and_cancels_on_an_empty_tray(self):
         from agentic_sim.real_grasp import pick_place_round
         from agentic_sim.real_route_fake import FakeDrivenLeader
