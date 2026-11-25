@@ -1,0 +1,34 @@
+# Operator workspace (MuJoCo, lab_20261120 with live perception): M enters fullscreen with the 3D view, the panel
+# on the right and the camera strip with the status box below; the EE drag, the raw / annotated switch (keys 1 / 2),
+# pause, Reset and the keyboard keep working; M again restores the window.
+- {wait: 3.0}
+- {tap: M}
+- {wait: 2.0}
+- {check: "focus_mode and fullscreen", label: "workspace: fullscreen"}
+- {vdrag_to: [0.22, 0.06], tol: 0.003, timeout: 10}
+- {check: "abs(target[0] - 0.22) < 0.004 and abs(target[1] - 0.06) < 0.004", label: "workspace: EE drag in the 3D view"}
+- {wait: 3.0}
+- {check: "cells['global']['annotate'] and cells['wrist']['annotate']", label: "cells: annotated by default"}
+- {tap: KEY_2}
+- {wait: 0.5}
+- {check: "not cells['wrist']['annotate'] and not cells['wrist']['image_visible'] and cells['global']['annotate']", label: "cells: key 2 switches only the wrist cell to raw"}
+- {tap: KEY_2}
+- {wait: 0.5}
+- {check: "cells['wrist']['annotate']", label: "cells: key 2 switches it back"}
+- {tap: P}
+- {wait: 0.6}
+- {mark: paused1}
+- {wait: 1.0}
+- {check: "paused and rtf is None and t_sim == m['paused1']['t_sim'] and ui_fps is not None", label: "clocks: paused, simulated time stopped, RTF not shown, UI still drawing"}
+- {tap: P}
+- {wait: 2.0}
+- {check: "not paused and rtf is not None and 0.02 < rtf < 3.0", label: "clocks: RTF measured again after the pause"}
+- {tap: R}
+- {wait: 1.5}
+- {check: "focus_mode and fullscreen and abs(target[0] - home[0]) < 0.003 and focused", label: "workspace: reset keeps the layout and the keyboard focus"}
+- {hold: [W], until: "target[0] >= home[0] + 0.02", timeout: 4}
+- {check: "target[0] >= home[0] + 0.019", label: "workspace: keyboard drives the arm"}
+- {tap: M}
+- {wait: 1.5}
+- {check: "not focus_mode and not fullscreen", label: "exit: windowed again"}
+- {wait: 0.5}

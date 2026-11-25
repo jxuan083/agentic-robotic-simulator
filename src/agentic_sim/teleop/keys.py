@@ -14,10 +14,13 @@ MOVE_KEYS = {
 }
 YAW_KEYS = {"Z": -1, "X": +1}
 GRIPPER_KEYS = {"O": +1, "C": -1}  # open / close while held
-ACTION_KEYS = {"P": "pause", "R": "reset", "M": "focus"}
+ACTION_KEYS = {"P": "pause", "R": "reset", "M": "focus",
+               "KEY_1": "annotate_global", "KEY_2": "annotate_wrist"}   # camera cell: raw / annotated snapshot
+MJ_ACTION_KEYS = {"P": "pause", "R": "reset", "M": "focus", "KEY_1": "annotate_global", "KEY_2": "annotate_wrist"}
 SHIFT_KEYS = ("LEFT_SHIFT", "RIGHT_SHIFT")  # modifier only: fine mouse adjustment while held
 
-HELP = "W/S: +X/-X  A/D: +Y/-Y  E/Q: up/down  Z/X: yaw  O/C: open/close  P: pause  R: reset  M: focus view"
+HELP = ("W/S: +X/-X  A/D: +Y/-Y  E/Q: up/down  Z/X: yaw  O/C: open/close  P: pause  R: reset  M: focus view  "
+        "1/2: global/wrist raw or annotated")
 HOLD_KEYS = set(MOVE_KEYS) | set(YAW_KEYS) | set(GRIPPER_KEYS)
 
 

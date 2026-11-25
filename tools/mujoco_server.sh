@@ -37,7 +37,7 @@ case "${1:-}" in
     if [ "${MUJOCO_SERVER_HEADLESS:-0}" = 1 ]; then ARGS+=(--headless)
     else [ -n "$DISPLAY" ] || { echo "set DISPLAY (e.g. export DISPLAY=:1) or MUJOCO_SERVER_HEADLESS=1" >&2; exit 1; }; fi
     cd "$REPO_DIR"
-    nohup uv run --quiet scripts/mujoco_sim_server.py "${ARGS[@]}" > "$LOG" 2>&1 9>&- &
+    nohup uv run --quiet --with "opencv-python-headless>=4.9" scripts/mujoco_sim_server.py "${ARGS[@]}" > "$LOG" 2>&1 9>&- &
     echo $! > "$PID_FILE"
     [ -z "${ARS_CREATED_FILE:-}" ] || echo $! > "$ARS_CREATED_FILE"
     exec 9>&-                                     # started and recorded: release the lock

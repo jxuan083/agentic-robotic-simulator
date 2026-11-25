@@ -7,14 +7,22 @@ only on recorded steps (`grab` callable). One episode starts with the session an
   - Reset or the window closing first: status "complete" with the result evaluated at that moment (success false,
     reason "reset" / "closed").
 After a success nothing is recorded until the next Reset (it starts the next episode).
+
+Progress for a launcher: every state change is appended to <out_dir>/recorder_events.jsonl, one JSON object per
+line with "event" = episode (opened, waiting for the cameras) | recording (first frame written) | progress (every
+`progress_frames` frames) | saved (episode finished: success, reason, frames, duration) | closed (recorder done).
+Every event carries the recorder's run_id (`--record_run_id`, else a fresh one): `tools/sim.py` passes its own and
+shows only those. The same file is written when the capture command runs on its own.
 """
 
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import subprocess
 import time
+import uuid
 
 import numpy as np
 
@@ -23,6 +31,7 @@ from agentic_sim.real_joints import shared_to_lerobot
 from agentic_sim.scene_layout import block_in_tray
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+EVENTS_FILE = "recorder_events.jsonl"
 
 
 def revision() -> dict:
@@ -63,8 +72,16 @@ class DemoRecorder:
     def __init__(self, out_dir: str, *, scene_path: str, experiment: str | None, target_color: str,
                  block_colors: list, trays: dict, edge: float, gripper: dict, cameras: dict, control_dt: float,
                  record_hz: float, operator: str, engine: str = "isaac", lens_mode: str | None = None,
-                 hold_s: float = 1.0, lift_m: float = 0.01, log=print, writer_cls=EpisodeWriter):
+                 hold_s: float = 1.0, lift_m: float = 0.01, log=print, writer_cls=EpisodeWriter,
+                 progress_frames: int = 20, run_id: str | None = None):
         self.out_dir = out_dir
+        os.makedirs(out_dir, exist_ok=True)
+        self.events_path = os.path.join(out_dir, EVENTS_FILE)
+        self.progress_frames = max(1, int(progress_frames))
+        # one id per recorder run, in every event and manifest: a launcher passes its own and reads only those
+        self.run_id = run_id or uuid.uuid4().hex[:12]
+        if not record_hz > 0:
+            raise ValueError(f"record_hz must be > 0 (got {record_hz})")
         self.log = log
         self.target_color = target_color
         self.block_colors = list(block_colors)
@@ -84,7 +101,7 @@ class DemoRecorder:
                          lens_mode=lens_mode, gripper=gripper,
                          trays={k: {kk: (list(vv) if isinstance(vv, (tuple, list, np.ndarray)) else vv)
                                     for kk, vv in t.items()} for k, t in trays.items()},
-                         block_edge=edge, revision=revision())
+                         block_edge=edge, revision=revision(), capture_run_id=self.run_id)
         self.w = None
         self.episodes = []          # manifests of the finished episodes
         self._new()
@@ -107,6 +124,7 @@ class DemoRecorder:
         self.ok_run = 0
         self.last_pos = None
         self.log(f"recording episode {self.w.root} (target {self.target_color}, every {self.stride} control steps)")
+        self._event("episode", episode=self.w.root, target_color=self.target_color, state="waiting_cameras")
 
     def _finish(self, success: bool, reason: str, placed=None, last_step=None):
         if self.w is None:
@@ -118,8 +136,20 @@ class DemoRecorder:
         self.log(f"episode {man['episode_id']}: {'success' if success else 'not successful'} ({reason}), "
                  f"{man['control_frames']} frames, {dur:.1f} s -> {self.w.root}")
         self.episodes.append(dict(man, path=self.w.root))
+        self._event("saved", episode=self.w.root, status=man["status"], success=success, reason=reason,
+                    frames=man["control_frames"], duration_s=man.get("duration_s"),
+                    missing_images=man.get("missing_images"))
         self.w = None
         return man
+
+    def _event(self, event: str, **kw):
+        """One line of <out_dir>/recorder_events.jsonl (progress for a launcher; never fails the recording)."""
+        try:
+            with open(self.events_path, "a") as f:
+                f.write(json.dumps(dict(event=event, run_id=self.run_id, wall_time=round(time.time(), 3),
+                                        pid=os.getpid(), **kw)) + "\n")
+        except OSError:
+            pass
 
     def reset(self):
         """Reset pressed: end the current episode (if still open) and start the next one."""
@@ -130,6 +160,7 @@ class DemoRecorder:
     def close(self):
         if self.w is not None:
             self._finish(False, "closed", last_step=self._last_step)
+        self._event("closed", episodes=[e["path"] for e in self.episodes])
 
     @property
     def recording(self) -> bool:
@@ -165,7 +196,11 @@ class DemoRecorder:
                    "blocks": [{"color": c, "pos": [round(float(x), 6) for x in p], "quat": [round(float(x), 6) for x in r]}
                               for c, (p, r) in zip(self.block_colors, blocks)],
                    "capture_ns": {k: v[1] for k, v in imgs.items() if v is not None}}
-            self.w.add(row, {k: (None if v is None else v[0]) for k, v in imgs.items()})
+            n = self.w.add(row, {k: (None if v is None else v[0]) for k, v in imgs.items()}) + 1
+            if n == 1:
+                self._event("recording", episode=self.w.root, frames=n, target_color=self.target_color)
+            elif n % self.progress_frames == 0:
+                self._event("progress", episode=self.w.root, frames=n)
         # success: a lifted target block resting in the placement tray, jaw command open, for hold_s
         mid = 0.5 * (self.gripper["open"] + self.gripper["closed"])
         placed = None

@@ -19,6 +19,11 @@ class Words:
         items = [(c, n) for c, n in (d or {}).items() if n]
         return "、".join(f"{self.color(c)} {n}" for c, n in items) if items else empty
 
+    def short(self, c: str) -> str:
+        """'紅色' -> '紅' (finals wording: 一藍一紅)."""
+        z = self.color(c)
+        return z[:-1] if z.endswith("色") and len(z) > 1 else z
+
     def choice(self, q: dict, choice: str, color: str | None = None) -> str:
         if choice == "substitute" and color:
             return f"換成{self.color(color)}"
@@ -32,6 +37,13 @@ class Words:
                 return (f"手上的{self.color(q['color'])}積木，新的需求用不到。要放回原位、放到其他位置，還是照樣送出？"
                         f"（問題 {q['id']}）")
             return f"放置盤沒有空位放手上的{self.color(q['color'])}積木。要放回原位，還是放到其他位置？（問題 {q['id']}）"
+        cands = q.get("substitute_candidates") or []
+        if k == "shortage" and set(q.get("options", [])) == {"substitute", "wait"} and len(cands) == 1:
+            done = "".join(NUM.get(1, "一") + self.short(c) for c in q.get("delivery_sequence") or [])
+            missing = "、".join(f"{NUM.get(n, n)}{self.short(c)}" for c, n in (q.get("missing") or {}).items())
+            refill = "、".join(self.short(c) for c in (q.get("missing") or {}))
+            head = f"{done}已放好，" if done else ""
+            return (f"{head}還缺{missing}。要改成{self.short(cands[0])}的，還是等你補{refill}？（問題 {q['id']}）")
         if k == "shortage":
             return (f"已交付 {self.counts(q.get('delivered'))}，還缺 {self.counts(q.get('missing'))}，來源盤已經沒有了。"
                     f"來源盤剩下：{self.counts(q.get('available'))}。要換成其他顏色、減少數量，還是等補料？"
@@ -45,6 +57,8 @@ class Words:
             return f"需求已生效（第 {e['rev']} 版）：{self.counts(e['ledger']['target'])}。"
         if k == "question":
             return self.question(e)
+        if k == "observation_unclear":
+            return f"看不清來源盤（{e.get('reason') or '視野受遮擋或身分不明'}），先繼續觀測，不提問。"
         if k == "question_dropped":
             return f"問題 {e['id']} 已取消：新的需求已經用得到手上的積木，會直接送出。"
         if k == "over_delivery":

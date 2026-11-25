@@ -96,13 +96,14 @@ acceptance:                         # configs/acceptance/ 中的情境
 
 ```bash
 export DISPLAY=:1          # Isaac 視窗所在的 X display，依機器而定
-uv run tools/sim.py        # 互動：模擬器 → 實驗 → 模式 → 選項
+uv run tools/sim.py        # 互動：操作（模擬／錄示範／檢查上一筆示範）→ 模擬器 → 實驗 → 模式 → 選項
 uv run tools/sim.py --list # 列出實驗、驗收情境與伺服器狀態
 ```
 
 - 模式有兩種：
   - **手動操作**：可選專注模式（只有 Isaac）、顏色 DR 與 seed、積木數量。
   - **自動驗收**：選情境、選是否錄影（只錄模擬器視窗）。驗收執行中模擬器視窗要保持焦點。
+- 「錄示範」與「檢查上一筆示範」見 [demo-capture.md](demo-capture.md#從共同入口錄製與讀回)。
 - 選單會先印出實際執行的指令。
 - 非互動用法給腳本與 agent 使用，加 `--dry-run` 只印指令、不執行：
 

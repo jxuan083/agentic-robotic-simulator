@@ -1,0 +1,45 @@
+# Operator workspace (Isaac, lab_20261120 with live perception): M enters true fullscreen with the 3D view, the
+# status column and the camera cells; the EE drag, the raw / annotated switch (keys 1 / 2), pause, Reset and a
+# scene rebuild keep the layout and the keyboard focus; M again restores the editor layout.
+# UI waits are host time (wait); the perception results need host time too (they run on the host clock).
+- {wait: 6.0}
+- {mark: before}
+- {tap: M}
+- {wait: 2.5}
+- {check: "focus_mode and fullscreen and len(editors_visible) == 0 and status_visible", label: "workspace: fullscreen, editors hidden, status column shown"}
+- {check: "len(dup_windows) == 0", label: "workspace: no duplicate windows"}
+- {check: "panel_front and status_front and len(tab_bars) == 0", label: "workspace: panel and status column in front, no tab bars"}
+- {vdrag_to: [0.22, 0.06], tol: 0.003, timeout: 10}
+- {check: "abs(target[0] - 0.22) < 0.004 and abs(target[1] - 0.06) < 0.004", label: "workspace: EE drag in the 3D view"}
+- {wait: 3.0}
+- {check: "cells['global']['annotate'] and cells['wrist']['annotate']", label: "cells: annotated by default"}
+- {tap: KEY_1}
+- {wait: 0.5}
+- {check: "not cells['global']['annotate'] and not cells['global']['image_visible'] and cells['wrist']['annotate']", label: "cells: key 1 switches only the global cell to raw"}
+- {tap: KEY_1}
+- {wait: 0.5}
+- {check: "cells['global']['annotate']", label: "cells: key 1 switches it back"}
+- {tap: P}
+- {wait: 0.6}
+- {mark: paused1}
+- {wait: 1.0}
+- {check: "paused and rtf is None and t_sim == m['paused1']['t_sim'] and ui_fps is not None", label: "clocks: paused, simulated time stopped, RTF not shown, UI still drawing"}
+- {tap: P}
+- {wait: 2.0}
+- {check: "not paused and rtf is not None and 0.02 < rtf < 3.0", label: "clocks: RTF measured again after the pause"}
+- {tap: R}
+- {wait: 2.0}
+- {check: "focus_mode and fullscreen and abs(target[0] - home[0]) < 0.003 and focused", label: "workspace: reset keeps the layout and the keyboard focus"}
+- {set: {blocks: 2}}
+- {tap: R}
+- {wait: 8.0}
+- {check: "n_blocks == 2 and focus_mode and fullscreen and len(editors_visible) == 0 and status_visible", label: "rebuild: same workspace after the scene is rebuilt"}
+- {check: "len(dup_windows) == 0 and sorted(cells) == ['global', 'wrist']", label: "rebuild: no duplicate windows, two camera cells"}
+- {check: "panel_front and status_front and len(tab_bars) == 0", label: "rebuild: panel and status column in front, no tab bars"}
+- {check: "focused", label: "rebuild: keyboard focus kept"}
+- {hold: [W], until: "target[0] >= home[0] + 0.02", timeout: 4}
+- {check: "target[0] >= home[0] + 0.019", label: "rebuild: keyboard drives the arm"}
+- {tap: M}
+- {wait: 2.0}
+- {check: "not focus_mode and not fullscreen and sorted(editors_visible) == sorted(m['before']['editors_visible'])", label: "exit: editor layout restored, windowed again"}
+- {wait: 1.0}
