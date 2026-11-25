@@ -1,5 +1,5 @@
 {
-  "_note": "Placement slots, tray-local mm (origin: inner tray corner nearest the arm base on its right; +x forward, +y left). 70 mm apart so the open gripper fits between placed blocks (as the sim's beige slots); kept in the near part of each tray, inside the reach measured on 2026-11-25 (pink x <= ~100 mm). Each episode takes the next slot of its destination tray.",
-  "beige": [[70, 60], [70, 128], [70, 196]],
+  "_note": "Placement slots, tray-local mm (origin: inner tray corner nearest the arm base on its right; +x forward, +y left). Kept in the near part of each tray, inside the reach measured on 2026-11-25 (pink x <= ~100 mm). Beige has 4 slots in a row, 65 mm apart (inner width ~255 mm), one per block of a finals round (2 blue, 1 red, 1 yellow); the spacing is an estimate, check with tools/lab_day.sh guide before collecting. Rounds fill the slots in order; manual mode takes the next slot of its destination tray.",
+  "beige": [[70, 30], [70, 95], [70, 160], [70, 225]],
   "pink": [[70, 50], [70, 110], [70, 170]]
 }

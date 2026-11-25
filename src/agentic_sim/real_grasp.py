@@ -18,7 +18,9 @@ from agentic_sim.real_route import (
 END_NEAR_START = 30.0   # body deg: after c the arm goes straight to the start pose only from this close
 
 COLORS = {"r": "red", "b": "blue", "y": "yellow"}
+COLOR_NAME = {"red": "紅", "blue": "藍", "yellow": "黃"}
 TRAY_NAME = {"pink": "粉盤", "beige": "米盤"}
+ROUND_SET = {"blue": 2, "red": 1, "yellow": 1}   # finals storage: one round = these blocks, picked in random order
 RETRACE_ERROR = 2.0
 
 
@@ -99,7 +101,7 @@ def grasp_round(driver, leader, data, drops, writer, check_cameras, color):
             "success": outcome == "s" and kept, "demo_frames": demo_frames, "cancelled": not kept}
 
 
-def finalize(root, *, color, destination, success, quads, target_pose=None, slot=None, landed=None):
+def finalize(root, *, color, destination, success, quads, target_pose=None, slot=None, landed=None, extra=None):
     """Readback, D455 target from the opening frame (fixed trays) and review.json.
 
     Frames: start (first motion), close, lift (first still moment after lifting), and for demonstrated placement
@@ -125,7 +127,7 @@ def finalize(root, *, color, destination, success, quads, target_pose=None, slot
                          "card_pose": None, "actual_pose": None, "d455": target},
               "place_target": slot and {"tray": destination, "slot": slot["index"], "xy_mm": slot["xy"],
                                         "landed_d455": landed},
-              "start_pose": "park"}
+              "start_pose": "park"} | (extra or {})
     if {"start", "close", "lift"} <= marks.keys():
         frames = confirmed_frames(episode, {k: marks[k] for k in ("start", "close", "lift")})
         for extra in ("release", "end"):
@@ -164,6 +166,32 @@ def latest_global(writer):
     return cv2.imread(str(writer.root / "global" / _image_name(count - 1)))
 
 
+def describe(target, blocks):
+    """Terminal wording for the chosen block; with same-colour neighbours, its side relative to the nearest one
+    (arm's view: +y is left, +x is away from the base)."""
+    name = f"{COLOR_NAME.get(target['color'], target['color'])}方塊（{TRAY_NAME[target['tray']]} " \
+           f"x {target['x_mm']:.0f} y {target['y_mm']:.0f} mm）"
+    same = [b for b in blocks if b is not target and b["color"] == target["color"] and b["tray"] == target["tray"]]
+    if not same:
+        return name
+    other = min(same, key=lambda b: (b["x_mm"] - target["x_mm"]) ** 2 + (b["y_mm"] - target["y_mm"]) ** 2)
+    dx, dy = target["x_mm"] - other["x_mm"], target["y_mm"] - other["y_mm"]
+    side = ("靠左" if dy > 0 else "靠右") if abs(dy) >= abs(dx) else ("離手臂較遠" if dx > 0 else "離手臂較近")
+    return f"{len(same) + 1} 顆同色中{side}（手臂視角）的{name}"
+
+
+def random_pick(rng, source):
+    """Chooser for pick_place_round: a uniformly random block in the source tray, so the order carries no
+    information and the policy has to use the target condition. Returns (block, scene) or (None, scene)."""
+    def choose(blocks):
+        pool = [b for b in blocks if b["tray"] == source]
+        counts = {c: sum(b["color"] == c for b in pool) for c in sorted({b["color"] for b in pool})}
+        scene = {"source": source, "candidates": len(pool), "counts": counts,
+                 "elsewhere": len(blocks) - len(pool), "selection": "random"}
+        return (rng.choice(pool) if pool else None), scene
+    return choose
+
+
 def choose_target(term, blocks, color):
     """The operator picks which block of the colour when there is more than one (advanced finals: a given block)."""
     same = [b for b in blocks if b["color"] == color]
@@ -174,15 +202,26 @@ def choose_target(term, blocks, color):
     return keys[term.choose(f"有 {len(same)} 顆{color}方塊，要夾哪一顆？{lines}", {k: k for k in keys})]
 
 
-def pick_place_round(driver, leader, data, writer, check_cameras, *, color, destination, slot, quads):
-    """Park -> demonstrated pick and place (ending near the start pose) -> park. Returns the operator result."""
+def pick_place_round(driver, leader, data, writer, check_cameras, *, color, destination, slot, quads, choose=None):
+    """Park -> demonstrated pick and place (ending near the start pose) -> park. Returns the operator result.
+    With choose (see random_pick) the target block, and so its colour, is picked from the opening D455 frame."""
     from agentic_sim.real_locate import locate
 
     park, channel, support = data["park"]["pose"], data["channel"]["command"], data["park_support"]
     route = Track(data["waypoints"], data["segment_seconds"])
     driver.leader_route = route
     opening = latest_global(writer)
-    target = choose_target(driver.term, locate(opening, quads)["blocks"], color) if opening is not None else None
+    blocks = locate(opening, quads)["blocks"] if opening is not None else []
+    scene = None
+    if choose is not None:
+        target, scene = choose(blocks)
+        if target is None:
+            driver.term.say(f"D455 開場畫面在{TRAY_NAME[scene['source']]}沒找到方塊，這筆不錄。")
+            return {"cancelled": True, "demo_frames": None, "scene": scene}
+        color = target["color"]
+        driver.term.say(f"這筆夾：{describe(target, blocks)}")
+    else:
+        target = choose_target(driver.term, blocks, color) if opening is not None else None
     if target is None:
         driver.term.say(f"D455 開場畫面沒找到{color}方塊；仍可錄，讀回時再確認。")
     driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 搬到{TRAY_NAME[destination]}第 {slot['index']} 格"
@@ -222,6 +261,6 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
     seen = (f"D455：方塊在{TRAY_NAME[destination]} x {landed['x_mm']:.0f} y {landed['y_mm']:.0f}，離格位 "
             f"{landed['slot_offset_mm']:.0f} mm。" if landed else "D455 沒在目的盤看到這顆方塊。")
     outcome = driver.menu(seen + "結果：s 成功／f 失敗", {"s": "成功", "f": "失敗"})
-    return {"color": color, "destination": destination, "slot": slot, "target_choice": target,
+    return {"color": color, "destination": destination, "slot": slot, "target_choice": target, "scene": scene,
             "landed": landed, "placed": landed is not None and outcome == "s", "success": outcome == "s" and kept,
             "demo_frames": demo_frames, "cancelled": not kept}

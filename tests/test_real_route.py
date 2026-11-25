@@ -1,5 +1,6 @@
 """Park <-> channel route: teach with the leader, reverse replay, pause/obstruction, recovery."""
 
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -483,3 +484,66 @@ class PickPlaceRoundCase(RouteCase):
         last = writer.rows[-1]["arms"]["right"]["readback"]
         self.assertLess(body_gap(last, CHANNEL), 30)          # the demonstration ended near the start pose
         self.assertTrue(any(cmd["shoulder_pan"] > grasp["shoulder_pan"] + 30 for _, cmd in follower.sent))
+
+    def test_round_chooser_sets_the_colour_and_cancels_on_an_empty_tray(self):
+        from agentic_sim.real_grasp import pick_place_round
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        term = ScriptedTerminal(clock, [], ())
+        driver = self.driver(follower, term, clock, "pick-empty")
+        result = pick_place_round(driver, FakeDrivenLeader(clock, PARK, []), data, FakeWriter(clock), lambda: None,
+                                  color=None, destination="beige", slot={"index": 1, "xy": [70, 30]}, quads=None,
+                                  choose=lambda blocks: (None, {"source": "pink", "candidates": 0}))
+        driver.close_logs()
+        self.assertIsNone(result["demo_frames"])
+        self.assertFalse(follower.sent)                       # nothing moved: no block to pick
+
+
+def _block(color, x, y, tray="pink"):
+    return {"color": color, "tray": tray, "x_mm": x, "y_mm": y, "yaw_deg": 0.0}
+
+
+def test_random_pick_only_takes_source_tray_blocks_and_counts_the_scene():
+    import random
+
+    from agentic_sim.real_grasp import random_pick
+
+    blocks = [_block("blue", 40, 50), _block("blue", 60, 120), _block("red", 80, 180), _block("yellow", 70, 30, "beige")]
+    choose = random_pick(random.Random(0), "pink")
+    seen = set()
+    for _ in range(50):
+        target, scene = choose(blocks)
+        assert target["tray"] == "pink"
+        seen.add(id(target))
+    assert len(seen) == 3                                     # every pink block gets picked at some point
+    assert scene["counts"] == {"blue": 2, "red": 1} and scene["candidates"] == 3 and scene["elsewhere"] == 1
+    assert choose([_block("red", 70, 30, "beige")])[0] is None
+
+
+def test_describe_names_the_side_among_same_colour_blocks():
+    from agentic_sim.real_grasp import describe
+
+    left, right, red = _block("blue", 60, 150), _block("blue", 65, 60), _block("red", 50, 100)
+    blocks = [left, right, red]
+    assert "靠左" in describe(left, blocks) and "靠右" in describe(right, blocks)
+    assert "同色" not in describe(red, blocks)
+    near, far = _block("blue", 40, 100), _block("blue", 110, 105)
+    assert "較近" in describe(near, [near, far]) and "較遠" in describe(far, [near, far])
+
+
+def test_round_state_resumes_from_the_last_round_row(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("real_route_tool", Path(__file__).resolve().parents[1] / "tools/real_route.py")
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    index = tmp_path / "index.jsonl"
+    assert tool.round_state(index) == (0, 0, 0)
+    rows = [{"episode": "P0001"}, {"episode": "P0002", "round": {"n": 1, "placed_after": 1, "left_after": 3}},
+            {"episode": "P0003", "round": {"n": 1, "placed_after": 2, "left_after": 2}}]
+    index.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert tool.round_state(index) == (1, 2, 2)

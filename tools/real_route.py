@@ -189,9 +189,29 @@ def episode_capture(root, config, arm, refs, hz, layout):
             writer.close(error=error)
 
 
+def round_state(index):
+    """(round number, successful placements in it, blocks left in the source tray) from the session index."""
+    state = (0, 0, 0)
+    if index.exists():
+        for line in index.read_text(encoding="utf-8").splitlines():
+            row = json.loads(line).get("round")
+            if row:
+                state = (row["n"], row["placed_after"], row.get("left_after", 0))
+    return state
+
+
 def grasp_session(driver, hand, data, args, refs, hz):
-    """Terminal loop: one park-start pick-and-place demonstration per colour key, until q."""
-    from agentic_sim.real_grasp import COLORS, TRAY_NAME, finalize, grasp_round, pick_place_round
+    """Terminal loop of park-start pick-and-place demonstrations, until q.
+
+    Default (rounds): the source tray holds the finals set (2 blue, 1 red, 1 yellow); each episode the D455
+    opening frame picks a random remaining block, the operator places it in the next free slot, and the next
+    episode starts from the scene as it is (4, 3, 2, 1 blocks left). Re-lay the set when the slots are full.
+    --pick manual: the old flow, colour key per episode and the block put back by hand."""
+    import random
+
+    from agentic_sim.real_grasp import (
+        COLOR_NAME, COLORS, ROUND_SET, TRAY_NAME, finalize, grasp_round, pick_place_round, random_pick,
+    )
 
     term = driver.term
     drops = {d["tray"]: d for d in (json.loads(path.read_text(encoding="utf-8")) for path in args.drop)}
@@ -203,21 +223,54 @@ def grasp_session(driver, hand, data, args, refs, hz):
     episodes = args.session / "episodes"
     episodes.mkdir(parents=True, exist_ok=True)
     index = args.session / "index.jsonl"
+    rounds = args.pick == "random" and not args.auto_place
     used = {}
     if index.exists():
         for line in index.read_text(encoding="utf-8").splitlines():
             dest = json.loads(line).get("result", {}).get("destination")
             used[dest] = used.get(dest, 0) + 1
+    set_text = "、".join(f"{n} {COLOR_NAME[c]}" for c, n in ROUND_SET.items())
+    rng = random.Random()
+    n, placed, left = round_state(index)
+    if rounds:
+        destination = args.destination or "beige"
+        source = "pink" if destination == "beige" else "beige"
+        size = sum(ROUND_SET.values())
+        if len(slots[destination]) < size:
+            raise ValueError(f"{args.slots} has {len(slots[destination])} {destination} slots; a round needs {size}")
+        resume = n and placed < size and left > 0 and term.choose(
+            f"上次第 {n} 輪已放 {placed} 顆、{TRAY_NAME[source]}還剩 {left} 顆。c 接著錄這一輪／n 重擺新一輪",
+            {"c": "接著錄", "n": "新一輪"}) == "c"
+        if not resume:
+            placed = size
     while True:
         number = 1 + len(list(episodes.glob("P*")))
-        key = term.choose(f"第 {number} 筆：先擺好方塊、手離開盤子與手臂，再選目標顏色 r 紅／b 藍／y 黃；q 結束",
-                          {"r": "紅", "b": "藍", "y": "黃", "q": "結束"})
-        if key == "q":
-            return
-        color = COLORS[key]
-        destination = args.destination or {"p": "pink", "b": "beige"}[
-            term.choose("放到哪一盤？p 粉盤／b 米盤", {"p": "粉盤", "b": "米盤"})]
-        k = used.get(destination, 0) % len(slots[destination])
+        if rounds:
+            if placed >= size:
+                key = term.choose(f"新一輪：方塊全部放回{TRAY_NAME[source]}重擺（{set_text}；近端 x ≲ 100 mm，位置與轉角隨機，"
+                                  f"偶爾讓同色貼近），{TRAY_NAME[destination]}格位清空，手離開後按 a；q 結束",
+                                  {"a": "開始", "q": "結束"})
+                if key == "q":
+                    return
+                n, placed = n + 1, 0
+            else:
+                key = term.choose(f"第 {n} 輪第 {placed + 1}/{size} 筆（P{number:04}）：場景照舊、手離開後按 a／"
+                                  "n 放棄這一輪、重擺／q 結束", {"a": "錄", "n": "重擺", "q": "結束"})
+                if key == "q":
+                    return
+                if key == "n":
+                    placed = size
+                    continue
+            color = None
+        else:
+            key = term.choose(f"第 {number} 筆：先擺好方塊、手離開盤子與手臂，再選目標顏色 r 紅／b 藍／y 黃；q 結束",
+                              {"r": "紅", "b": "藍", "y": "黃", "q": "結束"})
+            if key == "q":
+                return
+            color = COLORS[key]
+            destination = args.destination or {"p": "pink", "b": "beige"}[
+                term.choose("放到哪一盤？p 粉盤／b 米盤", {"p": "粉盤", "b": "米盤"})]
+        k = placed if rounds else used.get(destination, 0) % len(slots[destination])
         slot = {"index": k + 1, "xy": slots[destination][k]}
         if not args.auto_place:
             term.say(f"放置格位：{TRAY_NAME[destination]}第 {slot['index']} 格（x {slot['xy'][0]}, y {slot['xy'][1]} mm），"
@@ -228,26 +281,49 @@ def grasp_session(driver, hand, data, args, refs, hz):
                 result = grasp_round(driver, hand, data, drops, writer, check, color)
             else:
                 result = pick_place_round(driver, hand, data, writer, check, color=color, destination=destination,
-                                          slot=slot, quads=quads)
+                                          slot=slot, quads=quads, choose=random_pick(rng, source) if rounds else None)
         if result.get("demo_frames") is None:
             term.say("這筆取消，未錄到示範。")
+            if rounds and result.get("scene", {}).get("candidates") == 0:
+                placed = size
             continue
+        color = result.get("color", color)
+        round_info = None
+        if rounds:
+            scene = result["scene"]
+            before = scene["candidates"]
+            ok = bool(result.get("success"))
+            round_info = {"n": n, "step": placed + 1, "size": size, "left_before": before,
+                          "placed_before": placed, "placed_after": placed + ok, "left_after": before - ok,
+                          "counts_before": scene["counts"], "expected_set": ROUND_SET}
+            if placed == 0 and scene["counts"] != ROUND_SET:
+                term.say(f"注意：D455 在{TRAY_NAME[source]}看到 {scene['counts']}，跟決賽組合 {ROUND_SET} 不同（照樣記錄）。")
         choice = result.get("target_choice")
         report, review = finalize(root, color=color, destination=result.get("destination"),
                                   success=result.get("success"), quads=quads,
                                   target_pose=choice and (choice["x_mm"], choice["y_mm"]),
-                                  slot=None if args.auto_place else slot, landed=result.get("landed"))
+                                  slot=None if args.auto_place else slot, landed=result.get("landed"),
+                                  extra=round_info and {"round": round_info, "scene": result["scene"]})
         used[destination] = used.get(destination, 0) + 1
         target = review["target"]["d455"]
         line = {"episode": root.name, "color": color, "result": result, "ok": report["ok"],
                 "target": target and {k: target[k] for k in ("tray", "x_mm", "y_mm", "yaw_deg")},
                 "training_ranges": review.get("training_ranges"), "reasons": report["review_reasons"]}
+        if round_info:
+            line["round"] = round_info
         with index.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
         where = f"{target['tray']} x {target['x_mm']:.0f} y {target['y_mm']:.0f} mm" if target else "D455 未找到目標"
         term.say(f"{root.name}：讀回 {'OK' if report['ok'] else '有問題'}，{report.get('observed_control_hz')} Hz，"
                  f"目標 {where}，訓練段 {review.get('training_ranges')}"
                  + ("" if not report["review_reasons"] else f"；待確認：{'；'.join(report['review_reasons'])}"))
+        if round_info:
+            placed = round_info["placed_after"]
+            if not result.get("success"):
+                term.say("這筆失敗：掉落的方塊放回粉盤任一新位置、格位上若有方塊請拿走，同一格重錄。")
+            if round_info["left_after"] <= 0:
+                placed = size
+
 
 def check_calibration(data, refs, *, leader):
     roles = ("leader", "follower") if leader else ("follower",)
@@ -360,6 +436,9 @@ def main(argv=None):
                                 "for a separately tagged reverse set")
             p.add_argument("--any-destination", dest="destination", action="store_const", const=None,
                            help="ask for the destination tray each episode")
+            p.add_argument("--pick", choices=("random", "manual"), default="random",
+                           help="random: finals-set rounds, D455 picks a random block each episode, slots fill up; "
+                                "manual: colour key per episode")
             p.add_argument("--auto-place", action="store_true",
                            help="old flow: record to the lift only, then place with the taught drop route")
         if name == "record-drop":
