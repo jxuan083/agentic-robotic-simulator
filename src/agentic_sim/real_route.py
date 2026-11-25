@@ -177,12 +177,13 @@ class Driver:
         self.run_dir.mkdir(parents=True, exist_ok=False)
         self.control = (self.run_dir / "control.jsonl").open("x", buffering=1)
         self.events = (self.run_dir / "events.jsonl").open("x", buffering=1)
-        self.origin = clock()
+        self.origin = clock()  # monotonic: other processes (e.g. a D455 recorder) align their stamps with it
         self.phase = "idle"
         self.last = None
         self.target = None
         self.armed = False
-        self.state = {"joint_units": UNITS, "stage": "opened", "started_at": now_iso()}
+        self.state = {"joint_units": UNITS, "stage": "opened", "started_at": now_iso(),
+                      "clock_origin_monotonic_ns": self.origin}
         self.stage("opened")
 
     # -- bookkeeping -------------------------------------------------------
@@ -719,6 +720,17 @@ def _resume_teleop(driver, leader, samples):
     return True
 
 
+def lift_home(current, channel):
+    """Back to the channel without retracing: raise shoulder_lift to the channel value first (the upper arm tilts
+    back, the gripper rises away from the trays), then move the other joints straight to the channel pose."""
+    current = pose(current)
+    points = [current]
+    if current["shoulder_lift"] > channel["shoulder_lift"]:
+        points.append(current | {"shoulder_lift": channel["shoulder_lift"]})
+    points.append(pose(channel) | {"gripper": current["gripper"]})
+    return retimed(points)
+
+
 def task_session(driver, leader, channel_command):
     """Leader teleop from the channel; returns along the measured task path to the channel."""
     if not driver.align_leader(leader, driver.read()):
@@ -737,9 +749,7 @@ def task_session(driver, leader, channel_command):
             if choice == "c" or not _resume_teleop(driver, leader, task):
                 break
     task.append((driver.clock(), dict(driver.target)))
-    back = compress(task).reverse()
-    back = Track([*back.points[:-1], channel_command | {"gripper": back.points[-1]["gripper"]}], back.seconds)
-    follow(driver, back, ("任務位", "通道位"))
+    follow(driver, lift_home(driver.target, channel_command), ("任務位", "通道位"))
 
 
 def record(driver, leader, route_path, meta, park_samples):

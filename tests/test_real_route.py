@@ -350,3 +350,14 @@ class SagCase(RouteCase):
         driver.arm_at(PARK)
         with self.assertRaises(Paused):
             driver.play(Track([PARK, CHANNEL], [1.0]), "往通道位")
+
+
+def test_lift_home_raises_first_then_goes_straight():
+    from agentic_sim.real_route import lift_home
+
+    grasp = dict(CHANNEL) | {"shoulder_pan": -56.0, "shoulder_lift": 0.4, "elbow_flex": 28.7, "gripper": 16.5}
+    track = lift_home(grasp, CHANNEL)
+    assert len(track.points) == 3
+    assert track.points[1] == grasp | {"shoulder_lift": CHANNEL["shoulder_lift"]}
+    assert body_gap(track.points[-1], CHANNEL) < 1e-9 and track.points[-1]["gripper"] == 16.5
+    assert len(lift_home(CHANNEL | {"shoulder_pan": 10.0}, CHANNEL).points) == 2  # already at channel height
