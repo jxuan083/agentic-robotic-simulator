@@ -6,6 +6,8 @@
 #     check        read-only device/calibration check (power on, torque off)
 #     overlay      D455 live overlay against the 11/25 tray reference (s saves, q quits)
 #     route        teach park -> channel with the leader, reverse to park   (needs SUPPORT="...")
+#     route-tune   remove taught pauses/jitter, fix the gripper opening: GRIP=<pct>, or hold the leader
+#                  gripper at the cube-ready opening while it reads (read-only); then route-test again
 #     route-test   replay park -> channel without the leader, r returns home
 #     drop-beige   teach channel -> drop pose over the beige tray
 #     drop-pink    teach channel -> drop pose over the pink tray
@@ -21,7 +23,7 @@
 #
 # Settings (environment): LAB_DATE (default today, YYMMDD), SUPPORT (park support description, for `route`),
 # PY (default the conda lerobot python), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
-# with simulated arms), RATE (route playback speed factor, default 1.0), RELEASE (drop gripper %, default 60).
+# with simulated arms), GRIP (route-tune gripper %), RATE (route playback speed factor, default 1.0), RELEASE (drop gripper %, default 60).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -69,6 +71,11 @@ case "$step" in
     say "not hide the pink tray from the D455; c saves, r reverses home, y releases"
     "$PY" tools/real_route.py record "${MOTION[@]}" --route "$ROUTE" --layout "$LAYOUT" --support "$SUPPORT" \
       "${REPLACE_FLAG[@]}" ;;
+  route-tune)
+    need "$ROUTE"
+    if [[ -n "${GRIP:-}" ]]; then src=(--grip "$GRIP"); else
+      say "hold the leader gripper at the cube-ready opening, keep it still"; src=(--config "$CONFIG"); fi
+    "$PY" tools/real_route.py tune --route "$ROUTE" "${src[@]}" ;;
   route-test)
     need "$ROUTE"
     "$PY" tools/real_route.py run "${MOTION[@]}" --route "$ROUTE" --no-leader --rate "${RATE:-1.0}" ;;
@@ -128,5 +135,5 @@ PYEOF
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)
-    sed -n '2,25p' "$0"; exit 1 ;;
+    sed -n '2,27p' "$0"; exit 1 ;;
 esac

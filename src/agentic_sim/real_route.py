@@ -127,8 +127,8 @@ def compress(samples):
     return Track([p for _, p in kept], [max(1e-3, b[0] - a[0]) for a, b in zip(kept, kept[1:])])
 
 
-def _simplify(points):
-    scale = dict.fromkeys(BODY, 1 / PATH_ERROR) | {"gripper": 1 / GRIPPER_PATH_ERROR}
+def _simplify(points, body_error=PATH_ERROR):
+    scale = dict.fromkeys(BODY, 1 / body_error) | {"gripper": 1 / GRIPPER_PATH_ERROR}
     keep = {0, len(points) - 1}
     segments = [(0, len(points) - 1)]
     while segments:
@@ -441,6 +441,40 @@ def save_route(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_json(path, data)
+
+
+TUNE_PATH_ERROR = 1.0      # body deg: drops hand jitter from a taught route, keeps its shape
+OPEN_AFTER_LIFT = 45.0     # gripper stays at park opening until shoulder_lift has risen this far from park
+
+
+def tune_route(data, *, grip, body_error=TUNE_PATH_ERROR, open_after_lift=OPEN_AFTER_LIFT):
+    """Route without the taught pauses: speed-capped timing, jitter removed, fixed gripper opening.
+
+    The gripper keeps the park opening through the folded area and switches to `grip` once shoulder_lift has
+    risen `open_after_lift` deg from park (reverse: closes there before entering the folded area).
+    """
+    if not 0.0 <= grip <= 100.0:
+        raise ValueError("gripper opening must be within 0..100 %")
+    points = [pose(p) for p in data["waypoints"]]
+    park_grip = data["park"]["pose"]["gripper"]
+    lift0 = points[0]["shoulder_lift"]
+    switch = next((i for i, p in enumerate(points) if p["shoulder_lift"] - lift0 >= open_after_lift), None)
+    if switch is None:
+        raise ValueError(f"shoulder_lift never rises {open_after_lift} deg from park along this route")
+    points = [p | {"gripper": park_grip if i < switch else float(grip)} for i, p in enumerate(points)]
+    points = [points[i] for i in sorted(_simplify(points, body_error))]
+    seconds = [max(1e-3, body_gap(a, b) / PLAY_SPEED, abs(a["gripper"] - b["gripper"]) / GRIPPER_PLAY_SPEED)
+               for a, b in zip(points, points[1:])]
+    out = dict(data)
+    out["waypoints"], out["segment_seconds"] = points, seconds
+    out["channel"] = dict(data["channel"]) | {"command": dict(points[-1])}
+    out["verified"] = {"reverse_to_park": None, "forward_to_channel": None}
+    out["tuned"] = {"at": datetime.now().astimezone().isoformat(), "gripper_open_pct": float(grip),
+                    "gripper_open_after_lift_deg": open_after_lift, "path_tolerance_deg": body_error,
+                    "timing": f"speed cap {PLAY_SPEED} deg/s, {GRIPPER_PLAY_SPEED} %/s; taught pauses removed",
+                    "waypoints_before": len(data["waypoints"]), "waypoints_after": len(points),
+                    "open_from_waypoint": next(i for i, p in enumerate(points) if p["gripper"] == float(grip))}
+    return out
 
 
 def archive_existing(path):

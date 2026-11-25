@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from agentic_sim.real_motion import OFF  # noqa: E402
 from agentic_sim.real_route import (  # noqa: E402
     ENGAGE_GAP, PLAY_SPEED, Driver, Released, archive_existing, body_gap, build_setup, load_route,
-    record_drop, recover, record, roundtrip, sample_park,
+    record_drop, recover, record, roundtrip, sample_park, save_route, tune_route,
 )
 
 
@@ -154,12 +154,52 @@ def show(path):
     }, ensure_ascii=False, indent=2))
 
 
+def leader_gripper(config, arm, samples=10):
+    """Read-only: the leader's current gripper opening (percent), averaged over a few reads."""
+    from agentic_sim.real_hardware import check_devices, load_profile, open_leader
+
+    profile = load_profile(config)
+    check_devices(profile)
+    with open_leader(arm, profile["arms"][arm]["leader"]) as leader:
+        values = []
+        for _ in range(samples):
+            values.append(leader.read()["gripper"])
+            time.sleep(0.05)
+    return sum(values) / len(values), max(values) - min(values)
+
+
+def tune(args):
+    data, _ = load_route(args.route)
+    grip = args.grip
+    if grip is None:
+        if not args.config:
+            raise SystemExit("tune needs --grip PCT or --config to read the leader gripper")
+        grip, spread = leader_gripper(args.config, data["arm"])
+        if spread > 2.0:
+            raise SystemExit(f"leader gripper moved while reading ({spread:.1f} %); hold it still and retry")
+        print(f"leader gripper reads {grip:.1f} %")
+    tuned = tune_route(data, grip=grip)
+    old = archive_existing(args.route)
+    save_route(args.route, tuned)
+    t = tuned["tuned"]
+    print(f"saved {args.route} (previous: {old.name})")
+    print(f"waypoints {t['waypoints_before']} -> {t['waypoints_after']}, playback about "
+          f"{sum(tuned['segment_seconds']):.1f} s (taught {sum(data['segment_seconds']):.1f} s incl. pauses); "
+          f"gripper {data['park']['pose']['gripper']:.1f} % until waypoint {t['open_from_waypoint']}, then "
+          f"{grip:.1f} %. Verify again: route-test.")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("record", "run", "recover", "record-drop", "setup", "show"):
+    for name in ("record", "run", "recover", "record-drop", "setup", "show", "tune"):
         p = sub.add_parser(name)
         p.add_argument("--route", type=Path, required=True, help="route JSON, e.g. outputs/routes/right-park-channel.json")
+        if name == "tune":
+            p.add_argument("--grip", type=float, help="fixed gripper opening %% at the channel (cube-ready)")
+            p.add_argument("--config", type=Path, help="read the opening from the leader gripper instead (read-only)")
+            continue
         if name == "setup":
             p.add_argument("--drop", type=Path, action="append", default=[], help="drop route JSON (repeat per tray)")
             p.add_argument("--cards", type=Path, help="JSON with the cards section (seed, reserve_distance_mm, zones)")
@@ -192,6 +232,8 @@ def main(argv=None):
     if args.command == "show":
         show(args.route)
         return 0
+    if args.command == "tune":
+        return tune(args)
     if args.command == "setup":
         data, track = load_route(args.route)
         if not data["verified"].get("reverse_to_park"):

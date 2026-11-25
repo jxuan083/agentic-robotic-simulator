@@ -205,3 +205,28 @@ class TrackCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_tune_route_removes_pauses_and_fixes_gripper():
+    from agentic_sim.real_route import PLAY_SPEED, Track, body_gap, tune_route
+
+    park = {"shoulder_pan": 0.0, "shoulder_lift": -100.0, "elbow_flex": 90.0, "wrist_flex": 60.0,
+            "wrist_roll": 0.0, "gripper": 1.0}
+    points = [park | {"shoulder_lift": -100.0 + 5 * i, "elbow_flex": 90.0 - 4 * i, "gripper": 1.0 + (i % 3) * 4}
+              for i in range(13)]
+    seconds = [0.2] * 12
+    seconds[2] = 25.0  # operator paused while teaching
+    data = {"waypoints": points, "segment_seconds": seconds, "park": {"pose": park},
+            "channel": {"command": points[-1], "readback": points[-1]},
+            "verified": {"reverse_to_park": "run", "forward_to_channel": "run"}}
+    tuned = tune_route(data, grip=45.0)
+    track = Track(tuned["waypoints"], tuned["segment_seconds"])
+    assert max(track.seconds) < 2.0
+    assert all(s >= body_gap(a, b) / PLAY_SPEED - 1e-9 for a, b, s in zip(track.points, track.points[1:], track.seconds))
+    grips = [p["gripper"] for p in track.points]
+    assert grips[0] == 1.0 and grips[-1] == 45.0 and set(grips) == {1.0, 45.0}
+    opened = grips.index(45.0)
+    assert track.points[opened]["shoulder_lift"] - park["shoulder_lift"] >= 45.0
+    assert tuned["channel"]["command"]["gripper"] == 45.0
+    assert tuned["verified"] == {"reverse_to_park": None, "forward_to_channel": None}
+    assert track.points[0] == park
