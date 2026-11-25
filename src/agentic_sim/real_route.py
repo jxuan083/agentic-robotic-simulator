@@ -619,7 +619,9 @@ def tune_route(data, *, grip, body_error=TUNE_PATH_ERROR, open_after_lift=OPEN_A
                for a, b in zip(points, points[1:])]
     out = dict(data)
     out["waypoints"], out["segment_seconds"] = points, seconds
-    out["channel"] = dict(data["channel"]) | {"command": dict(points[-1])}
+    # The old readback belongs to the old channel pose; keep it only as history until the next verified run.
+    out["channel"] = dict(data["channel"]) | {"command": dict(points[-1]), "readback": dict(points[-1]),
+                                              "readback_before_tune": data["channel"]["readback"]}
     out["verified"] = {"reverse_to_park": None, "forward_to_channel": None}
     out["tuned"] = {"at": datetime.now().astimezone().isoformat(), "gripper_open_pct": float(grip),
                     "gripper_open_after_lift_deg": open_after_lift, "path_tolerance_deg": body_error,
@@ -799,7 +801,7 @@ def channel_hold(driver, leader, data, track, route_path):
         if choice == "t":
             task_session(driver, leader, data["channel"]["command"])
         else:
-            if body_gap(driver.read(), data["channel"]["readback"]) > ENDPOINT:
+            if body_gap(driver.read(), data["channel"]["command"]) > ENDPOINT:
                 driver.term.say("目前不在通道位附近，無法沿路線退回。")
                 continue
             park_and_release(driver, track.reverse(), park, data["park_support"])
