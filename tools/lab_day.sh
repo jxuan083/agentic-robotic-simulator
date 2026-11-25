@@ -69,7 +69,7 @@ case "$step" in
   overlay)
     need "$REFERENCE"
     say "move the trays until their rims overlap the reference; s saves, q quits"
-    "$PY" tools/tray_overlay.py "$REFERENCE" --serial "$D455" --output "outputs/$DATE-camera/tray-overlay.png" ;;
+    "$CAMPY" tools/tray_overlay.py "$REFERENCE" --serial "$D455" --output "outputs/$DATE-camera/tray-overlay.png" ;;
   reference)
     # After moving the trays: new D455 RGB-D reference with markers 40/41/42, compared with the previous one.
     name="${1:-trays-$(date +%H%M)}"; root="outputs/$DATE-camera"; mkdir -p "$root"
