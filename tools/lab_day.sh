@@ -18,6 +18,7 @@
 #     drop-pink    teach channel -> drop pose over the pink tray
 #     drop-test-beige / drop-test-pink   replay park -> channel -> drop pose -> release -> back (no leader)
 #     grasp        park-start pick-and-place rounds (random target, slots fill up), session outputs/<date>-park
+#     wristcam     fix the wrist camera's white balance (WB, default 4600 K) and frame rate; once per day
 #     datacheck    every 5 rounds: training selection and desk issues of the newest LAST (20) episodes
 #     try          park -> channel, then t = leader test grasps from the channel (reach check for the cards)
 #     cards        create today's card positions from the template (once) and show them
@@ -134,6 +135,13 @@ case "$step" in
     need "$ROUTE" "$DROP_BEIGE" "$DROP_PINK" "$TRAYS"
     "$PY" tools/real_route.py grasp "${MOTION[@]}" --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" \
       --trays "$TRAYS" --session "outputs/$DATE-park" --pick "${PICK:-random}" ;;
+  wristcam)
+    # Fixed white balance and frame rate for the wrist camera: auto white balance turns the white desk cyan when
+    # the pink tray fills the view, and dynamic frame rate drops frames in dim light. Lost on replug: run each day.
+    dev="${WRIST_DEV:-/dev/v4l/by-path/pci-0000:09:00.0-usb-0:1:1.0-video-index0}"
+    v4l2-ctl -d "$dev" -c white_balance_automatic=0
+    v4l2-ctl -d "$dev" -c white_balance_temperature="${WB:-4600}" -c exposure_dynamic_framerate=0
+    v4l2-ctl -d "$dev" --list-ctrls | grep -E "white_balance|exposure_dynamic|auto_exposure" ;;
   datacheck)
     # Between collection blocks: would training take the newest episodes, and what to fix at the desk (read-only).
     train="${TRAIN_TREE:-../agentic-robotic-simulator-real-training}"
