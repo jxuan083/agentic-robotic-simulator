@@ -13,6 +13,9 @@ llm:
   structured_output: json_schema  # response_format with the intent schema; null = parse plain JSON from the reply
 history_turns: 6                  # earlier user / assistant turns given to the model (for follow-ups to a question)
 send_retries: 2                   # transport retries of one request (same request_id: applied once)
+# 「我要左上角那顆紅色」(order_pick). Off by default: on, the model gets one more intent and rule, so the schema and
+# prompt differ from the ones the utterance table was measured with. Turn on after tools/chat_eval.py on the real model.
+pick_by_position: false
 progress_reports: true            # report each motion as it starts ([進度] 正在夾取第一顆紅色積木…)
 poll_s: 0.25                      # how often the chat CLI reads new executor events
 max_count: 8                      # largest count per colour in one order (scene holds at most 8 blocks)

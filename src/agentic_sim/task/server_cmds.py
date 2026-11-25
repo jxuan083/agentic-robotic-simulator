@@ -94,7 +94,7 @@ class TaskCommands:
                 stock[c] = stock.get(c, 0) + 1
             return {"active": False, "colors_in_scene": sorted(stock), "storage": stock,
                     "ledger": {"revision": 0, "target": {}, "delivered": {}, "need": {}, "over": {}}}
-        return {"active": True, **s.task.ex.view(), "cancels": s.task.ex.cancels}
+        return {"active": True, **s.task.ex.view(), **s.task.ex.pick_view(), "cancels": s.task.ex.cancels}
 
     def cmd_task_events(self, since=0):
         self._require_session()

@@ -27,7 +27,24 @@ INTENTS = ("order_total", "order_add", "order_set", "order_pick", "answer", "sta
 CHOICES = ("return", "place_at", "deliver", "substitute", "reduce", "wait")
 
 
-def schema(palette: list, max_count: int) -> dict:
+PICK_RULE = """- order_pick：用位置指定某一顆積木（「我要左上角那顆紅色」「拿最左邊的藍色」「離手臂最近的那顆黃的」）。items 只放那個顏色、數量 1，pick_ref 填位置：
+  top_left＝左上角，top_right＝右上角，bottom_left＝左下角，bottom_right＝右下角，leftmost＝最左邊，rightmost＝最右邊，farthest＝最遠／最上面，nearest＝最近／離手臂最近／最下面。
+  位置說法對不上這些（例如「中間那顆」「第三顆」）就 clarify。其他 intent 的 pick_ref 是 null。
+"""
+
+
+def schema(palette: list, max_count: int, pick: bool = False) -> dict:
+    """pick: also the order_pick intent and its pick_ref field (configs/chat.yaml pick_by_position). Off, the schema is
+    the one the utterance table was measured with."""
+    s = _schema(palette, max_count)
+    if not pick:
+        s["properties"]["intent"]["enum"].remove("order_pick")
+        del s["properties"]["pick_ref"]
+        s["required"].remove("pick_ref")
+    return s
+
+
+def _schema(palette: list, max_count: int) -> dict:
     nullable_color = {"anyOf": [{"type": "string", "enum": list(palette)}, {"type": "null"}]}
     return {
         "type": "object",
@@ -52,7 +69,15 @@ def schema(palette: list, max_count: int) -> dict:
     }
 
 
-def system_prompt(colors_cfg: dict, max_count: int) -> str:
+def system_prompt(colors_cfg: dict, max_count: int, pick: bool = False) -> str:
+    """pick: add the order_pick rule (configs/chat.yaml pick_by_position); off, the prompt is the measured one."""
+    p = _system_prompt(colors_cfg, max_count)
+    if not pick:
+        p = p.replace(PICK_RULE, "")
+    return p
+
+
+def _system_prompt(colors_cfg: dict, max_count: int) -> str:
     vocab = "\n".join(f"- {c}: {'、'.join(v['words'])}" for c, v in colors_cfg.items())
     return f"""你是積木分揀機械臂的任務助理。使用者用繁體中文下單、改單、回答問題或詢問進度。
 你只負責判斷使用者的意圖，輸出一個 JSON 物件，不控制手臂，也不判斷是否完成（完成與否由系統核對）。
@@ -65,10 +90,7 @@ intent 規則：
 - order_total：使用者給出完整的新需求（「總共…」「我要…」「只要…」「全部改成…」「幫我放…到放置盤」「拿…給我」）。items 列出每個顏色與數量；沒列到的顏色就是不要。把某顏色的積木放進放置盤就是下單，不是直接控制手臂。
 - order_add：在原需求上追加（「再加…」「多…」「另外再…」）。items 是追加的數量。
 - order_set：只改某些顏色的數量，其他顏色維持（「藍色改成兩顆」「紅的只要一顆」「不要黃色」=黃色 0）。items 只列被改的顏色。
-- order_pick：用位置指定某一顆積木（「我要左上角那顆紅色」「拿最左邊的藍色」「離手臂最近的那顆黃的」）。items 只放那個顏色、數量 1，pick_ref 填位置：
-  top_left＝左上角，top_right＝右上角，bottom_left＝左下角，bottom_right＝右下角，leftmost＝最左邊，rightmost＝最右邊，farthest＝最遠／最上面，nearest＝最近／離手臂最近／最下面。
-  位置說法對不上這些（例如「中間那顆」「第三顆」）就 clarify。其他 intent 的 pick_ref 是 null。
-- 「改成兩藍」這類沒說清楚其他顏色是否保留的話：如果目前需求裡還有其他顏色，用 clarify 反問「原本的X色要保留嗎？」；如果目前沒有其他顏色或沒有需求，當作 order_total。
+{PICK_RULE}- 「改成兩藍」這類沒說清楚其他顏色是否保留的話：如果目前需求裡還有其他顏色，用 clarify 反問「原本的X色要保留嗎？」；如果目前沒有其他顏色或沒有需求，當作 order_total。
 - 使用者回答你的反問時，結合前面的對話決定最後的 order_total／order_set。
 - answer：回答系統目前的問題。question_id 填目前問題的 id，choice 從該問題的 options 選：
   return＝放回原位／放回去，place_at＝放到指定位置（要有座標 xy，單位公尺；沒有座標就 clarify），deliver＝照樣送出／還是放進去，

@@ -758,7 +758,8 @@ def test_pick_dialogue_replay():
     w = FakeWorld(["red", "red", "red", "blue"])
     srv = FakeServer(w)
     llm = ReplayLLM([I("order_pick", [("red", 1)], pick_ref="top_left")])
-    agent = ChatAgent(srv, llm, CFG)
+    agent = ChatAgent(srv, llm, dict(CFG, pick_by_position=True))
+    assert "order_pick" in agent.schema["properties"]["intent"]["enum"] and "order_pick" in agent.system
     assert agent.handle("我要左上角那顆紅色") == ["好的，夾左上角那顆紅色。"]
     run_until(w, lambda w: w.ex.state == "done")
     rep = agent.poll_reports()
@@ -771,3 +772,10 @@ def test_pick_dialogue_replay():
 def test_pick_rejected_report():
     e = {"kind": "pick_rejected", "color": "red", "ref": "bottom_right", "reachable_left": 2}
     assert W.event(e) == "右下角那顆紅色積木在手臂範圍外，夾不到，已從需求拿掉這一顆。另外還有 2 顆夾得到。"
+
+
+def test_default_config_keeps_the_measured_schema_and_prompt():
+    """pick_by_position is off by default: the model sees exactly what the utterance table was measured with."""
+    agent = ChatAgent(lambda *a, **k: {}, ReplayLLM([]), CFG)
+    assert "order_pick" not in agent.schema["properties"]["intent"]["enum"]
+    assert "pick_ref" not in agent.schema["properties"] and "order_pick" not in agent.system

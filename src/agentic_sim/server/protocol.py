@@ -31,7 +31,7 @@ COMMANDS = {
     "shutdown": {},
     # task executor (issue #5): orders, answers, state; the executor takes the arm on the first order
     # request_id (optional): a retried request with the same id takes effect once (transport retries)
-    "task_order": {"counts": (dict, True), "mode": (str, False), "request_id": (str, False)},
+    "task_order": {"counts": (dict, True), "mode": (str, False), "request_id": (str, False), "pick": (dict, False)},
     "task_answer": {"id": (int, True), "choice": (str, True), "color": (str, False), "xy": (list, False),
                     "request_id": (str, False)},
     "task_state": {},

@@ -48,7 +48,7 @@ def test_executor_picks_the_named_block():
     # three reds in a row along +x at the same y: "top" (farther from the base) is block 1
     w = FakeWorld(["red", "red", "red", "blue"])
     w.step()
-    assert {b["block"]: b["reachable"] for b in w.ex.view()["storage_blocks"]} == {0: True, 1: True, 2: True, 3: True}
+    assert {b["block"]: b["reachable"] for b in w.ex.pick_view()["storage_blocks"]} == {0: True, 1: True, 2: True, 3: True}
     w.ex.order({"red": 1}, "add", pick={"color": "red", "ref": "top_left"})
     run(w, lambda w: w.ex.state == "done")
     t = kinds(w, "pick_target")
@@ -57,8 +57,10 @@ def test_executor_picks_the_named_block():
     assert w.ex.ledger.snapshot()["delivered"] == {"red": 1} and w.ex.pins == []
 
 
-def test_named_block_out_of_reach_is_taken_off_the_order():
+@pytest.mark.parametrize("prefer", [False, True])
+def test_named_block_out_of_reach_is_taken_off_the_order(prefer):
     w = FakeWorld(["red", "red", "red", "blue"])
+    w.ex.prefer_reachable = prefer      # default False: unnamed picks keep the original order
     w.step()
     far = w.ex.block_xy(1)
     w.ex._reach_cache[(round(far[0], 3), round(far[1], 3))] = False     # as if block 1 lay beyond the reach
@@ -69,7 +71,8 @@ def test_named_block_out_of_reach_is_taken_off_the_order():
     assert len(r) == 1 and r[0]["block"] == 1 and r[0]["reason"] == "unreachable" and r[0]["reachable_left"] == 2
     led = w.ex.ledger.snapshot()
     assert led["target"] == {"red": 2} and led["delivered"] == {"red": 2}
-    assert 1 not in w.ex.delivered_blocks
+    # the unnamed picks: original order (block 0, then 1) unless prefer_reachable skips the unreachable block 1
+    assert sorted(w.ex.delivered_blocks) == ([0, 2] if prefer else [0, 1])
 
 
 def test_pick_order_checks_and_a_new_total_clears_pins():
@@ -86,3 +89,20 @@ def test_pick_order_checks_and_a_new_total_clears_pins():
     w.step()
     w.step()
     assert w.ex.pins == []
+
+
+def test_pick_passes_the_real_protocol_check():
+    from agentic_sim.server.protocol import ProtocolError, _check_args
+    _check_args("task_order", {"counts": {"red": 1}, "mode": "add", "pick": {"color": "red", "ref": "top_left"}}, 1)
+    _check_args("task_order", {"counts": {"red": 1}}, 1)                     # the original form still passes
+    with pytest.raises(ProtocolError):
+        _check_args("task_order", {"counts": {"red": 1}, "pick": "top_left"}, 1)
+
+
+def test_task_state_view_is_unchanged_for_the_panel():
+    """view() (read by the simulator panel every frame) has the original keys; the block list is only in task_state."""
+    w = FakeWorld(["red", "blue"])
+    w.step()
+    assert set(w.ex.view()) == {"state", "revision", "ledger", "holding", "skill", "question", "placement", "storage",
+                                "colors_in_scene", "events"}
+    assert {"storage_blocks", "pick_frame", "pan_xy", "pins"} <= set(w.ex.pick_view())

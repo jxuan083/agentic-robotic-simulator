@@ -289,15 +289,21 @@ uv run tools/lab.py --web [--stt-model small]     # 一鍵入口改開網頁（�
 
 ## 指定某一顆（位置）
 
+**預設關閉**（`configs/chat.yaml` 的 `pick_by_position: false`）：關閉時模型拿到的 schema 與提示詞和語句表實測時逐字相同，原有 49 句的結果不受影響；用真模型跑過 `tools/chat_eval.py`（含 `pick` 組）後再打開。
+
 「我要左上角那顆紅色」「拿最左邊的藍色」「離手臂最近的那顆黃的」：意圖 `order_pick`，模型只填顏色與位置代號（`pick_ref`：`top_left`、`top_right`、`bottom_left`、`bottom_right`、`leftmost`、`rightmost`、`farthest`、`nearest`），不輸出座標；說不出清單內的位置（「中間那顆」「第三顆」）就反問。送出 `task_order {counts: {red: 1}, mode: add, pick: {color: red, ref: top_left}}`。
 
 | 誰 | 做什麼 |
 |---|---|
 | 位置換算（`agentic_sim/task/pick_ref.py`） | 同色候選以中心為原點打分；「上／左」對應的基座座標方向在 `configs/task.yaml` 的 `pick_ref`。**預設是站在手臂後方往前看（上 = +x，左 = +y），暫定，要和現場操作者的視角對齊**；前兩名分數差小於 `tie_m` 視為說不清楚 |
-| 可達判斷（`TaskExecutor.reachable`） | 共用控制器的 IK（關節限制、傾斜上限），夾取高度與搬運高度都要解得出；不檢查路徑。一般選料（沒有指定）也改成先挑夾得到的 |
-| 聊天先答（`plan_pick`，任務狀態有 `storage_blocks` 時） | 場景沒有這個顏色：拒絕；備料盤沒有了：拒絕；兩顆差不多：反問；那顆夾不到：說明並問要不要改夾其他同色（都夾不到則拒絕） |
+| 可達判斷（`TaskExecutor.reachable`） | 共用控制器的 IK（關節限制、傾斜上限），夾取高度與搬運高度都要解得出；不檢查路徑。一般選料（沒有指定）預設維持原本順序；`pick_ref.prefer_reachable: true` 才改成先挑夾得到的 |
+| 聊天先答（`plan_pick`，`task_state` 有 `storage_blocks` 時；這些欄位只在 `task_state` 指令計算，模擬器面板每幀讀的 `view()` 不變） | 場景沒有這個顏色：拒絕；備料盤沒有了：拒絕；兩顆差不多：反問；那顆夾不到：說明並問要不要改夾其他同色（都夾不到則拒絕） |
 | 執行器確認（取料當下） | 依最新觀測（相機盤點或模擬真值）重新決定是哪一顆並檢查可達；找到時發 `pick_target`（進度行「找到左上角那顆紅色積木，準備夾取…」），夾不到時把這一顆從需求拿掉並發 `pick_rejected`（回報「…夾不到，已從需求拿掉這一顆」）。新的完整需求（total）會清掉尚未執行的指定 |
 
 驗證：`tests/test_pick_ref.py`（位置換算、執行器夾到指定那顆、夾不到時拿掉且不會誤夾、參數檢查）、`tests/test_chat.py`（先答各情況、指定整段重播、回報模板）。語句表新增 `pick` 組 6 句與 `reds4` 狀態，**還沒用真模型跑過**，提示詞沒有依這些句子調整。
 
 限制：實機還沒有 D455 到基座的外參，實機上的 `storage_blocks` 位置尚不存在；目前只在模擬（相機盤點或真值）成立。
+
+## 相容性（feat/chat-web-ui）
+
+原有入口與行為不變：`tools/chat.py`、`tools/chat_window.py`、`tools/lab.py`（不加 `--web`）照舊；`task_order` 不帶 `pick` 時與原本相同（協定驗證 `server/protocol.py` 允許選填的 `pick`）；`TaskExecutor.view()` 的欄位不變；預設設定下模型的 schema／提示詞與 main 逐字相同。唯一預設開啟的新行為是 `[進度]` 行（`progress_reports: false` 可關）。Python 3.11 全套測試與 main 同樣通過（未裝感知套件的 3 個測試兩邊都失敗）。

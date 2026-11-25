@@ -77,7 +77,9 @@ class TaskExecutor:
         self.snapshot_mode = bool((cfg.get("observation") or {}).get("snapshot", False))
         self.camera = None                        # agentic_sim.task.camera.TaskCamera: observe with the cameras
         self.pins: list = []                      # {"color", "ref"}: the next pick of that colour takes this block
-        self.pick_frame = {**DEFAULT_FRAME, **(cfg.get("pick_ref") or {})}
+        self.pick_frame = {**DEFAULT_FRAME, **{k: v for k, v in (cfg.get("pick_ref") or {}).items()
+                                               if k in DEFAULT_FRAME}}
+        self.prefer_reachable = bool((cfg.get("pick_ref") or {}).get("prefer_reachable", False))
         self._reach_cache: dict = {}
         self._event_log = None
         if event_log:
@@ -343,7 +345,8 @@ class TaskExecutor:
         for c in needed:
             av = self.available(c)
             if av:
-                av.sort(key=lambda x: not self.reachable(self.block_xy(x)))   # reachable first, order kept otherwise
+                if self.prefer_reachable:     # opt-in (task.yaml pick_ref.prefer_reachable): reachable blocks first
+                    av.sort(key=lambda x: not self.reachable(self.block_xy(x)))
                 pin = next((p for p in self.pins if p["color"] == c), None)
                 if pin is not None:
                     b = self._take_pin(pin, av)
@@ -696,11 +699,16 @@ class TaskExecutor:
                                                   "nth": sk.params.get("nth")},
                 "question": self.question, "placement": self._counts_in("placement") if self.obs else {},
                 "storage": self._counts_in("storage") if self.obs else {},
-                "colors_in_scene": sorted(set(self.world.colors)), "events": len(self.events),
-                "pins": [dict(p) for p in self.pins],
-                "pick_frame": dict(self.pick_frame), "pan_xy": [float(x) for x in self.ctrl.pan[:2]],
-                # nothing observed yet: no block list (the chat then leaves the check to the executor)
-                **({"storage_blocks": self.storage_blocks()} if self.obs is not None else {})}
+                "colors_in_scene": sorted(set(self.world.colors)), "events": len(self.events)}
+
+    def pick_view(self) -> dict:
+        """For task_state only (not the per-frame panel): the blocks a position can name, the frame and the pan axis.
+        Nothing observed yet: no block list (the chat then leaves the check to the executor)."""
+        out = {"pins": [dict(p) for p in self.pins], "pick_frame": dict(self.pick_frame),
+               "pan_xy": [float(x) for x in self.ctrl.pan[:2]]}
+        if self.obs is not None:
+            out["storage_blocks"] = self.storage_blocks()
+        return out
 
     def panel_lines(self) -> list:
         """(text, kind) lines for the simulator panels; kind: text / dim / ask."""
