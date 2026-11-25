@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from agentic_sim.real_dataset import find_episodes, plan_episode  # noqa: E402
 
-WRIST_TURN_DEG = 10.0
+WRIST_TURN_DEG = 30.0   # demos may turn the wrist up to ~30 deg to square up with the block
 CROWDED_MM = 45.0
 
 
