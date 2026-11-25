@@ -239,7 +239,7 @@ CHAT_ARGS="--base-url http://127.0.0.1:8001/v1 --model Qwen3.5-9B-Q4_K_M" tools/
 
 ## 已知問題與限制
 
-- 只有命令列，沒有語音與聊天視窗。
+- 語音只做輸入（按住說話），沒有語音回覆；網頁版語音的實機場地噪音未測。
 - 模型的判斷不是 100% 正確；誤判時程式的檢查能擋下不合法的命令，但擋不下「合法但不是使用者要的」命令。語句表的誤執行為 0，只代表這份表的結果。
 - 回報只用模板，模型不會改寫；英文語句沒有測。
 - 模型與模擬器共用一張 GPU；Isaac 與模型同時跑時要留意記憶體（`LLM_GPU_UTIL`）。
@@ -266,3 +266,22 @@ CHAT_ARGS="--base-url http://127.0.0.1:8001/v1 --model Qwen3.5-9B-Q4_K_M" tools/
 ## 聊天視窗（#11）
 
 命令列之外，另有獨立的 Tk 聊天視窗 `tools/chat_window.py`，規則相同（同一個 `ChatAgent`：追問綁定題號、重開時顯示待答問題）；回答綁定視窗實際顯示的題號（輸入框從空白變有內容時記下，打字、輸入法、貼上都算）。一鍵入口 `tools/lab.py` 會一起開好模型服務、模擬器與聊天視窗，見 [lab-entry.md](lab-entry.md)。
+
+## 聊天網頁
+
+`tools/chat_web.py` 把同一個 `ChatAgent` 放到瀏覽器（只用標準函式庫：`http.server`＋server-sent events；頁面 `tools/chat_web/index.html` 不載入任何 CDN，場地沒網路也能用）。
+
+```bash
+uv run tools/chat_web.py --backend mujoco [--load --block-colors red,red,blue,yellow] [--stt-model small]
+uv run tools/lab.py --web [--stt-model small]     # 一鍵入口改開網頁（自動開瀏覽器，預設 http://127.0.0.1:8765）
+```
+
+| 區塊 | 內容 |
+|---|---|
+| 頂列 | 模擬器、模型與連線狀態；「暫停手臂」「繼續」送模擬器的 `pause`／`resume`（與面板按鈕相同，聊天本身仍不控制手臂） |
+| 待回答卡片 | 目前的問題，附快速回覆（依問題選項：放回去、照樣送出、等補料、不用補了、改成<替代色>）；快速回覆與打字一樣經過模型與程式檢查 |
+| 對話 | 使用者、助理、`[系統]` 回報分色顯示；`[進度]` 以時間軸顯示，最新一步亮綠點 |
+| 輸入 | Enter 送出；處理中鎖住，一次一句 |
+| 語音 | 按住麥克風說話。啟動時給 `--stt-model` 用 faster-whisper（預設 CPU，不占模擬器的 GPU；需另裝 `faster-whisper`）；沒給時改用瀏覽器內建辨識（Chrome，需連網）。辨識結果只填進輸入框，由使用者確認後送出 |
+
+回答綁定與 Tk 視窗相同：頁面在輸入框從空白變有內容時記下當時顯示的題號，送出時帶上（`shown`），另帶目前畫面上的題號（`on_screen`）；快速回覆綁定按下當時畫面上的題號。重新整理頁面會重播整段對話。驗證：`tests/test_chat_web.py`（假世界＋重播模型：持物放回整段、未顯示的問題不送出、一次一句、HTTP 端點與事件串流）。

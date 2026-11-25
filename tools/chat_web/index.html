@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SO-101 任務助理</title>
+<style>
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #e3e6eb;
+  --text: #1b1f24; --muted: #6b7380; --accent: #2563eb; --accent-text: #ffffff;
+  --user: #2563eb; --user-text: #ffffff;
+  --system: #8a5a00; --system-bg: #fff7e6; --system-border: #f3d9a4;
+  --progress: #15803d; --error: #c62828; --error-bg: #fdecec;
+  --q-bg: #fff4d6; --q-border: #f0c869; --q-text: #5c3d00;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317; --surface: #1a1d23; --surface-2: #22262e; --border: #2d323b;
+    --text: #e7e9ee; --muted: #9098a6; --accent: #4f8cff; --accent-text: #ffffff;
+    --user: #3b6fe0; --user-text: #ffffff;
+    --system: #f2c879; --system-bg: #2a2417; --system-border: #4a3d22;
+    --progress: #6fd08c; --error: #ff8a80; --error-bg: #2e1b1b;
+    --q-bg: #2f2816; --q-border: #6b5520; --q-text: #ffe2a3;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 15px/1.6 -apple-system, "PingFang TC", "Noto Sans TC", "Noto Sans CJK TC", "Microsoft JhengHei", sans-serif;
+  display: flex; justify-content: center;
+}
+.app { width: 100%; max-width: 760px; height: 100%; display: flex; flex-direction: column; }
+header {
+  display: flex; align-items: center; gap: 12px; padding: 14px 16px 10px;
+}
+header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+.status { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; }
+.status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--progress); }
+.dot.bad { background: var(--error); }
+.ctl { display: flex; gap: 6px; }
+button { font: inherit; cursor: pointer; }
+.btn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  border-radius: 8px; padding: 5px 12px; font-size: 13px; transition: background .15s, transform .1s;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: scale(.97); }
+.btn.warn { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, var(--border)); }
+.btn[hidden] { display: none; }
+
+.question {
+  margin: 0 16px 8px; padding: 12px 14px; border-radius: 12px;
+  background: var(--q-bg); border: 1px solid var(--q-border); color: var(--q-text);
+  animation: drop .22s ease-out;
+}
+.question[hidden] { display: none; }
+.question .label { font-size: 12px; font-weight: 650; opacity: .8; margin-bottom: 2px; }
+.question .text { font-weight: 600; }
+.quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip {
+  border: 1px solid var(--q-border); background: var(--surface); color: var(--text);
+  border-radius: 999px; padding: 4px 12px; font-size: 13.5px; transition: background .15s, transform .1s;
+}
+.chip:hover { background: var(--surface-2); }
+.chip:active { transform: scale(.96); }
+.chip:disabled { opacity: .5; cursor: default; }
+
+main { flex: 1; overflow-y: auto; padding: 8px 16px 16px; scroll-behavior: smooth; }
+.empty { color: var(--muted); text-align: center; margin-top: 18vh; }
+.empty p { margin: 4px 0 14px; }
+.empty .quick { justify-content: center; }
+.empty .chip { border-color: var(--border); }
+.row { display: flex; margin: 6px 0; animation: rise .18s ease-out; }
+.row.user { justify-content: flex-end; }
+.bubble {
+  max-width: 80%; padding: 8px 13px; border-radius: 14px; white-space: pre-wrap; word-break: break-word;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.user .bubble { background: var(--user); color: var(--user-text); border-color: transparent; border-bottom-right-radius: 4px; }
+.agent .bubble { border-bottom-left-radius: 4px; }
+.system .bubble { background: var(--system-bg); border-color: var(--system-border); color: var(--system); max-width: 92%; }
+.error .bubble { background: var(--error-bg); border-color: transparent; color: var(--error); }
+.progress { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13.5px; margin: 3px 0 3px 4px; animation: rise .18s ease-out; }
+.progress .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; opacity: .5; }
+.progress.live { color: var(--progress); }
+.progress.live .pulse { background: var(--progress); opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
+.thinking { color: var(--muted); font-size: 13.5px; margin: 6px 4px; }
+.thinking i { display: inline-block; width: 5px; height: 5px; margin-left: 3px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+.thinking i:nth-child(2) { animation-delay: .2s; } .thinking i:nth-child(3) { animation-delay: .4s; }
+
+footer { padding: 10px 16px 16px; }
+.composer {
+  display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 14px; border-radius: 16px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow);
+  transition: border-color .15s;
+}
+.composer:focus-within { border-color: var(--accent); }
+textarea {
+  flex: 1; border: 0; outline: 0; resize: none; background: transparent; color: var(--text);
+  font: inherit; padding: 7px 0; max-height: 120px; min-height: 24px;
+}
+.icon {
+  width: 38px; height: 38px; border-radius: 12px; border: 0; display: grid; place-items: center; flex: none;
+  background: var(--surface-2); color: var(--text); transition: background .15s, transform .1s;
+}
+.icon:active { transform: scale(.94); }
+.icon.send { background: var(--accent); color: var(--accent-text); }
+.icon:disabled { opacity: .45; cursor: default; }
+.icon.rec { background: var(--error); color: #fff; animation: pulse 1.2s ease-in-out infinite; }
+.icon svg { width: 18px; height: 18px; }
+.hint { color: var(--muted); font-size: 12px; margin: 6px 4px 0; min-height: 18px; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes drop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@keyframes blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>SO-101 任務助理</h1>
+    <div class="status"><i class="dot" id="dot"></i><span id="status">連線中…</span></div>
+    <div class="ctl">
+      <button class="btn warn" id="pause" title="與模擬器面板的 Pause 相同">暫停手臂</button>
+      <button class="btn" id="resume" hidden>繼續</button>
+    </div>
+  </header>
+
+  <section class="question" id="question" hidden>
+    <div class="label">待回答</div>
+    <div class="text" id="qtext"></div>
+    <div class="quick" id="qquick"></div>
+  </section>
+
+  <main id="log">
+    <div class="empty" id="empty">
+      <p>直接說要什麼，例如：</p>
+      <div class="quick">
+        <button class="chip example">我要兩顆紅色、一顆藍色，藍色先放</button>
+        <button class="chip example">現在做到哪？</button>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="輸入需求，Enter 送出" disabled></textarea>
+      <button class="icon" id="mic" title="按住說話" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      </button>
+      <button class="icon send" id="send" title="送出" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </div>
+    <div class="hint" id="hint"></div>
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = $("log"), input = $("input"), sendBtn = $("send"), micBtn = $("mic"), hint = $("hint");
+let ready = false, busy = false, thinkingEl = null, liveProgress = null;
+
+// ---- answer binding (same rule as agentic_sim.chat.display_binding) ------------------------------------------
+// onScreen: the question id the page shows now. bound: the id shown when the input box went from empty to non-empty.
+const UNSET = Symbol("unset");
+let onScreen = null, bound = UNSET;
+function displayed(qid) { onScreen = qid; }
+function textChanged() {
+  if (!input.value.trim()) bound = UNSET;
+  else if (bound === UNSET) bound = onScreen;
+}
+function takeBound() { const s = bound === UNSET ? onScreen : bound; bound = UNSET; return s; }
+
+// ---- rendering ---------------------------------------------------------------------------------------------
+function atBottom() { return log.scrollHeight - log.scrollTop - log.clientHeight < 80; }
+function scroll(force) { if (force || atBottom()) log.scrollTop = log.scrollHeight; }
+function clearEmpty() { const e = $("empty"); if (e) e.remove(); }
+function settleProgress() { if (liveProgress) { liveProgress.classList.remove("live"); liveProgress = null; } }
+
+function addRow(kind, text) {
+  clearEmpty();
+  const stick = atBottom() || kind === "user";
+  if (kind === "progress") {
+    settleProgress();
+    const el = document.createElement("div");
+    el.className = "progress live";
+    el.innerHTML = '<i class="pulse"></i><span></span>';
+    el.querySelector("span").textContent = text.replace(/^\[進度\]\s*/, "");
+    log.insertBefore(el, thinkingEl);
+    liveProgress = el;
+  } else {
+    if (kind !== "user") settleProgress();   // a report, reply or question: the motion line is no longer "now"
+    const row = document.createElement("div");
+    row.className = "row " + kind;
+    const b = document.createElement("div");
+    b.className = "bubble";
+    b.textContent = kind === "system" ? text.replace(/^\[系統\]\s*/, "") : text;
+    row.appendChild(b);
+    log.insertBefore(row, thinkingEl);
+  }
+  scroll(stick);
+}
+
+function setThinking(on) {
+  if (on && !thinkingEl) {
+    thinkingEl = document.createElement("div");
+    thinkingEl.className = "thinking";
+    thinkingEl.innerHTML = "理解中<i></i><i></i><i></i>";
+    log.appendChild(thinkingEl);
+    scroll(true);
+  } else if (!on && thinkingEl) { thinkingEl.remove(); thinkingEl = null; }
+}
+
+function setBusy(on) {
+  busy = on;
+  sendBtn.disabled = !ready || on || !input.value.trim();
+  document.querySelectorAll(".chip").forEach((c) => (c.disabled = !ready || on));
+  setThinking(on);
+}
+
+function showQuestion(text, qid, quick) {
+  const box = $("question");
+  if (!text) { box.hidden = true; displayed(null); return; }
+  $("qtext").textContent = text;
+  const q = $("qquick");
+  q.innerHTML = "";
+  for (const t of quick || []) {
+    const c = document.createElement("button");
+    c.className = "chip"; c.textContent = t; c.disabled = !ready || busy;
+    c.onclick = () => submit(t);
+    q.appendChild(c);
+  }
+  box.hidden = false;
+  displayed(qid);
+}
+
+function setStatus(text, state) {
+  $("status").textContent = text;
+  $("dot").className = "dot" + (state ? " " + state : "");
+}
+
+// ---- server messages ------------------------------------------------------------------------------------
+function handle(m) {
+  switch (m.kind) {
+    case "status": setStatus(m.text, ready ? "ok" : ""); break;
+    case "fatal": setStatus("無法啟動", "bad"); addRow("error", m.text); break;
+    case "ready":
+      ready = true; input.disabled = false; micBtn.disabled = false; setBusy(false); input.focus();
+      setStatus($("status").textContent, "ok");
+      break;
+    case "conn":
+      if (!m.ok) setStatus("模擬器連線中斷，重試中…", "bad"); else setStatus($("status").textContent, "ok");
+      break;
+    case "user": addRow("user", m.text); break;
+    case "lines":
+      for (const l of m.lines) addRow(l.tag, l.text);
+      if ("qid" in m) displayed(m.qid);
+      break;
+    case "question": showQuestion(m.text, m.qid, m.quick); break;
+    case "idle": setBusy(false); break;
+    case "paused": $("pause").hidden = m.paused; $("resume").hidden = !m.paused; break;
+  }
+}
+
+function connect() {
+  const es = new EventSource("/api/events");
+  es.onmessage = (ev) => handle(JSON.parse(ev.data));
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED) setTimeout(connect, 1000); };
+}
+
+// ---- sending ------------------------------------------------------------------------------------------------
+async function submit(text) {
+  text = (text || "").trim();
+  if (!ready || busy || !text) return;
+  const shown = text === input.value.trim() ? takeBound() : onScreen;   // a chip answers what is on screen now
+  if (text === input.value.trim()) { input.value = ""; autosize(); textChanged(); }
+  setBusy(true);
+  try {
+    const r = await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, shown, on_screen: onScreen }) });
+    if (r.status === 409) { setBusy(true); hint.textContent = "上一句還在處理"; }
+    else if (!r.ok) { setBusy(false); addRow("error", "錯誤：送出失敗"); }
+  } catch (e) { setBusy(false); addRow("error", "錯誤：連不上聊天服務"); }
+}
+
+function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; }
+input.addEventListener("input", () => { textChanged(); autosize(); sendBtn.disabled = !ready || busy || !input.value.trim(); });
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(input.value); }
+});
+sendBtn.onclick = () => submit(input.value);
+document.querySelectorAll(".example").forEach((c) => (c.onclick = () => submit(c.textContent)));
+
+async function control(cmd) {
+  const r = await fetch("/api/" + cmd, { method: "POST", body: "{}" }).then((r) => r.json()).catch(() => ({ ok: false, error: "連不上" }));
+  if (!r.ok) addRow("error", `錯誤：${cmd === "pause" ? "暫停" : "繼續"}失敗（${r.error}）`);
+}
+$("pause").onclick = () => control("pause");
+$("resume").onclick = () => control("resume");
+
+// ---- voice: hold the mic button. Server whisper if enabled, else the browser's recogniser ---------------------
+let serverStt = false, rec = null, chunks = [], recog = null;
+fetch("/api/info").then((r) => r.json()).then((i) => { serverStt = i.stt; }).catch(() => {});
+const BrowserSR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+function putText(t) {
+  if (!t) { hint.textContent = "沒有聽到內容"; return; }
+  input.value = (input.value ? input.value + " " : "") + t;
+  textChanged(); autosize(); input.focus();
+  sendBtn.disabled = !ready || busy;
+  hint.textContent = "確認文字後按 Enter 送出";
+}
+
+async function micDown(e) {
+  e.preventDefault();
+  if (micBtn.disabled || rec || recog) return;
+  hint.textContent = "";
+  if (serverStt && navigator.mediaDevices) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunks = [];
+      rec = new MediaRecorder(stream);
+      rec.ondataavailable = (ev) => chunks.push(ev.data);
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: rec.mimeType });
+        rec = null;
+        hint.textContent = "辨識中…";
+        const r = await fetch("/api/stt", { method: "POST", headers: { "Content-Type": blob.type }, body: blob })
+          .then((r) => r.json()).catch(() => ({ error: "連不上語音辨識" }));
+        if (r.error) hint.textContent = r.error; else putText(r.text);
+      };
+      rec.start();
+      micBtn.classList.add("rec"); hint.textContent = "錄音中，放開結束";
+      return;
+    } catch (err) { hint.textContent = "無法使用麥克風：" + err.message; return; }
+  }
+  if (BrowserSR) {
+    recog = new BrowserSR();
+    recog.lang = "zh-TW"; recog.interimResults = false;
+    recog.onresult = (ev) => putText(Array.from(ev.results).map((r) => r[0].transcript).join(""));
+    recog.onerror = (ev) => { hint.textContent = "語音辨識失敗：" + ev.error; };
+    recog.onend = () => { recog = null; micBtn.classList.remove("rec"); };
+    recog.start();
+    micBtn.classList.add("rec"); hint.textContent = "聆聽中，放開結束";
+    return;
+  }
+  hint.textContent = "沒有可用的語音辨識（啟動時加 --stt-model small，或用 Chrome）";
+}
+function micUp() {
+  micBtn.classList.remove("rec");
+  if (rec && rec.state === "recording") rec.stop();
+  if (recog) recog.stop();
+}
+micBtn.addEventListener("pointerdown", micDown);
+micBtn.addEventListener("pointerup", micUp);
+micBtn.addEventListener("pointerleave", micUp);
+
+connect();
+</script>
+</body>
+</html>
