@@ -5,6 +5,8 @@
            saves the route -> r replays it in reverse to park -> confirm support -> torque off
   run      from park: replay forward to the channel, hold; t = leader task test, r = reverse home
   recover  follower still holding with torque on: follow the route back to park and release
+  record-drop  park -> channel, then teach channel -> drop pose over a tray (--tray pink|beige)
+  setup    combine the park-channel route and drop routes into a collection setup JSON
   show     offline summary of a route file
 """
 
@@ -25,8 +27,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from agentic_sim.real_motion import OFF  # noqa: E402
 from agentic_sim.real_route import (  # noqa: E402
-    ENGAGE_GAP, PLAY_SPEED, Driver, Released, archive_existing, body_gap, load_route,
-    recover, record, roundtrip, sample_park,
+    ENGAGE_GAP, PLAY_SPEED, Driver, Released, archive_existing, body_gap, build_setup, load_route,
+    record_drop, recover, record, roundtrip, sample_park,
 )
 
 
@@ -155,10 +157,17 @@ def show(path):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("record", "run", "recover", "show"):
+    for name in ("record", "run", "recover", "record-drop", "setup", "show"):
         p = sub.add_parser(name)
         p.add_argument("--route", type=Path, required=True, help="route JSON, e.g. outputs/routes/right-park-channel.json")
-        if name == "show":
+        if name == "setup":
+            p.add_argument("--drop", type=Path, action="append", default=[], help="drop route JSON (repeat per tray)")
+            p.add_argument("--cards", type=Path, help="JSON with the cards section (seed, reserve_distance_mm, zones)")
+            p.add_argument("--version", required=True, help="start/setup version, e.g. right-20261126-v1")
+            p.add_argument("--workspace", required=True, help="verified workspace description/version")
+            p.add_argument("--speed", type=float, default=20.0, help="route speed deg/s (<= 25)")
+            p.add_argument("--out", type=Path, required=True)
+        if name in ("show", "setup"):
             continue
         p.add_argument("--config", type=Path, help="single-arm local profile, e.g. outputs/single.local.yaml")
         p.add_argument("--arm", default="right")
@@ -174,9 +183,33 @@ def main(argv=None):
             p.add_argument("--replace", action="store_true", help="archive an existing route file and teach anew")
         if name == "run":
             p.add_argument("--no-leader", action="store_true", help="playback only, no leader task test")
+        if name == "record-drop":
+            p.add_argument("--tray", required=True, choices=("pink", "beige"))
+            p.add_argument("--out", type=Path, required=True, help="drop route JSON to write")
+            p.add_argument("--release", type=float, default=60.0, help="gripper opening %% to release the block")
+            p.add_argument("--replace", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "show":
         show(args.route)
+        return 0
+    if args.command == "setup":
+        data, track = load_route(args.route)
+        if not data["verified"].get("reverse_to_park"):
+            parser.error("verify the reverse route to park before building a setup")
+        drops = [json.loads(path.read_text(encoding="utf-8")) for path in args.drop]
+        example = json.loads((ROOT / "configs/real_collection.setup.example.json").read_text(encoding="utf-8"))
+        cards = json.loads(args.cards.read_text(encoding="utf-8")) if args.cards else example["cards"]
+        setup = build_setup(data, track, drops, version=args.version, workspace=args.workspace,
+                            cards=cards.get("cards", cards), speed=args.speed)
+        from agentic_sim.real_motion import MotionPlan
+
+        MotionPlan.load(setup["motion"])  # same validation as the collection desk
+        if args.out.exists():
+            parser.error(f"{args.out} exists")
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(setup, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"{args.out}: {len(setup['motion']['via'])} via points, drops {sorted(setup['motion']['drops'])}"
+              + ("" if any(setup["cards"]["zones"].values()) else "; fill cards.zones before collecting"))
         return 0
     if not args.fake and (not args.config or not args.allow_motion):
         parser.error("hardware use needs --config and --allow-motion (or --fake)")
@@ -184,7 +217,9 @@ def main(argv=None):
         parser.error("--rate must be within 0.2..2.0")
 
     route = args.route
-    leader_needed = args.command == "record" or (args.command == "run" and not args.no_leader)
+    leader_needed = args.command in ("record", "record-drop") or (args.command == "run" and not args.no_leader)
+    if args.command == "record-drop" and args.out.exists() and not args.replace:
+        parser.error(f"{args.out} exists; pass --replace to archive it")
     if args.command == "record":
         if route.exists() and not args.replace:
             parser.error(f"{route} exists; pass --replace to archive it and teach a new route")
@@ -229,6 +264,10 @@ def main(argv=None):
                     record(driver, hand, route, meta, samples)
                 elif args.command == "run":
                     roundtrip(driver, hand, route, data, track)
+                elif args.command == "record-drop":
+                    if args.replace:
+                        archive_existing(args.out)
+                    record_drop(driver, hand, data, track, args.out, args.tray, args.release)
                 else:
                     if follower.torque_states() == OFF:
                         term.say("follower 扭力已全關，不需要接手；請確認支撐。")

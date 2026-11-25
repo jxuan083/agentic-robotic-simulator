@@ -583,6 +583,7 @@ def record(driver, leader, route_path, meta, park_samples):
     track.points[0] = dict(park)  # the path starts exactly at the supported park reading
     data = {
         "format": FORMAT, **meta, "joint_units": UNITS, "created_at": now_iso(),
+        "limits": {j: list(v) for j, v in driver.limits.items()},
         "park": {"pose": park, "samples": park_samples, "torque": OFF},
         "channel": {"command": dict(driver.target), "readback": channel_readback, "stationary": still},
         **track.to_json(),
@@ -659,3 +660,75 @@ def roundtrip(driver, leader, route_path, data, track):
     data["verified"]["forward_to_channel"] = str(driver.run_dir)
     save_route(route_path, data)
     channel_hold(driver, leader, data, track, route_path)
+
+
+DROP_FORMAT = "so101-drop-route/1"
+
+
+def record_drop(driver, leader, data, track, drop_path, tray, release):
+    """From park: go to the channel, teach channel -> drop pose over a tray with the leader, save it,
+    then reverse back to the channel and home to park."""
+    park = data["park"]["pose"]
+    driver.arm_at(park)
+    if follow(driver, track, ("停放位", "通道位")) != "通道位":
+        park_and_release(driver, Track([driver.target, park], [0.0]), park, data["park_support"])
+        return None
+    channel = dict(driver.target)
+    if not driver.align_leader(leader, driver.read()):
+        park_and_release(driver, track.reverse(), park, data["park_support"])
+        return None
+    samples = [(driver.clock(), dict(driver.target))]
+    while True:
+        try:
+            driver.stage("recording_drop", tray=tray)
+            driver.term.say(f"用 leader 從通道位移到{tray}盤上方的放開位置（方塊離盤面數公分），停穩後按 c；Esc 暫停。")
+            driver.teleop(leader, {"c"}, samples)
+            break
+        except Paused as pause:
+            driver.term.say(f"已暫停並原地保持：{pause}")
+            choice = driver.menu("t 重新對齊 leader 繼續／r 沿已錄路徑退回通道位再回停放位（不存）／x 緊急原地解扭力",
+                                 {"t": "繼續", "r": "退回", "x": "緊急解力"})
+            if choice == "r" or not _resume_teleop(driver, leader, samples):
+                samples.append((driver.clock(), dict(driver.target)))
+                follow(driver, compress(samples).reverse(), ("中途", "通道位"))
+                park_and_release(driver, track.reverse(), park, data["park_support"])
+                return None
+    readback, still = driver.settle()
+    samples.append((driver.clock(), dict(driver.target)))
+    drop = compress(samples)
+    drop.points[0] = channel
+    out = {"format": DROP_FORMAT, "tray": tray, "arm": data["arm"], "layout_id": data["layout_id"],
+           "calibrations": data["calibrations"], "base_route": data.get("created_at"),
+           "release_gripper": release, "drop_readback": readback, "stationary": still,
+           "created_at": now_iso(), "recorded": {"run": str(driver.run_dir), "raw_samples": len(samples)},
+           **drop.to_json()}
+    save_route(drop_path, out)
+    driver.event("drop_saved", path=str(drop_path), tray=tray, waypoints=len(drop.points))
+    driver.term.say(f"{tray} 放開路線已保存：{len(drop.points)} 個路徑點 → {drop_path}")
+    if driver.menu("確認空爪、回程淨空。r 倒放回通道位再回停放位並解扭力／x 緊急原地解扭力",
+                   {"r": "回停放位", "x": "緊急解力"}) == "r":
+        follow(driver, drop.reverse(), (f"{tray}放開位", "通道位"))
+        park_and_release(driver, track.reverse(), park, data["park_support"])
+    return out
+
+
+def build_setup(data, track, drops, *, version, workspace, cards, speed=20.0):
+    """Collection setup JSON (configs/real_collection.setup.example.json shape) from taught routes."""
+    limits = {j: list(v) for j, v in data["limits"].items()}
+    clip = lambda p: {j: min(limits[j][1], max(limits[j][0], p[j])) for j in JOINTS}  # noqa: E731
+    motion = {
+        "arm": data["arm"], "version": version, "layout": data["layout_id"], "workspace": workspace,
+        "calibrations": data["calibrations"], "park_support": data["park_support"],
+        "park": clip(data["park"]["pose"]), "via": [clip(p) for p in track.points[1:-1]],
+        "start": clip(data["channel"]["command"]), "limits": limits,
+        "speed": dict.fromkeys(BODY, float(speed)) | {"gripper": 25.0}, "rgb_depth": {},
+        "drops": {}, "routes": {"park_channel": data.get("created_at")},
+    }
+    for drop in drops:
+        if drop["calibrations"] != data["calibrations"] or drop["layout_id"] != data["layout_id"]:
+            raise ValueError(f"drop route {drop['tray']} was taught with another calibration or layout")
+        points = [clip(p) for p in drop["waypoints"]]
+        if body_gap(points[0], motion["start"]) > ENDPOINT:
+            raise ValueError(f"drop route {drop['tray']} does not start at this channel pose")
+        motion["drops"][drop["tray"]] = {"waypoints": points, "release_gripper": drop["release_gripper"]}
+    return {"motion": motion, "cards": cards}

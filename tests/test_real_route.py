@@ -8,9 +8,10 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agentic_sim.real_motion import OFF, ON  # noqa: E402
+from agentic_sim.real_motion import MotionPlan  # noqa: E402
 from agentic_sim.real_route import (  # noqa: E402
-    BODY, RELEASE_LAG, Driver, Released, Track, body_gap, compress, load_route, recover, record,
-    roundtrip, sample_park,
+    BODY, RELEASE_LAG, Driver, Released, Track, body_gap, build_setup, compress, load_route, record_drop,
+    recover, record, roundtrip, sample_park,
 )
 from agentic_sim.real_route_fake import (  # noqa: E402
     CHANNEL, PARK, FakeClock, FakeFollower, FakeLeader, ScriptedTerminal, operator_path,
@@ -151,6 +152,34 @@ class RouteCase(unittest.TestCase):
         driver.close_logs()
         self.assert_released_at_park(follower)
         self.assertLess(body_gap(load_route(self.route)[0]["channel"]["readback"], CHANNEL), 3.0)
+
+
+class DropCase(unittest.TestCase):
+    setUp = RouteCase.setUp
+    driver = RouteCase.driver
+    teach = RouteCase.teach
+    assert_released_at_park = RouteCase.assert_released_at_park
+
+    def test_drop_route_and_collection_setup(self):
+        self.teach()
+        data, track = load_route(self.route)
+        drop_pose = dict(CHANNEL) | {"shoulder_pan": 20.0, "shoulder_lift": -40.0}
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        leader = FakeLeader(clock, [(0.0, CHANNEL), (22.0, CHANNEL), (26.0, drop_pose)])
+        term = ScriptedTerminal(clock, [(20.0, "enter"), (30.0, "c")], ("r", "y"))
+        driver = self.driver(follower, term, clock, "drop")
+        out = record_drop(driver, leader, data, track, self.tmp / "drop-pink.json", "pink", 60.0)
+        driver.close_logs()
+        self.assertIsNotNone(out)
+        self.assert_released_at_park(follower)
+        self.assertLess(body_gap(out["drop_readback"], drop_pose), 3.0)
+        self.assertLess(body_gap(out["waypoints"][0], data["channel"]["command"]), 1e-9)
+        cards = {"seed": 1, "reserve_distance_mm": 20, "zones": {}}
+        setup = build_setup(data, track, [out], version="v1", workspace="fake", cards=cards)
+        plan = MotionPlan.load(setup["motion"])
+        self.assertEqual(sorted(plan.drops), ["pink"])
+        self.assertLess(body_gap(plan.start, data["channel"]["command"]), 1e-9)
 
 
 class TrackCase(unittest.TestCase):

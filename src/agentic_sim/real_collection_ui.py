@@ -12,7 +12,8 @@ from agentic_sim.real_review import _nearest, native_depth, save_depth_compariso
 
 
 PHASES = {"align": "正在對齊標準起姿", "recording": "採集中，可操作 leader",
-          "replay": "follower 正在重播", "return": "任務結束，準備復位"}
+          "replay": "follower 正在重播", "return": "任務結束，準備復位",
+          "place": "自動移到目的盤放下，請保持淨空"}
 COLOR = {"red": "紅", "blue": "藍", "yellow": "黃"}
 TRAY = {"pink": "粉盤", "beige": "米盤"}
 
@@ -56,6 +57,9 @@ class WindowOperator:
 
     def support(self, support):
         return self.ask("support", support)
+
+    def carry(self, tray):
+        return self.ask("carry", tray)
 
 
 def _thumbnail(parent, path):
@@ -224,6 +228,12 @@ class Window:
         self.root.after(50, self.poll)
 
     def prompt(self, kind, text, response):
+        if kind == "carry":
+            self.status_text.set("follower 保持抬起姿態，等待確認")
+            response.put(messagebox.askyesno(
+                "自動放置", f"方塊已夾穩並抬離盤面？\n「是」：自動回通道位、移到{TRAY.get(text, text)}放下，再回通道位。\n"
+                "「否」：不自動放置（抓空或要現場處理）。", parent=self.root))
+            return
         if kind == "support":
             self.status_text.set("已抵達停放位並停穩")
             response.put(messagebox.askyesno("確認停放支撐", f"請確認已接觸支撐且手臂可卸力。\n{text}",

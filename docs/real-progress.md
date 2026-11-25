@@ -53,10 +53,15 @@
 
 ## 下一步
 
-1. **上機**：依 [real-teleop.md](real-teleop.md#停放位與通道位路線) 用 `real_route.py record` 教示停放位 → 通道位，接著驗證倒放回停放位與 `run` 的去程。通道位要選在工作區上方、腕相機能看到托盤的位置。
-2. **程式**：在路線工具的 leader 操作段加入交接幀標記與交接姿態檢查；採集流程改成從通道位出發；每筆寫入語言指令。
-3. **已決定**：ACT 只學「交接 → 夾起抬穩」，`training_range` 維持 `[handoff, lift]`。移盤與放下由教示好的固定路線完成（見下方「控制頻率與訓練段」）。
-4. 空桌驗證後收第一筆紅塊抓放並讀回，通過後再批次採集。
+採集端程式已備妥（假裝置驗證）：停放位 ⇄ 通道位路線、兩盤放開路線的教示（`real_route.py record-drop`）、合成採集 setup（`real_route.py setup`）、採集與重播的寬鬆動作規則、抬穩後自動放置。本機 `single.local.yaml` 已改為 30 Hz。
+
+下次上機依序：
+1. 教示並驗證停放位 ⇄ 通道位路線（`record`，再 `run`）。
+2. 教示兩盤的放開路線（`record-drop --tray pink`、`--tray beige`）。
+3. 以 `real_route.py run` 的 `t` 用 leader 試夾各區，刪掉候選擺位範本（`configs/real_collection.cards.template.json`）中夾不到的點，存成本次的 cards JSON。
+4. `real_route.py setup` 產生 setup，開採集視窗，做空桌動作驗證。
+5. 第一筆紅塊（粉 → 米）：錄製、讀回、審查標交接幀，再做一次實機重播；檢查讀回報告的 `control_timing` 確認 30 Hz。
+6. 通過後批次採集；收工時打包 session 給訓練端。訓練端說明見 `feat/real-lerobot-training` 分支的 `docs/real-training.md`。
 
 ## 尚未可靠、勿直接使用
 

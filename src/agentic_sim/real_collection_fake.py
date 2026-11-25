@@ -18,6 +18,8 @@ def fake_setup():
         "park_support": "fake dock", "park": fake_pose(-6, 70), "via": [fake_pose(-3, 70)],
         "start": fake_pose(0, 70), "limits": dict.fromkeys(JOINTS, [-25, 25]) | {"gripper": [0, 100]},
         "speed": dict.fromkeys(JOINTS, 20), "rgb_depth": {},
+        "drops": {"pink": {"waypoints": [fake_pose(0, 70), fake_pose(-4, 70, 2)], "release_gripper": 80},
+                  "beige": {"waypoints": [fake_pose(0, 70), fake_pose(4, 70, 2)], "release_gripper": 80}},
     }
     layouts = {
         "seed": 20261124, "reserve_distance_mm": 18,
@@ -152,6 +154,10 @@ class FakeOperator:
 
     def support(self, support):
         return self.safe_support
+
+    def carry(self, tray):
+        self.placed_into = tray
+        return self.cancel_at is None
 
 
 def fake_policy(frame):
