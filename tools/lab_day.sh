@@ -4,7 +4,8 @@
 #   tools/lab_day.sh <step> [args]          steps in order:
 #     env          show the day's settings, commit and control rate
 #     check        read-only device/calibration check (power on, torque off)
-#     overlay      D455 live overlay against the 11/25 tray reference (s saves, q quits)
+#     overlay      D455 live overlay against the current tray reference (s saves, q quits)
+#     reference    after moving the trays: save a new D455 reference (markers 40/41/42) that overlay then uses
 #     route        teach park -> channel with the leader, reverse to park   (needs SUPPORT="...")
 #     route-tune   remove taught pauses/jitter, fix the gripper opening: GRIP=<pct>, or hold the leader
 #                  gripper at the cube-ready opening while it reads (read-only); then route-test again.
@@ -41,7 +42,9 @@ DROP_PINK="$ROUTES/right-drop-pink-$DATE.json"
 CARDS="outputs/$DATE-cards.json"
 SETUP="outputs/$DATE-right.setup.json"
 SESSION="outputs/$DATE-right"
-REFERENCE=outputs/261125-camera/global/rgb.png
+# D455 tray reference for `overlay`: the latest `reference` capture, else the 11/25 one (REFERENCE=... overrides)
+REFERENCE="${REFERENCE:-$(cat outputs/current-reference.txt 2>/dev/null || echo outputs/261125-camera/global/rgb.png)}"
+CAMPY="${CAMPY:-$HOME/Lehome/lehome_solution/.venv/bin/python}"  # GUI + ArUco + RealSense, as on 11/24-25
 D455=038122250316
 
 if [[ -n "${FAKE:-}" ]]; then MOTION=(--fake); else MOTION=(--config "$CONFIG" --allow-motion); fi
@@ -67,6 +70,17 @@ case "$step" in
     need "$REFERENCE"
     say "move the trays until their rims overlap the reference; s saves, q quits"
     "$PY" tools/tray_overlay.py "$REFERENCE" --serial "$D455" --output "outputs/$DATE-camera/tray-overlay.png" ;;
+  reference)
+    # After moving the trays: new D455 RGB-D reference with markers 40/41/42, compared with the previous one.
+    name="${1:-trays-$(date +%H%M)}"; root="outputs/$DATE-camera"; mkdir -p "$root"
+    [[ -e "$root/measurements.json" ]] || cp outputs/261125-camera/measurements.json "$root/"  # same printed markers
+    say "markers 40/41/42 and both trays fully in view (beige right edge too); s saves, q quits"
+    "$CAMPY" tools/calibrate_real_cameras.py --root "$root" global --config "$CONFIG" --name "$name" \
+      --compare "$(dirname "$REFERENCE")"
+    if [[ -e "$root/$name/rgb.png" ]]; then
+      echo "$root/$name/rgb.png" > outputs/current-reference.txt
+      echo "overlay now uses $root/$name/rgb.png; re-teach both drop routes (REPLACE=1) after a tray move"
+    fi ;;
   route)
     [[ -n "${SUPPORT:-}" ]] || { echo 'set SUPPORT="<park support description>"' >&2; exit 1; }
     mkdir -p "$ROUTES"
@@ -143,5 +157,5 @@ PYEOF
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)
-    sed -n '2,29p' "$0"; exit 1 ;;
+    sed -n '2,30p' "$0"; exit 1 ;;
 esac
