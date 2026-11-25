@@ -26,7 +26,7 @@
 #
 # Settings (environment): LAB_DATE (default today, YYMMDD), SUPPORT (park support description, for `route`),
 # PY (default the conda lerobot python), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
-# with simulated arms), MANUAL_ALIGN=1 (align the leader by hand), GRIP (route-tune gripper %), RATE (route playback speed factor, default 1.0), RELEASE (drop gripper %, default 60).
+# with simulated arms), MANUAL_ALIGN=1 (align the leader by hand), GRIP (route-tune gripper %), RATE (route playback speed factor, default 1.0), RELEASE (drop gripper %, default 35).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -101,7 +101,7 @@ case "$step" in
     tray="${step#drop-}"; out="$DROP_BEIGE"; [[ "$tray" == pink ]] && out="$DROP_PINK"
     say "leader from the channel to ~3-5 cm above the $tray tray centre without touching the rim; c saves"
     "$PY" tools/real_route.py record-drop "${MOTION[@]}" --route "$ROUTE" --tray "$tray" --out "$out" \
-      --release "${RELEASE:-60}" "${REPLACE_FLAG[@]}" ;;
+      --release "${RELEASE:-35}" "${REPLACE_FLAG[@]}" ;;
   drop-test-beige|drop-test-pink)
     tray="${step#drop-test-}"; drop="$DROP_BEIGE"; [[ "$tray" == pink ]] && drop="$DROP_PINK"
     need "$ROUTE" "$drop"
