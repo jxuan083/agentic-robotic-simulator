@@ -447,15 +447,20 @@ TUNE_PATH_ERROR = 1.0      # body deg: drops hand jitter from a taught route, ke
 OPEN_AFTER_LIFT = 45.0     # gripper stays at park opening until shoulder_lift has risen this far from park
 
 
-def tune_route(data, *, grip, body_error=TUNE_PATH_ERROR, open_after_lift=OPEN_AFTER_LIFT):
+def tune_route(data, *, grip, body_error=TUNE_PATH_ERROR, open_after_lift=OPEN_AFTER_LIFT, straight_from=None):
     """Route without the taught pauses: speed-capped timing, jitter removed, fixed gripper opening.
 
     The gripper keeps the park opening through the folded area and switches to `grip` once shoulder_lift has
     risen `open_after_lift` deg from park (reverse: closes there before entering the folded area).
+    straight_from: waypoint index after which the final adjustments become one straight joint move to the channel.
     """
     if not 0.0 <= grip <= 100.0:
         raise ValueError("gripper opening must be within 0..100 %")
     points = [pose(p) for p in data["waypoints"]]
+    if straight_from is not None:
+        if not 0 <= straight_from < len(points) - 1:
+            raise ValueError(f"straight_from must be within 0..{len(points) - 2}")
+        points = points[:straight_from + 1] + points[-1:]
     park_grip = data["park"]["pose"]["gripper"]
     lift0 = points[0]["shoulder_lift"]
     switch = next((i for i, p in enumerate(points) if p["shoulder_lift"] - lift0 >= open_after_lift), None)
@@ -472,7 +477,7 @@ def tune_route(data, *, grip, body_error=TUNE_PATH_ERROR, open_after_lift=OPEN_A
     out["tuned"] = {"at": datetime.now().astimezone().isoformat(), "gripper_open_pct": float(grip),
                     "gripper_open_after_lift_deg": open_after_lift, "path_tolerance_deg": body_error,
                     "timing": f"speed cap {PLAY_SPEED} deg/s, {GRIPPER_PLAY_SPEED} %/s; taught pauses removed",
-                    "waypoints_before": len(data["waypoints"]), "waypoints_after": len(points),
+                    "straight_from": straight_from, "waypoints_before": len(data["waypoints"]), "waypoints_after": len(points),
                     "open_from_waypoint": next(i for i, p in enumerate(points) if p["gripper"] == float(grip))}
     return out
 

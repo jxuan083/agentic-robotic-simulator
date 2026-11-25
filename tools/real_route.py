@@ -171,6 +171,9 @@ def leader_gripper(config, arm, samples=10):
 def tune(args):
     data, _ = load_route(args.route)
     grip = args.grip
+    if grip is None and not args.config and "tuned" in data:
+        grip = data["tuned"]["gripper_open_pct"]
+        print(f"keeping gripper {grip:.1f} %")
     if grip is None:
         if not args.config:
             raise SystemExit("tune needs --grip PCT or --config to read the leader gripper")
@@ -178,13 +181,13 @@ def tune(args):
         if spread > 2.0:
             raise SystemExit(f"leader gripper moved while reading ({spread:.1f} %); hold it still and retry")
         print(f"leader gripper reads {grip:.1f} %")
-    tuned = tune_route(data, grip=grip)
+    tuned = tune_route(data, grip=grip, straight_from=args.straight_from)
     old = archive_existing(args.route)
     save_route(args.route, tuned)
     t = tuned["tuned"]
     print(f"saved {args.route} (previous: {old.name})")
     print(f"waypoints {t['waypoints_before']} -> {t['waypoints_after']}, playback about "
-          f"{sum(tuned['segment_seconds']):.1f} s (taught {sum(data['segment_seconds']):.1f} s incl. pauses); "
+          f"{sum(tuned['segment_seconds']):.1f} s (before {sum(data["segment_seconds"]):.1f} s); "
           f"gripper {data['park']['pose']['gripper']:.1f} % until waypoint {t['open_from_waypoint']}, then "
           f"{grip:.1f} %. Verify again: route-test.")
     return 0
@@ -199,6 +202,8 @@ def main(argv=None):
         if name == "tune":
             p.add_argument("--grip", type=float, help="fixed gripper opening %% at the channel (cube-ready)")
             p.add_argument("--config", type=Path, help="read the opening from the leader gripper instead (read-only)")
+            p.add_argument("--straight-from", type=int,
+                           help="waypoint index in the route file after which to go straight to the channel")
             continue
         if name == "setup":
             p.add_argument("--drop", type=Path, action="append", default=[], help="drop route JSON (repeat per tray)")

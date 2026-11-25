@@ -7,7 +7,8 @@
 #     overlay      D455 live overlay against the 11/25 tray reference (s saves, q quits)
 #     route        teach park -> channel with the leader, reverse to park   (needs SUPPORT="...")
 #     route-tune   remove taught pauses/jitter, fix the gripper opening: GRIP=<pct>, or hold the leader
-#                  gripper at the cube-ready opening while it reads (read-only); then route-test again
+#                  gripper at the cube-ready opening while it reads (read-only); then route-test again.
+#                  KEEP_GRIP=1 keeps the tuned opening; --straight-from N goes straight from waypoint N to the channel
 #     route-test   replay park -> channel without the leader, r returns home
 #     drop-beige   teach channel -> drop pose over the beige tray
 #     drop-pink    teach channel -> drop pose over the pink tray
@@ -73,9 +74,9 @@ case "$step" in
       "${REPLACE_FLAG[@]}" ;;
   route-tune)
     need "$ROUTE"
-    if [[ -n "${GRIP:-}" ]]; then src=(--grip "$GRIP"); else
+    if [[ -n "${GRIP:-}" ]]; then src=(--grip "$GRIP"); elif [[ -n "${KEEP_GRIP:-}" ]]; then src=(); else
       say "hold the leader gripper at the cube-ready opening, keep it still"; src=(--config "$CONFIG"); fi
-    "$PY" tools/real_route.py tune --route "$ROUTE" "${src[@]}" ;;
+    "$PY" tools/real_route.py tune --route "$ROUTE" "${src[@]}" "$@" ;;
   route-test)
     need "$ROUTE"
     "$PY" tools/real_route.py run "${MOTION[@]}" --route "$ROUTE" --no-leader --rate "${RATE:-1.0}" ;;
@@ -135,5 +136,5 @@ PYEOF
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)
-    sed -n '2,27p' "$0"; exit 1 ;;
+    sed -n '2,28p' "$0"; exit 1 ;;
 esac
