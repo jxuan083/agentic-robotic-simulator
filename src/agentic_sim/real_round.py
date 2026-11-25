@@ -113,6 +113,13 @@ def capture_round(root, backend, plan, operator, *, policy=None, card=None):
                                task_card=card)
         with managed_motion(backend, plan, root / "motion.jsonl", operator, leader=True,
                             episode_clock=writer.clock) as (leader, motion, start):
+            if not policy and hasattr(leader, "drive_on"):
+                # Bring the leader to the follower's start pose and hand it over before recording starts.
+                from agentic_sim.real_leader import handover
+
+                handover(leader, start, route=list(plan.route), clock=backend.clock, wait=backend.wait,
+                         hz=backend.hz, say=getattr(operator, "say", lambda _text: None), halted=operator.halted,
+                         event=lambda kind, **fields: motion.event(kind, **fields))
             router = ControlRouter({plan.arm: (leader, motion)}, start="policy" if policy else "manual")
             if policy:
                 router.enqueue_policy([{plan.arm: start}], generation=router.generation)

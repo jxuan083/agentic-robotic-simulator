@@ -29,6 +29,9 @@ class WindowOperator:
     def status(self, state):
         self.events.put(("status", PHASES[state]))
 
+    def say(self, text):
+        self.events.put(("status", text))
+
     def halted(self):
         return self.abort.is_set()
 
