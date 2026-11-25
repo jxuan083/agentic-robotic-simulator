@@ -16,6 +16,13 @@ from agentic_sim.real_route import (
 )
 
 END_NEAR_START = 30.0   # body deg: after c the arm goes straight to the start pose only from this close
+WRIST_FREE = "wrist_roll"   # turned to square up with the block during the demo; the straight move back restores it
+
+
+def reach_gap(a, b):
+    """body_gap without wrist_roll: how far the arm is from the start pose, ignoring a wrist turned in open air.
+    The way back always ends at the full start pose (wrist included) before the fixed route to park."""
+    return max(abs(a[j] - b[j]) for j in JOINTS[:-1] if j != WRIST_FREE)
 
 COLORS = {"r": "red", "b": "blue", "y": "yellow"}
 COLOR_NAME = {"red": "紅", "blue": "藍", "yellow": "黃"}
@@ -247,21 +254,21 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         driver.term.say(f"D455 開場畫面沒找到{color}方塊；仍可錄，讀回時再確認。")
     driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]}第 {slot['index']} 個位置"
                           "（照固定順序接在上一顆旁邊，貼近盤面再張爪）→ 抬起退回起姿附近，停穩按 c。"
-                          "Esc 暫停，腕部不要轉。")
+                          "Esc 暫停；腕部只在 ±30° 內對齊方塊。")
     driver.arm_at(park)
     if not driver.align_leader(leader, driver.read()):
         park_and_release(driver, Track([driver.target, park], [0.0]), park, support)
         return {"cancelled": True, "demo_frames": None}
     while True:
         samples, kept = record_demo(driver, leader, writer, check_cameras)
-        if not kept or body_gap(driver.read(), channel) <= END_NEAR_START:
+        if not kept or reach_gap(driver.read(), channel) <= END_NEAR_START:
             break
-        choice = driver.menu(f"離起姿還有 {body_gap(driver.last, channel):.0f}°。t 重新交接繼續錄、把手臂帶回起姿附近"
+        choice = driver.menu(f"離起姿還有 {reach_gap(driver.last, channel):.0f}°。t 重新交接繼續錄、把手臂帶回起姿附近"
                              "／r 沿剛才的路徑退回起姿（這段不錄）", {"t": "繼續錄", "r": "退回"})
         if choice == "r" or not driver.align_leader(leader, driver.read()):
             break
     demo_frames = writer.count
-    if body_gap(driver.read(), channel) <= END_NEAR_START:
+    if reach_gap(driver.read(), channel) <= END_NEAR_START:
         follow(driver, retimed([dict(driver.target), pose(channel) | {"gripper": driver.target["gripper"]}]),
                ("結束位", "起姿"))
     else:
