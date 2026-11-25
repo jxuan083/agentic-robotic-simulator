@@ -6,7 +6,7 @@
 
 The demonstration covers the whole pick and place (no scripted detour back to the start pose before placing).
 Cameras run for the whole round: the opening global frame shows the untouched layout and gives the target
-block (fixed tray corners); the frame after c shows where the block landed. review.json gets
+block (fixed tray corners); a frame taken back at park (arm folded, trays unobstructed) gives the landing. review.json gets
 start/close/lift/release/end and both targets. Training ranges: grasp [start, lift], place [lift, end].
 """
 
@@ -22,6 +22,27 @@ COLOR_NAME = {"red": "紅", "blue": "藍", "yellow": "黃"}
 TRAY_NAME = {"pink": "粉盤", "beige": "米盤"}
 ROUND_SET = {"blue": 2, "red": 1, "yellow": 1}   # finals storage: one round = these blocks, picked in random order
 RETRACE_ERROR = 2.0
+CROWDED_MM = 45.0       # centre distance to a block already in the destination tray that leaves no room for the fingers
+
+
+def placed_block(before, after, color, tray, slot):
+    """The block this episode put in the tray: of the destination blocks of that colour seen at park after the
+    episode, the one farthest from every same-colour block that was already there in the opening frame.
+    Adds the offset to the nominal slot (a reference only: conditioning uses the landing) and the distance to the
+    nearest other block in the tray."""
+    def dist(a, b):
+        return ((a["x_mm"] - b["x_mm"]) ** 2 + (a["y_mm"] - b["y_mm"]) ** 2) ** .5
+
+    there = [b for b in before if b["tray"] == tray]
+    new = [b for b in after if b["tray"] == tray and b["color"] == color]
+    if not new:
+        return None
+    old = [b for b in there if b["color"] == color]
+    landed = max(new, key=lambda b: min((dist(b, o) for o in old), default=float("inf")))
+    others = [b for b in after if b["tray"] == tray and b is not landed]
+    reference = {"x_mm": slot["xy"][0], "y_mm": slot["xy"][1]}
+    return landed | {"slot_offset_mm": round(dist(landed, reference), 1),
+                     "neighbour_mm": round(min(dist(landed, b) for b in others), 1) if others else None}
 
 
 def retrace_to(samples, channel):
@@ -224,8 +245,8 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         target = choose_target(driver.term, blocks, color) if opening is not None else None
     if target is None:
         driver.term.say(f"D455 開場畫面沒找到{color}方塊；仍可錄，讀回時再確認。")
-    driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 搬到{TRAY_NAME[destination]}第 {slot['index']} 格"
-                          f"（x {slot['xy'][0]:.0f}, y {slot['xy'][1]:.0f}）放下張爪 → 抬起退回起姿附近，停穩按 c。"
+    driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]}第 {slot['index']} 個位置"
+                          "（照固定順序接在上一顆旁邊，貼近盤面再張爪）→ 抬起退回起姿附近，停穩按 c。"
                           "Esc 暫停，腕部不要轉。")
     driver.arm_at(park)
     if not driver.align_leader(leader, driver.read()):
@@ -240,26 +261,23 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         if choice == "r" or not driver.align_leader(leader, driver.read()):
             break
     demo_frames = writer.count
-    landed = None
-    final = latest_global(writer)
-    if final is not None and kept:
-        located = locate(final, quads)
-        near = [b for b in located["blocks"] if b["color"] == color and b["tray"] == destination]
-        if near:
-            landed = min(near, key=lambda b: (b["x_mm"] - slot["xy"][0]) ** 2 + (b["y_mm"] - slot["xy"][1]) ** 2)
-            landed = landed | {"slot_offset_mm": round(((landed["x_mm"] - slot["xy"][0]) ** 2
-                                                       + (landed["y_mm"] - slot["xy"][1]) ** 2) ** .5, 1)}
     if body_gap(driver.read(), channel) <= END_NEAR_START:
         follow(driver, retimed([dict(driver.target), pose(channel) | {"gripper": driver.target["gripper"]}]),
                ("結束位", "起姿"))
     else:
         follow(driver, retrace_to(samples + [(driver.clock(), dict(driver.target))], channel), ("結束位", "起姿"))
-    if not kept or landed is None:
+    if not kept:
         driver.menu("在起姿保持。若夾爪裡還有方塊請取下，回程淨空後按 r 回停放位", {"r": "回停放位"})
     driver.target = driver.target | {"gripper": channel["gripper"]}
     park_and_release(driver, route.reverse(), park, support)
-    seen = (f"D455：方塊在{TRAY_NAME[destination]} x {landed['x_mm']:.0f} y {landed['y_mm']:.0f}，離格位 "
-            f"{landed['slot_offset_mm']:.0f} mm。" if landed else "D455 沒在目的盤看到這顆方塊。")
+    # Landing is read only now: with the arm folded at park it neither hides the trays nor shades the colour masks.
+    final = latest_global(writer) if kept else None
+    landed = placed_block(blocks, locate(final, quads)["blocks"], color, destination, slot) if final is not None else None
+    seen = (f"D455（停放位）：落點{TRAY_NAME[destination]} x {landed['x_mm']:.0f} y {landed['y_mm']:.0f}，"
+            f"離參考位置 {landed['slot_offset_mm']:.0f} mm" + (
+                f"，離旁邊方塊只有 {landed['neighbour_mm']:.0f} mm（太擠，下一顆可能撞到）" if
+                landed["neighbour_mm"] is not None and landed["neighbour_mm"] < CROWDED_MM else "") + "。"
+            if landed else "D455 沒在目的盤看到新放的方塊。")
     outcome = driver.menu(seen + "結果：s 成功／f 失敗", {"s": "成功", "f": "失敗"})
     return {"color": color, "destination": destination, "slot": slot, "target_choice": target, "scene": scene,
             "landed": landed, "placed": landed is not None and outcome == "s", "success": outcome == "s" and kept,

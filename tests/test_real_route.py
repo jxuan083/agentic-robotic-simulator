@@ -473,7 +473,7 @@ class PickPlaceRoundCase(RouteCase):
         clock = FakeClock()
         follower = FakeFollower(clock)
         leader = FakeDrivenLeader(clock, PARK, moves)
-        term = ScriptedTerminal(clock, [(22.0, "c")], ("a", "r", "y", "s"))
+        term = ScriptedTerminal(clock, [(22.0, "c")], ("a", "y", "s"))
         driver = self.driver(follower, term, clock, "pick-place")
         writer = FakeWriter(clock)
         result = pick_place_round(driver, leader, data, writer, lambda: None, color="red", destination="beige",
@@ -547,3 +547,14 @@ def test_round_state_resumes_from_the_last_round_row(tmp_path):
             {"episode": "P0003", "round": {"n": 1, "placed_after": 2, "left_after": 2}}]
     index.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     assert tool.round_state(index) == (1, 2, 2)
+
+
+def test_placed_block_is_the_new_one_and_reports_crowding():
+    from agentic_sim.real_grasp import placed_block
+
+    before = [_block("blue", 70, 30, "beige"), _block("red", 70, 95, "beige"), _block("blue", 60, 120)]
+    after = [_block("blue", 72, 32, "beige"), _block("red", 70, 95, "beige"), _block("blue", 75, 130, "beige")]
+    landed = placed_block(before, after, "blue", "beige", {"index": 3, "xy": [70, 160]})
+    assert (landed["x_mm"], landed["y_mm"]) == (75, 130)          # not the blue already there
+    assert landed["slot_offset_mm"] == 30.4 and landed["neighbour_mm"] == 35.4
+    assert placed_block(before, after, "yellow", "beige", {"index": 3, "xy": [70, 160]}) is None

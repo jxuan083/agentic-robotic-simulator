@@ -273,8 +273,8 @@ def grasp_session(driver, hand, data, args, refs, hz):
         k = placed if rounds else used.get(destination, 0) % len(slots[destination])
         slot = {"index": k + 1, "xy": slots[destination][k]}
         if not args.auto_place:
-            term.say(f"放置格位：{TRAY_NAME[destination]}第 {slot['index']} 格（x {slot['xy'][0]}, y {slot['xy'][1]} mm），"
-                     "格位上不要有方塊。")
+            term.say(f"放置：{TRAY_NAME[destination]}第 {slot['index']} 個位置，照固定順序接在上一顆旁邊"
+                     f"（參考 x {slot['xy'][0]}, y {slot['xy'][1]} mm；落點由 D455 在停放位量）。")
         root = episodes / f"P{number:04}"
         with episode_capture(root, args.config, args.arm, refs, hz, data["layout_id"]) as (writer, check):
             if args.auto_place:
