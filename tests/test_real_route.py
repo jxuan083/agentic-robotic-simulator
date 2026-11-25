@@ -300,3 +300,26 @@ class DrivenHandoverCase(RouteCase):
         self.assertGreaterEqual(off / 1e9, 6.0)
         self.assertFalse(leader.driven)
         self.assertEqual(follower.torque_states(), OFF)
+
+
+class ReseatCase(RouteCase):
+    def test_small_offset_from_park_is_reseated_under_torque(self):
+        clock = FakeClock()
+        follower = FakeFollower(clock, start=dict(PARK) | {"wrist_roll": PARK["wrist_roll"] - 9.8})
+        term = ScriptedTerminal(clock, answers=("s",))
+        driver = self.driver(follower, term, clock, "reseat")
+        driver.arm_at(PARK)
+        self.assertEqual(follower.torque_states(), ON)
+        self.assertLess(body_gap(follower.read(), PARK), 2.0)
+        self.assertTrue(all(abs(cmd["wrist_roll"] - PARK["wrist_roll"]) <= 9.8 + 1e-6 for _, cmd in follower.sent))
+
+    def test_declined_or_large_offset_is_not_moved(self):
+        for start, answers in ((dict(PARK) | {"wrist_roll": PARK["wrist_roll"] - 9.8}, ("q",)),
+                               (dict(PARK) | {"shoulder_pan": PARK["shoulder_pan"] + 25.0}, ())):
+            clock = FakeClock()
+            follower = FakeFollower(clock, start=start)
+            driver = self.driver(follower, ScriptedTerminal(clock, answers=answers), clock, f"reseat-{len(answers)}")
+            with self.assertRaises(RuntimeError):
+                driver.arm_at(PARK)
+            self.assertEqual(follower.torque_states(), OFF)
+            self.assertFalse(follower.sent)

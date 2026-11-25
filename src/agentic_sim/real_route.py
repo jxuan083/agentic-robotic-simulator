@@ -37,6 +37,8 @@ GATE_LAG = 4.0               # playback clock pauses while body lag exceeds this
 STALL_LAG = 15.0             # teleop: lag treated as obstruction ...
 STALL_SECONDS = 0.8          # ... when it persists this long (playback: gated time)
 ENDPOINT = 3.0               # follower must be this near park/channel to start a route
+RESEAT_MAX = 15.0            # torque-off follower this near park (deg) may be moved back to it under torque
+RESEAT_SPEED = 10.0          # deg/s for that move
 RELEASE_LAG = 4.0            # body distance from park allowed for a normal torque release
 STILL = 0.3                  # stationary window spread
 STILL_SECONDS = 0.3
@@ -246,8 +248,14 @@ class Driver:
         if self.torque() != OFF:
             raise RuntimeError("follower torque must be confirmed off before arming at park")
         gap = body_gap(actual, park)
-        if gap > ENDPOINT:
+        if gap > RESEAT_MAX:
             raise RuntimeError(f"follower is {gap:.1f} deg from the taught park pose; support and reposition it")
+        reseat = gap > ENDPOINT
+        if reseat:
+            off = "、".join(f"{j} {actual[j] - park[j]:+.1f}°" for j in BODY if abs(actual[j] - park[j]) > ENDPOINT)
+            if self.term.choose(f"follower 離停放位 {gap:.1f}°（{off}）。s 開扭力後以 {RESEAT_SPEED:.0f}°/s 移回停放位"
+                                "／q 離開（人工擺回）", {"s": "自動復位", "q": "離開"}) != "s":
+                raise RuntimeError(f"follower is {gap:.1f} deg from the taught park pose; reposition it by hand")
         self.event("start_measured", readback=actual, park=park)
         self.armed = True
         self.f.arm()
@@ -255,6 +263,10 @@ class Driver:
             raise RuntimeError("could not confirm torque on for all six axes")
         self.target = self.clip(self.read())[0]
         self.event("torque_on", readback=self.last)
+        if reseat:
+            home = park | {"gripper": self.target["gripper"]}
+            follow(self, Track([dict(self.target), home], [gap / RESEAT_SPEED]), ("目前位置", "停放位"))
+            self.event("reseated_at_park", gap_deg=gap, readback=self.last)
         self.stage("armed", pose=self.last)
 
     # -- motions -----------------------------------------------------------
