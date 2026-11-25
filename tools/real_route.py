@@ -222,6 +222,8 @@ def main(argv=None):
         if name != "recover":
             p.add_argument("--relative", action="store_true",
                            help="follow leader displacement instead of absolute angles (fallback)")
+        p.add_argument("--manual-align", action="store_true",
+                       help="align the leader by hand instead of driving it to the follower pose")
         if name == "record":
             p.add_argument("--layout", required=True, help="layout ID, e.g. lab-right-20261125")
             p.add_argument("--support", required=True, help="park support description, e.g. 前臂靠在固定墊塊上")
@@ -295,7 +297,8 @@ def main(argv=None):
                 if data is not None:
                     check_calibration(data, refs, leader=leader_needed)
                 driver = Driver(follower, term, run_dir(route, args.command), hz=hz, rate=args.rate,
-                                relative=getattr(args, "relative", False))
+                                relative=getattr(args, "relative", False),
+                                drive_leader=not getattr(args, "manual_align", False))
                 driver.state.update(command=args.command, route=str(route), fake=args.fake,
                                     provenance=provenance("tools/real_route.py"), control_hz=hz)
                 if args.command == "record":

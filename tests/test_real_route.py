@@ -14,7 +14,7 @@ from agentic_sim.real_route import (  # noqa: E402
     recover, record, roundtrip, sample_park,
 )
 from agentic_sim.real_route_fake import (  # noqa: E402
-    CHANNEL, PARK, FakeClock, FakeFollower, FakeLeader, ScriptedTerminal, operator_path,
+    CHANNEL, PARK, VIA, FakeClock, FakeFollower, FakeLeader, ScriptedTerminal, operator_path,
 )
 
 META = {"arm": "right", "layout_id": "fake-layout", "park_support": "fake support",
@@ -230,3 +230,58 @@ def test_tune_route_removes_pauses_and_fixes_gripper():
     assert tuned["channel"]["command"]["gripper"] == 45.0
     assert tuned["verified"] == {"reverse_to_park": None, "forward_to_channel": None}
     assert track.points[0] == park
+
+
+class DrivenHandoverCase(RouteCase):
+    """Leader driven to the follower pose, countdown, release while the follower holds, clutch from there."""
+
+    def teach_driven(self, start, moves, keys, answers, sag=None):
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        leader = FakeDrivenLeader(clock, start, moves, sag=sag)
+        term = ScriptedTerminal(clock, keys, answers)
+        driver = self.driver(follower, term, clock, "record")
+        data = record(driver, leader, self.route, META, sample_park(follower, clock.sleep))
+        driver.close_logs()
+        return data, follower, leader, term, driver
+
+    def test_driven_handover_teaches_route_and_ignores_sag(self):
+        from agentic_sim.real_route import HANDOVER_COUNTDOWN_S, HANDOVER_GUARD_S
+
+        start = dict(PARK) | {"wrist_roll": 50.0, "shoulder_pan": 20.0}  # leader left far from the follower
+        to_via = {j: VIA[j] - PARK[j] for j in VIA}
+        to_channel = {j: CHANNEL[j] - PARK[j] for j in CHANNEL}
+        moves = [(1.0, dict.fromkeys(PARK, 0.0)), (3.0, to_via), (5.5, to_channel)]
+        data, follower, leader, term, driver = self.teach_driven(start, moves, [(16.0, "c")], ("a", "r", "y"))
+        self.assertIsNotNone(data)
+        self.assert_released_at_park(follower)
+        self.assertEqual([kind for kind, _ in leader.log], ["on", "off"])
+        on, off = leader.log[0][1], leader.log[1][1]
+        self.assertGreaterEqual((off - on) / 1e9, HANDOVER_COUNTDOWN_S)  # released only after the countdown
+        self.assertFalse(leader.driven)
+        # The follower never followed the sag: its first teleop targets stay at park.
+        first = [cmd for t, cmd in follower.sent if t <= off + (HANDOVER_GUARD_S + 0.15) * 1e9]
+        self.assertTrue(first and all(body_gap(cmd, PARK) < 1.0 for cmd in first))
+        saved, _ = load_route(self.route)
+        self.assertLess(body_gap(saved["channel"]["readback"], CHANNEL), 3.0)
+        self.assertTrue(any("已交接" in line for line in term.lines))
+
+    def test_leader_dropped_after_release_falls_back_to_manual(self):
+        data, follower, leader, term, _ = self.teach_driven(
+            PARK, [], [(12.0, "esc")], ("a",), sag={"shoulder_lift": -25.0})
+        self.assertIsNone(data)
+        self.assertFalse(leader.driven)
+        self.assertTrue(any("沒有扶穩" in line for line in term.lines))
+        self.assertEqual(follower.torque_states(), OFF)
+
+    def test_cancel_during_countdown_releases_only_when_supported(self):
+        # Esc during the countdown: leader keeps torque until the operator presses Enter.
+        data, follower, leader, term, _ = self.teach_driven(
+            PARK, [], [(1.5, "esc"), (6.0, "enter")], ("a", "q"))
+        self.assertIsNone(data)
+        on, off = leader.log[0][1], leader.log[1][1]
+        self.assertGreaterEqual(off / 1e9, 6.0)
+        self.assertFalse(leader.driven)
+        self.assertEqual(follower.torque_states(), OFF)

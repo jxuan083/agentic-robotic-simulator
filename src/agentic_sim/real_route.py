@@ -40,6 +40,11 @@ ENDPOINT = 3.0               # follower must be this near park/channel to start 
 RELEASE_LAG = 4.0            # body distance from park allowed for a normal torque release
 STILL = 0.3                  # stationary window spread
 STILL_SECONDS = 0.3
+LEADER_SPEED = dict.fromkeys(BODY, 30.0) | {"gripper": 60.0}  # driven leader slew, unit/s
+LEADER_ARRIVED = dict.fromkeys(BODY, 3.0) | {"gripper": 8.0}  # driven leader counts as at the follower pose
+LEADER_SETTLE_S = 3.0        # after the goal reaches the follower pose, wait this long for the leader to arrive
+HANDOVER_COUNTDOWN_S = 3     # operator takes the leader; its torque releases when this runs out
+HANDOVER_GUARD_S = 0.8       # follower holds after the leader release; leader sag in this window is ignored
 PATH_ERROR = 0.35            # simplification tolerance, body joints deg
 GRIPPER_PATH_ERROR = 2.0
 MAX_IDLE_GAP_S = 0.05        # stationary stretches shrink to this in the recorded timing
@@ -152,13 +157,15 @@ def _simplify(points, body_error=PATH_ERROR):
 class Driver:
     """Owns one armed follower: logging, clipping, teleop, playback, settle and release."""
 
-    def __init__(self, follower, term, run_dir, *, hz=60, rate=1.0, relative=False,
+    def __init__(self, follower, term, run_dir, *, hz=60, rate=1.0, relative=False, drive_leader=True,
                  clock=monotonic_ns, wait=sleep):
         self.f = follower
         self.term = term
         self.hz = hz
         self.rate = rate
         self.relative = relative  # fallback when leader/follower calibration zeros disagree
+        self.drive_leader = drive_leader  # hand-over: drive the leader to the follower pose, then release it
+        self.clutch = None        # leader pose at a driven hand-over: teleop maps displacement from here
         self.clock = clock
         self.wait = wait
         self.limits = calibrated_limits(follower)
@@ -256,8 +263,11 @@ class Driver:
         self.phase = "teleop"
         target = dict(self.target)
         offset = dict.fromkeys(JOINTS, 0.0)
-        if self.relative:
-            first = pose(leader.read())
+        if self.relative or self.clutch is not None:
+            # Driven hand-over: map displacement from the released leader pose, so gravity sag right after the
+            # release never moves the follower (same clutch as the LeHome DAgger recorder).
+            first = self.clutch if self.clutch is not None else pose(leader.read())
+            self.clutch = None
             offset = {j: target[j] - first[j] for j in JOINTS}
             self.event("relative_offset", offset=offset)
         begin = self.clock()
@@ -408,6 +418,120 @@ class Driver:
 
     # -- leader engagement --------------------------------------------------
     def align_leader(self, leader, reference):
+        """Engage the leader at the follower pose: driven hand-over when the leader supports it, else manual."""
+        self.clutch = None
+        if self.drive_leader and not self.relative and hasattr(leader, "drive_on"):
+            return self._handover(leader, reference)
+        return self._manual_align(leader, reference)
+
+    def _handover(self, leader, reference):
+        """Drive the leader to the follower pose, count down, release the leader while the follower holds."""
+        while True:
+            choice = self.term.choose("leader 自動移到 follower 的姿勢，手先離開 leader。"
+                                      "a 開始／m 改手動對齊／q 取消", {"a": "自動對齊", "m": "手動", "q": "取消"})
+            if choice == "q":
+                return False
+            if choice == "m":
+                return self._manual_align(leader, reference)
+            self._leader = leader
+            leader.drive_on()
+            self.event("leader_torque_on", leader=pose(leader.read()), follower=reference)
+            try:
+                outcome = self._drive_leader(leader, reference)
+                if outcome == "arrived":
+                    outcome = self._countdown(leader)
+            except BaseException:
+                self._release_leader("error")
+                raise
+            if outcome == "released":
+                return self._after_release(leader, reference)
+            # stopped with the leader holding: the operator supports it before its torque goes off
+            notes = {"esc": "已暫停", "stall": "leader 被擋住或卡住", "short": "leader 到不了 follower 的姿勢"}
+            self.term.say(f"{notes[outcome]}，leader 原地保持中。")
+            choice = self.term.choose("r 重新自動對齊／m 扶住 leader 後解扭力，改手動對齊／q 扶住 leader 後解扭力並取消",
+                                      {"r": "重試", "m": "手動", "q": "取消"})
+            if choice == "r":
+                continue  # leader stays torque-on; drive_on re-holds its current pose
+            self._release_leader_supported()
+            return self._manual_align(leader, reference) if choice == "m" else False
+
+    def _drive_leader(self, leader, reference):
+        goal = pose(leader.read())
+        stall_since = reached_at = None
+        next_status = 0
+        while True:
+            began = self.clock()
+            if self.term.key() == "esc":
+                leader.drive(pose(leader.read()))
+                return "esc"
+            for joint in JOINTS:
+                step = LEADER_SPEED[joint] / self.hz
+                goal[joint] += max(-step, min(step, reference[joint] - goal[joint]))
+            leader.drive(goal)
+            now = pose(leader.read())
+            lag = body_gap(goal, now)
+            if lag > STALL_LAG:
+                stall_since = stall_since or began
+                if began - stall_since > STALL_SECONDS * 1e9:
+                    leader.drive(now)
+                    self.event("leader_stall", goal=goal, leader=now)
+                    return "stall"
+            else:
+                stall_since = None
+            if all(goal[j] == reference[j] for j in JOINTS):
+                reached_at = reached_at or began
+                if all(abs(now[j] - reference[j]) <= LEADER_ARRIVED[j] for j in JOINTS):
+                    self.event("leader_arrived", leader=now, follower=reference)
+                    return "arrived"
+                if began - reached_at > LEADER_SETTLE_S * 1e9:
+                    self.event("leader_short", leader=now, follower=reference)
+                    return "short"
+            if began >= next_status:
+                self.term.status(f"leader 移動中，距 follower 姿勢 {body_gap(now, reference):4.1f}°（Esc 暫停）")
+                next_status = began + 200_000_000
+            self.tick(began)
+
+    def _countdown(self, leader):
+        end = self.clock() + HANDOVER_COUNTDOWN_S * 1e9
+        self.term.say("leader 已就位。現在握住 leader，倒數結束後 leader 解扭力、由你接手。")
+        while True:
+            began = self.clock()
+            left = (end - began) / 1e9
+            if left <= 0:
+                break
+            if self.term.key() == "esc":
+                return "esc"
+            self.term.status(f"握住 leader：{int(left) + 1} 秒後解 leader 扭力（Esc 取消）")
+            self.tick(began)
+        self._release_leader("handover")
+        return "released"
+
+    def _after_release(self, leader, reference):
+        end = self.clock() + HANDOVER_GUARD_S * 1e9
+        while (began := self.clock()) < end:  # follower keeps holding; leader movement here is ignored
+            self.term.status("leader 已解扭力，接手中…")
+            self.tick(began)
+        after = pose(leader.read())
+        sag = body_gap(after, reference)
+        if sag > max(ENGAGE_GAP[j] for j in BODY):
+            self.event("leader_dropped", leader=after, follower=reference, gap_deg=sag)
+            self.term.say(f"leader 解扭力後偏離 {sag:.0f}°，沒有扶穩。改用手動對齊。")
+            return self._manual_align(leader, reference)
+        self.clutch = after
+        self.event("leader_engaged", leader=after, follower=reference, handover="driven", sag_deg=sag)
+        self.term.say("已交接，follower 跟隨 leader 的位移。")
+        return True
+
+    def _release_leader(self, kind):
+        self._leader.release()
+        self.event("leader_torque_off", release=kind, leader=pose(self._leader.read()))
+
+    def _release_leader_supported(self):
+        while self.term.key(0.2) != "enter":
+            self.term.status("扶住 leader 後按 Enter，解 leader 扭力")
+        self._release_leader("supported")
+
+    def _manual_align(self, leader, reference):
         """Show the leader-follower gap until it is small and the operator presses Enter."""
         if self.relative:
             self.term.say("相對映射：follower 會從目前姿勢跟隨 leader 的位移。握好 leader 後按 Enter；Esc 取消。")

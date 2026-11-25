@@ -71,6 +71,7 @@ python tools/real_route.py recover --config outputs/single.local.yaml --route ou
 python tools/real_route.py show --route outputs/routes/right-park-channel.json
 ```
 
+- **leader 交接（預設）**：每次要用 leader 接手（`record`、`record-drop`、`try` 的 `t`、暫停後繼續）時，程式先把 leader 的目標寫成它目前的姿勢再開 leader 扭力，以 30°/s 把 leader 帶到 follower 的姿勢（手先離開 leader）。到位後倒數 3 秒，操作者握住 leader；倒數結束時在 follower 保持住的情況下解 leader 扭力，再保持 0.8 秒，這段時間 leader 的下垂不算操作。之後 follower 跟隨 leader 從交接姿勢起算的位移。解扭力後若 leader 偏離超過 12°（沒扶穩），改用手動對齊。leader 移動中或倒數中按 Esc，leader 原地保持，要按 Enter 確認已扶住才解扭力。`--manual-align`（`MANUAL_ALIGN=1`）改回手動對齊。參考 LeHome `scripts/record_real_dagger.py` 的交接順序。
 - `record`：在扭力關閉時讀取停放位，然後顯示 leader 與 follower 各軸的差距。各軸差距都在門檻內（身體 12°、夾爪 40%）才能按 Enter 開扭力。開扭力後的 1.5 秒內，限速由 20°/s 漸增到 90°/s。到通道位按 `c` 存檔，接著按 `r` 反向播放回停放位。目視確認支撐後按 `y` 解扭力，路線檔會記下反向驗證通過。
 - `run`：從停放位去程到通道位並保持。可選 `t` 用 leader 操作一段，按 `c` 沿實走路徑退回通道位；或選 `r` 反向回停放位並解扭力。`--rate` 可調整相對錄製時間的播放速度。
 - `recover`：上一輪中斷、follower 扭力仍開時使用。程式接手後找出路線上最近的點（8° 以內），沿路線退回停放位再解扭力。

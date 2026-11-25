@@ -24,7 +24,7 @@
 #
 # Settings (environment): LAB_DATE (default today, YYMMDD), SUPPORT (park support description, for `route`),
 # PY (default the conda lerobot python), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
-# with simulated arms), GRIP (route-tune gripper %), RATE (route playback speed factor, default 1.0), RELEASE (drop gripper %, default 60).
+# with simulated arms), MANUAL_ALIGN=1 (align the leader by hand), GRIP (route-tune gripper %), RATE (route playback speed factor, default 1.0), RELEASE (drop gripper %, default 60).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,6 +44,7 @@ REFERENCE=outputs/261125-camera/global/rgb.png
 D455=038122250316
 
 if [[ -n "${FAKE:-}" ]]; then MOTION=(--fake); else MOTION=(--config "$CONFIG" --allow-motion); fi
+[[ -n "${MANUAL_ALIGN:-}" ]] && MOTION+=(--manual-align)
 REPLACE_FLAG=(); [[ -n "${REPLACE:-}" ]] && REPLACE_FLAG=(--replace)
 need() { for f in "$@"; do [[ -e "$f" ]] || { echo "missing $f — run the earlier step first" >&2; exit 1; }; done; }
 say() { printf '\n== %s\n' "$*"; }
