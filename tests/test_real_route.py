@@ -361,3 +361,27 @@ def test_lift_home_raises_first_then_goes_straight():
     assert track.points[1] == grasp | {"shoulder_lift": CHANNEL["shoulder_lift"]}
     assert body_gap(track.points[-1], CHANNEL) < 1e-9 and track.points[-1]["gripper"] == 16.5
     assert len(lift_home(CHANNEL | {"shoulder_pan": 10.0}, CHANNEL).points) == 2  # already at channel height
+
+
+class LeaderRouteCase(RouteCase):
+    def test_folded_leader_follows_route_and_opens_gripper_last(self):
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        term = ScriptedTerminal(clock)
+        driver = self.driver(follower, term, clock, "leader-route")
+        route = Track([PARK, VIA, CHANNEL], [1.0, 1.0])
+        driver.leader_route = route
+        start = dict(PARK) | {"shoulder_pan": PARK["shoulder_pan"] + 4.0, "gripper": 1.0}
+        reference = dict(CHANNEL) | {"gripper": 26.0}
+        goals = driver._leader_goals(start, reference)
+        self.assertEqual(len(goals), 4)  # VIA, CHANNEL (gripper held), reference body, then gripper
+        self.assertTrue(all(g["gripper"] == 1.0 for g in goals[:-1]))
+        self.assertEqual(goals[-1]["gripper"], 26.0)
+        leader = FakeDrivenLeader(clock, start)
+        leader.drive_on()
+        self.assertEqual(driver._drive_leader(leader, reference), "arrived")
+        # Passed close to the route's via pose on the way (not a straight joint move).
+        driver.leader_route = None
+        self.assertEqual(len(driver._leader_goals(start, reference)), 2)

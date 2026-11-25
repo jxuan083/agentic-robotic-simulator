@@ -118,6 +118,9 @@ class PositionBus:
         return dict(self.last_read)
 
 
+LEADER_TORQUE_LIMIT = 500  # of 1000
+
+
 class Leader(PositionBus):
     """Leader arm. Torque stays off except while it is driven to the follower pose for a hand-over."""
 
@@ -140,6 +143,9 @@ class Leader(PositionBus):
         if any(abs(goals[j] - raw[j]) > 2 for j in JOINTS):
             self.release()
             raise RuntimeError("could not verify the leader's stationary goal")
+        # Half torque while driven: a blocked leader stops instead of drawing enough current to drop the bus.
+        self.torque_limit = self.bus.sync_read("Torque_Limit", normalize=False, num_retry=3)
+        self.bus.sync_write("Torque_Limit", dict.fromkeys(JOINTS, LEADER_TORQUE_LIMIT), normalize=False, num_retry=3)
         self.bus.sync_write("Torque_Enable", dict.fromkeys(JOINTS, 1), normalize=False, num_retry=2)
         if self._torque_states() != dict.fromkeys(JOINTS, 1):
             self.release()
@@ -167,6 +173,8 @@ class Leader(PositionBus):
                 self.bus.sync_write("Torque_Enable", off, normalize=False, num_retry=3)
                 if self.bus.sync_read("Torque_Enable", normalize=False, num_retry=3) == off:
                     self.driven = False
+                    if getattr(self, "torque_limit", None):
+                        self.bus.sync_write("Torque_Limit", self.torque_limit, normalize=False, num_retry=3)
                     return
             except (ConnectionError, RuntimeError, OSError):
                 pass

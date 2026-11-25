@@ -44,7 +44,10 @@ RESEAT_SPEED = 10.0          # deg/s for that move
 RELEASE_LAG = 4.0            # body distance from park allowed for a normal torque release
 STILL = 0.3                  # stationary window spread
 STILL_SECONDS = 0.3
-LEADER_SPEED = dict.fromkeys(BODY, 30.0) | {"gripper": 60.0}  # driven leader slew, unit/s
+LEADER_SPEED = dict.fromkeys(BODY, 20.0) | {"gripper": 40.0}  # driven leader slew, unit/s
+LEADER_STALL_LAG = 8.0       # driven leader this far behind its goal ...
+LEADER_STALL_S = 0.5         # ... for this long is blocked: stop it before it loads the bus
+LEADER_ROUTE_NEAR = 15.0     # leader within this of the route's park pose follows the route out of the fold
 LEADER_ARRIVED = dict.fromkeys(BODY, 3.0) | {"gripper": 8.0}  # driven leader counts as at the follower pose
 LEADER_SETTLE_S = 3.0        # after the goal reaches the follower pose, wait this long for the leader to arrive
 HANDOVER_COUNTDOWN_S = 3     # operator takes the leader; its torque releases when this runs out
@@ -170,6 +173,7 @@ class Driver:
         self.relative = relative  # fallback when leader/follower calibration zeros disagree
         self.drive_leader = drive_leader  # hand-over: drive the leader to the follower pose, then release it
         self.clutch = None        # leader pose at a driven hand-over: teleop maps displacement from here
+        self.leader_route = None  # park -> start Track: a folded leader is driven along it, not straight
         self.clock = clock
         self.wait = wait
         self.limits = calibrated_limits(follower)
@@ -481,8 +485,24 @@ class Driver:
             self._release_leader_supported()
             return self._manual_align(leader, reference) if choice == "m" else False
 
+    def _leader_goals(self, start, reference):
+        """Waypoints for the driven leader. A leader resting folded near park follows the taught route out of the
+        fold (a straight joint move made its gripper rub on the way up); the gripper keeps its opening until the
+        body has arrived and opens last."""
+        hold = {"gripper": start["gripper"]}
+        goals = []
+        route = self.leader_route
+        if (route is not None and body_gap(start, route.points[0]) <= LEADER_ROUTE_NEAR
+                and body_gap(route.points[-1], reference) <= LEADER_ROUTE_NEAR):
+            goals = [pose(p) | hold for p in route.points[1:]]
+        goals.append(pose(reference) | hold)
+        goals.append(pose(reference))
+        return goals
+
     def _drive_leader(self, leader, reference):
         goal = pose(leader.read())
+        goals = self._leader_goals(goal, reference)
+        self.event("leader_drive_plan", waypoints=len(goals), via_route=len(goals) > 2)
         stall_since = reached_at = None
         next_status = 0
         while True:
@@ -490,15 +510,18 @@ class Driver:
             if self.term.key() == "esc":
                 leader.drive(pose(leader.read()))
                 return "esc"
+            aim = goals[0]
             for joint in JOINTS:
                 step = LEADER_SPEED[joint] / self.hz
-                goal[joint] += max(-step, min(step, reference[joint] - goal[joint]))
+                goal[joint] += max(-step, min(step, aim[joint] - goal[joint]))
+            if len(goals) > 1 and all(goal[j] == aim[j] for j in JOINTS):
+                goals.pop(0)
             leader.drive(goal)
             now = pose(leader.read())
-            lag = body_gap(goal, now)
-            if lag > STALL_LAG:
+            lag = max(body_gap(goal, now), abs(goal["gripper"] - now["gripper"]) / 3)
+            if lag > LEADER_STALL_LAG:
                 stall_since = stall_since or began
-                if began - stall_since > STALL_SECONDS * 1e9:
+                if began - stall_since > LEADER_STALL_S * 1e9:
                     leader.drive(now)
                     self.event("leader_stall", goal=goal, leader=now)
                     return "stall"

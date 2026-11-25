@@ -303,6 +303,8 @@ def main(argv=None):
                 driver = Driver(follower, term, run_dir(route, args.command), hz=hz, rate=args.rate,
                                 relative=getattr(args, "relative", False),
                                 drive_leader=not getattr(args, "manual_align", False))
+                if track is not None:
+                    driver.leader_route = track  # a folded leader is driven out along the taught route
                 driver.state.update(command=args.command, route=str(route), fake=args.fake,
                                     provenance=provenance("tools/real_route.py"), control_hz=hz)
                 if args.command == "record":
