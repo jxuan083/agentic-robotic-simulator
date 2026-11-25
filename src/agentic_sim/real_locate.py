@@ -56,13 +56,39 @@ def tray_region(mask, blocks):
     return filled.astype(bool), hull
 
 
-def corners(hull):
-    """Four tray corners in image px ordered origin (bottom-right), +x end, far-left, +y end."""
-    points = hull.reshape(-1, 2).astype(float)
+def _extreme_corners(points):
     s, d = points.sum(1), points[:, 0] - points[:, 1]
-    bottom_right, top_left = points[np.argmax(s)], points[np.argmin(s)]
-    top_right, bottom_left = points[np.argmax(d)], points[np.argmin(d)]
-    return np.array([bottom_right, top_right, top_left, bottom_left], np.float32)
+    return np.array([points[np.argmax(s)], points[np.argmax(d)], points[np.argmin(s)], points[np.argmin(d)]],
+                    np.float32)  # bottom-right, top-right, top-left, bottom-left
+
+
+def corners(region, near_px=6.0, end_share=0.2):
+    """Four tray corners in image px ordered origin (bottom-right), +x end (top-right), top-left, +y end
+    (bottom-left). Each side is a line fitted to the outline points lying on it, away from the rounded corners;
+    points pulled in by an occluding arm or out by a thin leak are dropped, so one bad spot cannot drag a corner."""
+    contours, _ = cv2.findContours(region.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    outline = max(contours, key=cv2.contourArea).reshape(-1, 2).astype(np.float32)
+    rough = _extreme_corners(cv2.convexHull(outline).reshape(-1, 2).astype(np.float32))
+    lines = []
+    for a, b in zip(rough, np.roll(rough, -1, axis=0)):  # right, top, left, bottom sides
+        direction = (b - a) / max(np.linalg.norm(b - a), 1e-6)
+        normal = np.array([-direction[1], direction[0]])
+        rel = outline - a
+        along = rel @ direction / max(np.linalg.norm(b - a), 1e-6)
+        on_side = (np.abs(rel @ normal) <= near_px) & (along > end_share) & (along < 1 - end_share)
+        if on_side.sum() < 10:
+            return rough
+        vx, vy, x0, y0 = cv2.fitLine(outline[on_side], cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+        lines.append((np.array([x0, y0]), np.array([vx, vy])))
+    result = []
+    for (p1, d1), (p2, d2) in zip(np.roll(np.array(lines, dtype=object), 1, axis=0), lines):
+        # corner i joins side i-1 and side i (corner 0 = bottom-right = bottom side x right side)
+        m = np.array([d1, -d2], dtype=float).T
+        if abs(np.linalg.det(m)) < 1e-6:
+            return rough
+        t = np.linalg.solve(m, (p2 - p1).astype(float))
+        result.append(p1 + t[0] * d1)
+    return np.array(result, np.float32)
 
 
 def tray_homography(quad, tray):
@@ -87,7 +113,7 @@ def locate(image):
         if region is None or region.sum() < 2000:
             warnings.append(f"{tray} tray not found")
             continue
-        quad = corners(hull)
+        quad = corners(region)
         x0, y0, w, h = cv2.boundingRect(hull)
         clipped = x0 <= 1 or y0 <= 1 or x0 + w >= width - 1 or y0 + h >= height - 1
         if clipped:
