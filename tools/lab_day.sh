@@ -6,6 +6,7 @@
 #     check        read-only device/calibration check (power on, torque off)
 #     overlay      D455 live overlay against the current tray reference (s saves, q quits)
 #     reference    after moving the trays: save a new D455 reference (markers 40/41/42) that overlay then uses
+#     guide        live D455 placement guide (tray grid + block mm; --target TRAY X Y YAW COLOR), s saves
 #     locate       D455 snapshot -> block positions in tray-local mm (+ annotated image)
 #     route        teach park -> channel with the leader, reverse to park   (needs SUPPORT="...")
 #     route-tune   remove taught pauses/jitter, fix the gripper opening: GRIP=<pct>, or hold the leader
@@ -82,6 +83,9 @@ case "$step" in
       echo "$root/$name/rgb.png" > outputs/current-reference.txt
       echo "overlay now uses $root/$name/rgb.png; re-teach both drop routes (REPLACE=1) after a tray move"
     fi ;;
+  guide)
+    # Live D455 placement guide: tray grids, live block mm, optional target  (guide --target pink 120 80 30 red)
+    "$CAMPY" tools/real_place_guide.py --serial "$D455" --out "outputs/$DATE-camera/guide" "$@" ;;
   locate)
     # D455 coarse block positions in tray-local mm (red/blue/yellow); annotated image to check against the table.
     out="outputs/$DATE-camera/locate-$(date +%H%M%S)"
@@ -162,5 +166,5 @@ PYEOF
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)
-    sed -n '2,31p' "$0"; exit 1 ;;
+    sed -n '2,32p' "$0"; exit 1 ;;
 esac
