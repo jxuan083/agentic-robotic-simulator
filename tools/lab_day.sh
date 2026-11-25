@@ -18,6 +18,7 @@
 #     drop-pink    teach channel -> drop pose over the pink tray
 #     drop-test-beige / drop-test-pink   replay park -> channel -> drop pose -> release -> back (no leader)
 #     grasp        park-start pick-and-place rounds (random target, slots fill up), session outputs/<date>-park
+#     datacheck    every 5 rounds: training selection and desk issues of the newest LAST (20) episodes
 #     try          park -> channel, then t = leader test grasps from the channel (reach check for the cards)
 #     cards        create today's card positions from the template (once) and show them
 #     cards-drop   remove unreachable positions, e.g.  cards-drop pink_far:3,5  |  cards-drop --max-x pink=200
@@ -133,6 +134,11 @@ case "$step" in
     need "$ROUTE" "$DROP_BEIGE" "$DROP_PINK" "$TRAYS"
     "$PY" tools/real_route.py grasp "${MOTION[@]}" --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" \
       --trays "$TRAYS" --session "outputs/$DATE-park" --pick "${PICK:-random}" ;;
+  datacheck)
+    # Between collection blocks: would training take the newest episodes, and what to fix at the desk (read-only).
+    train="${TRAIN_TREE:-../agentic-robotic-simulator-real-training}"
+    need "$train/tools/check_park_session.py" "outputs/$DATE-park"
+    "$PY" "$train/tools/check_park_session.py" "outputs/$DATE-park" --last "${LAST:-20}" ;;
   try)
     need "$ROUTE"
     say "at the channel press t, test grasps on the far/edge/60 deg card positions, c returns to the channel"
