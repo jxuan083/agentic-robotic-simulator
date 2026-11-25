@@ -5,7 +5,7 @@
   drop  CARDS pink_far:3,5 ...        remove numbered positions (numbers from `show`), in place
   drop  CARDS --max-x pink=200 ...    remove positions beyond a tray-local x (mm), e.g. an unreachable far edge
         (also --max-y / --min-y)
-  drop  CARDS --yaw 45                remove every position with this yaw
+  drop  CARDS --yaw 60                remove every position with this yaw
 
 Positions are tray-local [x mm, y mm, yaw deg]: origin at the inner tray corner nearest the arm base on its right,
 +x forward, +y left. The previous file is kept as CARDS.previous-NN.json.

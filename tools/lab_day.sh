@@ -15,6 +15,7 @@
 #     setup        build today's collection setup from the routes and cards
 #     collect      open the collection desk (empty-desk check first, then cards)
 #     recover      follower left holding with torque on: follow the route home and release
+#     torque       read-only per-joint torque readback of the follower (end of day: all must be 0)
 #     status       route summaries and collection progress
 #     pack         ZIP the round into AllenHZL/ and archive the handoff dir (NOTES="path ..." optional)
 #
@@ -79,7 +80,7 @@ case "$step" in
       --release "${RELEASE:-60}" "${REPLACE_FLAG[@]}" ;;
   try)
     need "$ROUTE"
-    say "at the channel press t, test grasps on the far/edge/45 deg card positions, c returns to the channel"
+    say "at the channel press t, test grasps on the far/edge/60 deg card positions, c returns to the channel"
     "$PY" tools/real_route.py run "${MOTION[@]}" --route "$ROUTE" --rate "${RATE:-1.0}" ;;
   cards)
     [[ -e "$CARDS" ]] || cp configs/real_collection.cards.template.json "$CARDS"
@@ -98,6 +99,23 @@ case "$step" in
   recover)
     need "$ROUTE"
     "$PY" tools/real_route.py recover "${MOTION[@]}" --route "$ROUTE" ;;
+  torque)
+    "$PY" - "$CONFIG" <<'PYEOF'
+import sys
+sys.path.insert(0, "src")
+from agentic_sim.real_hardware import check_devices, load_profile, open_follower
+profile = load_profile(sys.argv[1])
+check_devices(profile)
+(arm, pair), = profile["arms"].items()
+# managed + resume: connect even if torque is on, write nothing, never release.
+with open_follower(arm, pair["follower"], managed=True, resume=True) as follower:
+    states = follower.torque_states()
+print(arm, "follower torque:", states)
+off = all(v == 0 for v in states.values())
+print("torque OFF on all joints" if off else "TORQUE STILL ON OR UNREADABLE — support the arm, then tools/lab_day.sh recover")
+sys.exit(0 if off else 1)
+PYEOF
+    ;;
   status)
     for f in "$ROUTE" "$DROP_BEIGE" "$DROP_PINK"; do [[ -e "$f" ]] && echo "$f ok"; done
     [[ -e "$ROUTE" ]] && "$PY" tools/real_route.py show --route "$ROUTE" | grep -E '"(waypoints|recorded_moving_seconds|reverse_to_park|forward_to_channel)"'
@@ -110,5 +128,5 @@ case "$step" in
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)
-    sed -n '2,24p' "$0"; exit 1 ;;
+    sed -n '2,25p' "$0"; exit 1 ;;
 esac
