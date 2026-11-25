@@ -44,6 +44,21 @@ presets:
     holding: null
     question: {id: 2, kind: shortage, rev: 2, options: [substitute, reduce, wait], delivered: {red: 1, blue: 1},
                missing: {blue: 1}, available: {red: 2, yellow: 1}, text: "Delivered ..."}
+  reds4:          # four reds in the storage tray (mount frame, m); the bottom-right one is out of reach
+    active: true
+    state: running
+    colors_in_scene: [blue, red, yellow]
+    ledger: {revision: 1, target: {blue: 1}, delivered: {}, need: {blue: 1}, over: {}}
+    holding: null
+    question: null
+    pan_xy: [0.023, 0.021]
+    pick_frame: {up: [1.0, 0.0], left: [0.0, 1.0], tie_m: 0.015}
+    storage_blocks:
+      - {block: 0, color: red, xy: [0.30, 0.12], reachable: true}
+      - {block: 1, color: red, xy: [0.30, -0.10], reachable: true}
+      - {block: 2, color: red, xy: [0.16, 0.06], reachable: true}
+      - {block: 3, color: red, xy: [0.12, -0.14], reachable: false}
+      - {block: 4, color: blue, xy: [0.22, 0.00], reachable: true}
 cases:
   # ---- total -------------------------------------------------------------------------------------------
   - {group: total, preset: empty, text: 我要三顆紅色的積木, expect: send, command: {cmd: task_order, mode: total, counts: {red: 3}}}
@@ -104,3 +119,10 @@ cases:
   - {group: answer, preset: shortage_q, text: 等一下會補料, expect: send, command: {cmd: task_answer, id: 2, choice: wait}}
   - {group: answer, preset: shortage_q, text: 換成紫色, expect: no_send}
   - {group: answer, preset: red3_d1, text: 放回去, expect: no_send}
+  # ---- one block named by position (added 2026-11-25; not used to tune the prompt) ------------------------
+  - {group: pick, preset: empty, text: 我要左上角那顆紅色, expect: send, command: {cmd: task_order, mode: add, counts: {red: 1}, pick: {color: red, ref: top_left}}}
+  - {group: pick, preset: reds4, text: 拿最左邊的紅色積木給我, expect: send, command: {cmd: task_order, mode: add, counts: {red: 1}, pick: {color: red, ref: leftmost}}}
+  - {group: pick, preset: reds4, text: 離手臂最近的那顆紅的, expect: send, command: {cmd: task_order, mode: add, counts: {red: 1}, pick: {color: red, ref: nearest}}}
+  - {group: pick, preset: reds4, text: 我要右下角那顆紅色, expect: clarify}
+  - {group: pick, preset: reds4, text: 我要左上角那顆紫色, expect: reject}
+  - {group: pick, preset: reds4, text: 中間那顆紅色給我, expect: clarify}

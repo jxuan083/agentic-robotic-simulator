@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agentic_sim.task.pick_ref import REF_ZH
+
 NUM = {0: "零", 1: "一", 2: "兩", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九", 10: "十"}
 ORD = {**NUM, 2: "二"}   # ordinals: 第二顆, not 第兩顆
 CHOICE_ZH = {"return": "放回原位", "place_at": "放到指定位置", "deliver": "照樣送出", "substitute": "換成其他顏色",
@@ -82,6 +84,10 @@ class Words:
             return f"異常：{self.color(e['color'])}積木的結果無法確認（{e.get('reason', '')}）。"
         if k == "dropped":
             return "異常：搬運中積木掉落。"
+        if k == "pick_rejected":
+            more = f"另外還有 {e['reachable_left']} 顆夾得到。" if e.get("reachable_left") else ""
+            return (f"{REF_ZH.get(e.get('ref'), '')}那顆{self.color(e['color'])}積木在手臂範圍外，夾不到，"
+                    f"已從需求拿掉這一顆。{more}")
         if k == "block_skipped":
             return f"異常：{self.color(e['color'])}積木夾取失敗 {e.get('attempts')} 次，先跳過。"
         if k == "skill_done":
@@ -91,6 +97,8 @@ class Words:
     # ---- skill progress (what the arm starts doing now; shown with the [進度] prefix) ------------------------
     def progress(self, e: dict) -> str | None:
         """skill_start -> one line about the motion that starts now (fixed templates; None = not shown)."""
+        if e.get("kind") == "pick_target":
+            return f"找到{REF_ZH.get(e.get('ref'), '')}那顆{self.color(e['color'])}積木，準備夾取…"
         if e.get("kind") != "skill_start":
             return None
         sk, why, c = e.get("skill"), e.get("purpose"), e.get("color")
