@@ -86,6 +86,7 @@ python tools/real_route.py show --route outputs/routes/right-park-channel.json
 
 `tools/lab_day.sh <步驟>` 依序包好當天的指令：`env`、`check`、`overlay`、`route`（需 `SUPPORT="…"`）、`route-test`、`drop-beige`、`drop-pink`、`try`、`cards`、`cards-drop`、`setup`、`collect`、`recover`、`status`、`pack`。日期預設今天（`LAB_DATE` 可改），檔名都帶日期：`outputs/routes/right-park-channel-<日期>.json`、`outputs/<日期>-cards.json`、`outputs/<日期>-right.setup.json`、session `outputs/<日期>-right/`。`FAKE=1` 以假手臂演練路線步驟，`REPLACE=1` 重教既有路線。
 
+- 任務卡：每張卡一個目標位置（120 個），另外依卡片輪替三種盤面：只有目標、一顆鄰近方塊（中心距 55–75 mm，一半同色）、一到三顆遠處方塊（≥ 90 mm）。採集視窗列出其他方塊的大約位置，開場全局圖記錄實際擺位。
 - `tools/real_cards.py`：列出、刪除任務卡擺位（依編號、`--max-x 盤=mm` 或 `--yaw`），每次刪完檢查是否仍能產生 120 張卡與 20 個保留擺位，舊檔另存。
 - `tools/pack_handoff.py`：第一次執行產生交接索引 `handoff/<日期>_2080Ti_實機採集/README.md`，補完現場欄位後再執行一次：打包成 `AllenHZL/<日期>_2080Ti_實機採集交接.zip`（含 SHA256SUMS），做 CRC 與必要項目檢查，通過後把交接目錄移到 `handoff_origin/`。
 

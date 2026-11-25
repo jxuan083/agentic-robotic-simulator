@@ -82,7 +82,52 @@ def make_cards(layout):
                 cards.append({"id": f"D{len(cards) + 1:03}", "source_tray": tray, "destination": destination,
                               "color": color, "region": region, "kind": kind, "pose": list(target),
                               "layout_group": f"{tray}-{region}-{cell}"})
+    _add_distractors(cards, layout)
     return cards, reserves
+
+
+SCENES = ("target_only", "near_distractor", "far_distractors")
+NEAR_MM = (55, 75)      # centre distance of an adjacent block; 55 mm ~ the finals minimum spacing
+FAR_MM = 90             # other blocks stay at least this far from the target
+APART_MM = 55           # distractors do not overlap each other
+
+
+def _add_distractors(cards, layout):
+    """Other blocks in the source tray so ACT sees neighbours as in the finals (4 blocks, same colour adjacent).
+    A third of the cards each: target only, one adjacent block (half the same colour) plus maybe one far, or
+    one to three far blocks. Placement is approximate; the opening global frame records the actual layout."""
+    random = Random(f"{layout['seed']}-distractors")
+    scenes = [SCENES[i % 3] for i in range(len(cards))]
+    random.shuffle(scenes)
+    points = {tray: sorted({tuple(position(p)) for region in REGIONS for p in layout["zones"][f"{tray}_{region}"]})
+              for tray in TRAYS}
+    for card, scene in zip(cards, scenes):
+        target = card["pose"]
+        pool = points[card["source_tray"]]
+        chosen = []
+
+        def pick(low, high):
+            options = [p for p in pool if low <= dist(p[:2], target[:2]) <= high
+                       and all(dist(p[:2], q["pose"][:2]) >= APART_MM for q in chosen)]
+            if options:
+                point = random.choice(options)
+                return list(point)
+            return None
+
+        wanted = []
+        if scene == "near_distractor":
+            same = random.random() < 0.5
+            wanted.append(("near", card["color"] if same else random.choice([c for c in COLORS if c != card["color"]])))
+            if random.random() < 0.5:
+                wanted.append(("far", random.choice(COLORS)))
+        elif scene == "far_distractors":
+            wanted += [("far", random.choice(COLORS)) for _ in range(random.randint(1, 3))]
+        for where, color in wanted:
+            point = pick(*NEAR_MM) if where == "near" else pick(FAR_MM, float("inf"))
+            if point is not None:
+                chosen.append({"color": color, "pose": point, "relation": where})
+        card["scene"] = scene
+        card["distractors"] = chosen
 
 
 def _held_out_map(layout, reserves):

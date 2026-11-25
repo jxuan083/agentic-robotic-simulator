@@ -201,3 +201,26 @@ def test_each_card_uses_its_own_position():
     assert not held & set(positions)
     groups = {card["layout_group"] for card in cards}
     assert all(group.split("-")[0] in ("pink", "beige") for group in groups) and len(groups) > 20
+
+
+def test_cards_place_distractor_blocks():
+    import json
+    from collections import Counter
+    from math import dist
+    from pathlib import Path
+    from agentic_sim.real_collection import make_cards
+
+    layout = json.loads((Path(__file__).resolve().parents[1] / "configs/real_collection.cards.template.json").read_text())
+    cards, _ = make_cards(layout)
+    assert Counter(card["scene"] for card in cards) == {"target_only": 40, "near_distractor": 40, "far_distractors": 40}
+    for card in cards:
+        poses = [card["pose"]] + [d["pose"] for d in card["distractors"]]
+        assert all(dist(a[:2], b[:2]) >= 55 for i, a in enumerate(poses) for b in poses[i + 1:])
+        if card["scene"] == "target_only":
+            assert not card["distractors"]
+        if card["scene"] == "near_distractor":
+            assert any(d["relation"] == "near" for d in card["distractors"])
+    near = [d for card in cards for d in card["distractors"] if d["relation"] == "near"]
+    same = sum(d["color"] == card["color"] for card in cards for d in card["distractors"] if d["relation"] == "near")
+    assert 10 <= same <= len(near) - 10
+    assert make_cards(layout)[0] == cards  # deterministic for the session

@@ -132,9 +132,13 @@ class Window:
             kind = "小偏差" if card["kind"] == "small_offset" else "正常"
             region = "近" if card["region"] == "near" else "遠"
             cue = "　張爪停穩後，保留一次局部對準。" if card["kind"] == "small_offset" else ""
+            others = card.get("distractors") or []
+            extra = ("\n其他方塊（大約位置即可）：" + "；".join(
+                f"{COLOR[d['color']]} x {d['pose'][0]:g}，y {d['pose'][1]:g}，yaw {d['pose'][2]:g}°"
+                + ("（鄰近）" if d["relation"] == "near" else "") for d in others)) if others else "\n盤內只放目標方塊"
             self.card_text.set(f"{source}  {card['id']}  {COLOR[card['color']]}塊  "
                                f"{TRAY[card['source_tray']]} → {TRAY[card['destination']]}　{region}區／{kind}\n"
-                               f"盤相對座標 x {x:g} mm，y {y:g} mm，yaw {yaw:g}°{cue}")
+                               f"盤相對座標 x {x:g} mm，y {y:g} mm，yaw {yaw:g}°{cue}{extra}")
         else:
             self.card_text.set(f"{source}  批次已完成")
         quotas = "　".join(
