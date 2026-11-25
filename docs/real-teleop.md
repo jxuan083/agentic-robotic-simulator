@@ -79,6 +79,7 @@ python tools/real_route.py show --route outputs/routes/right-park-channel.json
 - 正常解扭力只發生在停放位 4° 以內、已停穩、操作者按 `y` 之後。
 - leader 與 follower 的校正零點不一致、絕對映射無法對齊時，可改用 `--relative`。
 - 每次執行都在 `<route>-runs/<時間>-<指令>/` 保存 `control.jsonl`（每幀命令、回讀與 leader）、`events.jsonl` 和 `status.json`。路線檔保存停放位取樣、通道位命令與回讀、簡化後的路徑點（0.35° 容差）、各段錄製時間及兩向驗證紀錄。校正雜湊改變時拒絕使用舊路線。
+- `drop-test --drop <drop.json>`（`tools/lab_day.sh drop-test-beige|drop-test-pink`）：不用 leader，停放位 → 通道位 → 放開位（`g` 空爪，或 `b` 把方塊放進爪間後閉爪夾住）→ 張到放開開度 → 倒放回通道位 → 停放位解扭力，順序和採集的自動放置相同。搬運時夾爪維持比夾住時的讀回再緊 3%。
 - `record-drop --tray pink|beige --out <drop.json>`：從停放位回放到通道位，再用 leader 從通道位帶到該盤上方的放開位置（方塊離盤面數公分）按 `c`。`--release` 是放開時的夾爪開度（預設 60%）。存檔後倒放回通道位、回停放位並解扭力。
 - `setup --route <park-channel.json> --drop <pink.json> --drop <beige.json> --cards <cards.json> --version <起姿版本> --workspace <工作區> --out <setup.json>`：把路線合成採集用的 setup。停放位、途經點、通道位（標準起姿）和放開路線都取自實走路線，關節範圍取自校正。輸出前用採集端的同一套檢查驗證。`configs/real_collection.cards.template.json` 是由托盤尺寸產生的候選擺位，現場刪掉夾不到的點後當 `--cards`。座標原點是托盤內緣、離基座最近的右側角，+x 朝前、+y 朝左。
 - 假裝置演練：`python tools/real_route.py record --fake --route /tmp/r.json --layout fake --support test`，之後用 `run --fake --no-leader` 跑同一檔。

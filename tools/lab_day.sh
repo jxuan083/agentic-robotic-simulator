@@ -12,6 +12,7 @@
 #     route-test   replay park -> channel without the leader, r returns home
 #     drop-beige   teach channel -> drop pose over the beige tray
 #     drop-pink    teach channel -> drop pose over the pink tray
+#     drop-test-beige / drop-test-pink   replay park -> channel -> drop pose -> release -> back (no leader)
 #     try          park -> channel, then t = leader test grasps from the channel (reach check for the cards)
 #     cards        create today's card positions from the template (once) and show them
 #     cards-drop   remove unreachable positions, e.g.  cards-drop pink_far:3,5  |  cards-drop --max-x pink=200
@@ -87,6 +88,11 @@ case "$step" in
     say "leader from the channel to ~3-5 cm above the $tray tray centre without touching the rim; c saves"
     "$PY" tools/real_route.py record-drop "${MOTION[@]}" --route "$ROUTE" --tray "$tray" --out "$out" \
       --release "${RELEASE:-60}" "${REPLACE_FLAG[@]}" ;;
+  drop-test-beige|drop-test-pink)
+    tray="${step#drop-test-}"; drop="$DROP_BEIGE"; [[ "$tray" == pink ]] && drop="$DROP_PINK"
+    need "$ROUTE" "$drop"
+    say "no leader: park -> channel -> $tray drop pose -> open -> back; g empty gripper, b hold a block"
+    "$PY" tools/real_route.py drop-test "${MOTION[@]}" --route "$ROUTE" --drop "$drop" ;;
   try)
     need "$ROUTE"
     say "at the channel press t, test grasps on the far/edge/60 deg card positions, c returns to the channel"
@@ -137,5 +143,5 @@ PYEOF
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)
-    sed -n '2,28p' "$0"; exit 1 ;;
+    sed -n '2,29p' "$0"; exit 1 ;;
 esac

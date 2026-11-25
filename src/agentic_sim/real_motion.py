@@ -24,6 +24,7 @@ READ_MARGIN = 3.0       # deg a readback may sit outside the approved limits (e.
 GATE_LAG = 4.0          # route interpolation waits while the body lag exceeds this
 STALL_LAG = 15.0        # teleop lag treated as an obstruction ...
 STALL_SECONDS = 1.0     # ... when it persists (routes: gated time)
+CARRY_SQUEEZE = 3.0  # gripper % below the grasp readback while carrying (= the follower's closing-gap cap)
 TASK_STEP = dict.fromkeys(JOINTS, 4.0) | {"gripper": 10.0}  # max change per task command
 
 
@@ -263,7 +264,8 @@ class Motion:
         drop = self.plan.drops[tray]
         self.phase = "carry"
         held = self.read()
-        grip = held["gripper"]
+        # Keep squeezing the block while carrying: a goal at the readback opening holds with no force.
+        grip = max(0.0, held["gripper"] - CARRY_SQUEEZE)
         self.command = None
         self._move(held)
         self._move(self.plan.start | {"gripper": grip}, settle=False)

@@ -181,6 +181,21 @@ class DropCase(unittest.TestCase):
         self.assertEqual(sorted(plan.drops), ["pink"])
         self.assertLess(body_gap(plan.start, data["channel"]["command"]), 1e-9)
 
+        # Replay it without the leader, holding a block: close at the channel, carry, open, back home.
+        from agentic_sim.real_route import drop_test
+
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        term = ScriptedTerminal(clock, answers=("b", "r", "y"))
+        driver = self.driver(follower, term, clock, "drop-test")
+        self.assertTrue(drop_test(driver, data, track, out))
+        driver.close_logs()
+        self.assert_released_at_park(follower)
+        at_drop = [cmd for _, cmd in follower.sent if body_gap(cmd, drop_pose) < 1.0]
+        self.assertTrue(at_drop)
+        self.assertLess(min(cmd["gripper"] for cmd in at_drop), 1.0)        # carried closed
+        self.assertGreaterEqual(max(cmd["gripper"] for cmd in at_drop), 60.0)  # released at the drop pose
+
 
 class TrackCase(unittest.TestCase):
     def test_compress_drops_idle_time_and_keeps_shape(self):

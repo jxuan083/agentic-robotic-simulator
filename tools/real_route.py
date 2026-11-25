@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from agentic_sim.real_motion import OFF  # noqa: E402
 from agentic_sim.real_route import (  # noqa: E402
     ENGAGE_GAP, PLAY_SPEED, Driver, Released, archive_existing, body_gap, build_setup, load_route,
-    record_drop, recover, record, roundtrip, sample_park, save_route, tune_route,
+    record_drop, recover, record, roundtrip, sample_park, save_route, tune_route, drop_test,
 )
 
 
@@ -196,7 +196,7 @@ def tune(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("record", "run", "recover", "record-drop", "setup", "show", "tune"):
+    for name in ("record", "run", "recover", "record-drop", "drop-test", "setup", "show", "tune"):
         p = sub.add_parser(name)
         p.add_argument("--route", type=Path, required=True, help="route JSON, e.g. outputs/routes/right-park-channel.json")
         if name == "tune":
@@ -230,6 +230,8 @@ def main(argv=None):
             p.add_argument("--replace", action="store_true", help="archive an existing route file and teach anew")
         if name == "run":
             p.add_argument("--no-leader", action="store_true", help="playback only, no leader task test")
+        if name == "drop-test":
+            p.add_argument("--drop", type=Path, required=True, help="taught drop route JSON to replay")
         if name == "record-drop":
             p.add_argument("--tray", required=True, choices=("pink", "beige"))
             p.add_argument("--out", type=Path, required=True, help="drop route JSON to write")
@@ -314,6 +316,8 @@ def main(argv=None):
                     record(driver, hand, route, meta, samples)
                 elif args.command == "run":
                     roundtrip(driver, hand, route, data, track)
+                elif args.command == "drop-test":
+                    drop_test(driver, data, track, json.loads(args.drop.read_text(encoding="utf-8")))
                 elif args.command == "record-drop":
                     if args.replace:
                         archive_existing(args.out)

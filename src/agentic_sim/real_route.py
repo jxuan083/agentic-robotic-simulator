@@ -21,7 +21,7 @@ from time import monotonic_ns, sleep
 
 from agentic_sim.real_control import JOINTS, UNITS, pose
 from agentic_sim.real_episode import write_json
-from agentic_sim.real_motion import OFF, ON
+from agentic_sim.real_motion import CARRY_SQUEEZE, OFF, ON
 
 
 FORMAT = "so101-park-channel-route/1"
@@ -860,6 +860,7 @@ def record_drop(driver, leader, data, track, drop_path, tray, release):
     samples.append((driver.clock(), dict(driver.target)))
     drop = compress(samples)
     drop.points[0] = channel
+    drop = retimed([drop.points[i] for i in sorted(_simplify(drop.points, TUNE_PATH_ERROR))])
     out = {"format": DROP_FORMAT, "tray": tray, "arm": data["arm"], "layout_id": data["layout_id"],
            "calibrations": data["calibrations"], "base_route": data.get("created_at"),
            "release_gripper": release, "drop_readback": readback, "stationary": still,
@@ -873,6 +874,45 @@ def record_drop(driver, leader, data, track, drop_path, tray, release):
         follow(driver, drop.reverse(), (f"{tray}放開位", "通道位"))
         park_and_release(driver, track.reverse(), park, data["park_support"])
     return out
+
+
+def retimed(points):
+    """Track over points at the playback speed caps (no taught pauses)."""
+    return Track(points, [max(1e-3, body_gap(a, b) / PLAY_SPEED, abs(a["gripper"] - b["gripper"]) / GRIPPER_PLAY_SPEED)
+                          for a, b in zip(points, points[1:])])
+
+
+def drop_test(driver, data, track, drop):
+    """Without the leader: park -> channel -> taught drop pose (gripper held, optionally on a block) -> open to the
+    release opening -> reverse to the channel -> park and release. Same order as the collection's auto placement."""
+    park, tray = data["park"]["pose"], drop["tray"]
+    if drop["calibrations"] != data["calibrations"] or drop["layout_id"] != data["layout_id"]:
+        raise ValueError(f"drop route {tray} was taught with another calibration or layout")
+    driver.arm_at(park)
+    if follow(driver, track, ("停放位", "通道位")) != "通道位":
+        park_and_release(driver, Track([driver.target, park], [0.0]), park, data["park_support"])
+        return None
+    choice = driver.menu(f"在通道位。g 空爪測試{tray}盤放開位／b 把方塊放進爪間後按 b，夾爪閉合夾住再測／"
+                         "q 不測，回停放位", {"g": "空爪", "b": "夾方塊", "q": "回停放位"})
+    if choice == "q":
+        park_and_release(driver, track.reverse(), park, data["park_support"])
+        return None
+    if choice == "b":
+        follow(driver, Track([driver.target, driver.target | {"gripper": 0.0}], [0.0]), ("張爪", "閉爪"))
+        driver.target = driver.target | {"gripper": max(0.0, driver.read()["gripper"] - CARRY_SQUEEZE)}
+    grip = driver.target["gripper"]
+    out = retimed([dict(driver.target), *[pose(p) | {"gripper": grip} for p in drop["waypoints"][1:]]])
+    if follow(driver, out, ("通道位", f"{tray}放開位")) == f"{tray}放開位":
+        opened = max(grip, drop["release_gripper"])
+        follow(driver, Track([driver.target, driver.target | {"gripper": opened}], [0.0]), ("夾住", "放開"))
+        driver.event("drop_test_released", tray=tray, readback=driver.last, gripper=opened)
+        driver.menu(f"已在{tray}盤放開位張爪到 {opened:.0f}%。確認方塊落進盤內、回程淨空後按 r 倒放回通道位",
+                    {"r": "回通道位"})
+        back = retimed([dict(driver.target), *[pose(p) | {"gripper": opened} for p in drop["waypoints"][-2::-1]]])
+        follow(driver, back, (f"{tray}放開位", "通道位"))
+    park_and_release(driver, track.reverse(), park, data["park_support"])
+    driver.term.say("已回停放位並解扭力。")
+    return True
 
 
 def build_setup(data, track, drops, *, version, workspace, cards, speed=20.0):
