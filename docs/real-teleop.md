@@ -82,6 +82,13 @@ python tools/real_route.py show --route outputs/routes/right-park-channel.json
 - `setup --route <park-channel.json> --drop <pink.json> --drop <beige.json> --cards <cards.json> --version <起姿版本> --workspace <工作區> --out <setup.json>`：把路線合成採集用的 setup。停放位、途經點、通道位（標準起姿）和放開路線都取自實走路線，關節範圍取自校正。輸出前用採集端的同一套檢查驗證。`configs/real_collection.cards.template.json` 是由托盤尺寸產生的候選擺位，現場刪掉夾不到的點後當 `--cards`。座標原點是托盤內緣、離基座最近的右側角，+x 朝前、+y 朝左。
 - 假裝置演練：`python tools/real_route.py record --fake --route /tmp/r.json --layout fake --support test`，之後用 `run --fake --no-leader` 跑同一檔。
 
+### 採集日入口
+
+`tools/lab_day.sh <步驟>` 依序包好當天的指令：`env`、`check`、`overlay`、`route`（需 `SUPPORT="…"`）、`route-test`、`drop-beige`、`drop-pink`、`try`、`cards`、`cards-drop`、`setup`、`collect`、`recover`、`status`、`pack`。日期預設今天（`LAB_DATE` 可改），檔名都帶日期：`outputs/routes/right-park-channel-<日期>.json`、`outputs/<日期>-cards.json`、`outputs/<日期>-right.setup.json`、session `outputs/<日期>-right/`。`FAKE=1` 以假手臂演練路線步驟，`REPLACE=1` 重教既有路線。
+
+- `tools/real_cards.py`：列出、刪除任務卡擺位（依編號、`--max-x 盤=mm` 或 `--yaw`），每次刪完檢查是否仍能產生 120 張卡與 20 個保留擺位，舊檔另存。
+- `tools/pack_handoff.py`：第一次執行產生交接索引 `handoff/<日期>_2080Ti_實機採集/README.md`，補完現場欄位後再執行一次：打包成 `AllenHZL/<日期>_2080Ti_實機採集交接.zip`（含 SHA256SUMS），做 CRC 與必要項目檢查，通過後把交接目錄移到 `handoff_origin/`。
+
 ### 採集流程的動作規則（11/25 起）
 
 `real_collection.py` 的對位、復位與重播共用 `real_motion.Motion`，和路線工具採用相同的寬鬆規則：

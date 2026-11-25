@@ -222,7 +222,8 @@ class Motion:
         steps = max(1, ceil(max(abs(delta[joint]) / self.plan.speed[joint] for joint in JOINTS) / ROUTE_PERIOD))
         step, stalled = 1, 0.0
         while step <= steps:
-            sent = self.send({joint: start[joint] + delta[joint] * step / steps for joint in JOINTS})
+            sent = self.send(target if step == steps else
+                             {joint: start[joint] + delta[joint] * step / steps for joint in JOINTS})
             self.wait(ROUTE_PERIOD)
             lag = max(abs(self.read()[j] - sent[j]) for j in BODY)
             if lag <= GATE_LAG:
