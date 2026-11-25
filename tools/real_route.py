@@ -134,6 +134,102 @@ def fake_devices(*, leader, resume=False):
     yield (FakeLeader(clock, [(t + 4.0, p) for t, p in operator_path()]) if leader else None), follower, refs, 60
 
 
+@contextmanager
+def episode_capture(root, config, arm, refs, hz, layout):
+    """Cameras + episode writer for one park-start grasp demonstration (same files as the collection desk)."""
+    from threading import Event
+
+    from agentic_sim.real_episode import EpisodeWriter
+    from agentic_sim.real_hardware import load_profile, open_camera
+    from agentic_sim.real_record import CameraWorker
+    from real_teleop import provenance
+
+    profile = load_profile(config)
+    with ExitStack() as stack:
+        streams, cameras = {}, {}
+        for name, spec in profile["cameras"].items():
+            for attempt in range(3):  # the wrist camera sometimes misses its first frame after opening
+                try:
+                    streams[name], info = stack.enter_context(open_camera(spec))
+                    break
+                except TimeoutError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(1)
+            cameras[name] = {k: v for k, v in spec.items() if k not in ("device", "depth")} | info
+        writer = EpisodeWriter(root, source="real", arms={arm: refs}, cameras=cameras,
+                               provenance=provenance("tools/real_route.py grasp") | {"start_pose": "park",
+                                                                                     "leader_mapping": "driven hand-over, relative"},
+                               hz=hz, layout=layout)
+        stopped = Event()
+        workers = [CameraWorker(name, profile["cameras"][name], streams[name], writer, stopped) for name in cameras]
+        started, error = [], None
+
+        def check():
+            for worker in workers:
+                worker.check()
+
+        try:
+            for worker in workers:
+                worker.thread.start()
+                started.append(worker)
+            deadline = time.monotonic() + 8
+            while any(w.last_frame is None and w.error is None for w in workers) and time.monotonic() < deadline:
+                time.sleep(.02)
+            check()
+            yield writer, check
+            check()
+        except BaseException as failure:
+            error = failure
+            raise
+        finally:
+            stopped.set()
+            for worker in started:
+                worker.thread.join()
+            writer.close(error=error)
+
+
+def grasp_session(driver, hand, data, args, refs, hz):
+    """Terminal loop: one park-start grasp demonstration per colour key, until q."""
+    from agentic_sim.real_grasp import COLORS, finalize, grasp_round
+
+    term = driver.term
+    drops = {d["tray"]: d for d in (json.loads(path.read_text(encoding="utf-8")) for path in args.drop)}
+    for tray, drop in drops.items():
+        if drop["calibrations"] != data["calibrations"] or body_gap(drop["waypoints"][0], data["channel"]["command"]) > 3:
+            raise ValueError(f"drop route {tray} does not match this route's calibration or start pose")
+    quads = json.loads(args.trays.read_text(encoding="utf-8"))["quads"]
+    episodes = args.session / "episodes"
+    episodes.mkdir(parents=True, exist_ok=True)
+    index = args.session / "index.jsonl"
+    while True:
+        number = 1 + len(list(episodes.glob("P*")))
+        key = term.choose(f"第 {number} 筆：先擺好方塊、手離開盤子與手臂，再選目標顏色 r 紅／b 藍／y 黃；q 結束",
+                          {"r": "紅", "b": "藍", "y": "黃", "q": "結束"})
+        if key == "q":
+            return
+        color = COLORS[key]
+        root = episodes / f"P{number:04}"
+        with episode_capture(root, args.config, args.arm, refs, hz, data["layout_id"]) as (writer, check):
+            result = grasp_round(driver, hand, data, drops, writer, check, color)
+        if result.get("demo_frames") is None:
+            term.say("這筆取消，未錄到示範。")
+            continue
+        report, review = finalize(root, color=color, destination=result.get("destination"),
+                                  success=result.get("success"), quads=quads)
+        target = review["target"]["d455"]
+        timing = report.get("control_timing") or {}
+        line = {"episode": root.name, "color": color, "result": result, "ok": report["ok"],
+                "target": target and {k: target[k] for k in ("tray", "x_mm", "y_mm", "yaw_deg")},
+                "training_range": review.get("training_range"), "reasons": report["review_reasons"]}
+        with index.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+        where = f"{target['tray']} x {target['x_mm']:.0f} y {target['y_mm']:.0f} mm" if target else "D455 未找到目標"
+        term.say(f"{root.name}：讀回 {'OK' if report['ok'] else '有問題'}，{report.get('observed_control_hz')} Hz，"
+                 f"目標 {where}，訓練段 {review.get('training_range')}"
+                 + ("" if not report["review_reasons"] else f"；待確認：{'；'.join(report['review_reasons'])}"))
+
+
 def check_calibration(data, refs, *, leader):
     roles = ("leader", "follower") if leader else ("follower",)
     for role in roles:
@@ -196,7 +292,7 @@ def tune(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("record", "run", "recover", "record-drop", "drop-test", "setup", "show", "tune"):
+    for name in ("record", "run", "recover", "record-drop", "drop-test", "grasp", "setup", "show", "tune"):
         p = sub.add_parser(name)
         p.add_argument("--route", type=Path, required=True, help="route JSON, e.g. outputs/routes/right-park-channel.json")
         if name == "tune":
@@ -235,6 +331,10 @@ def main(argv=None):
             p.add_argument("--no-leader", action="store_true", help="playback only, no leader task test")
         if name == "drop-test":
             p.add_argument("--drop", type=Path, required=True, help="taught drop route JSON to replay")
+        if name == "grasp":
+            p.add_argument("--drop", type=Path, action="append", required=True, help="drop route JSON (per tray)")
+            p.add_argument("--trays", type=Path, required=True, help="fixed D455 tray corners JSON")
+            p.add_argument("--session", type=Path, required=True, help="output folder, e.g. outputs/261125-park")
         if name == "record-drop":
             p.add_argument("--tray", required=True, choices=("pink", "beige"))
             p.add_argument("--out", type=Path, required=True, help="drop route JSON to write")
@@ -272,7 +372,9 @@ def main(argv=None):
         parser.error("--rate must be within 0.2..2.0")
 
     route = args.route
-    leader_needed = args.command in ("record", "record-drop") or (args.command == "run" and not args.no_leader)
+    leader_needed = args.command in ("record", "record-drop", "grasp") or (args.command == "run" and not args.no_leader)
+    if args.command == "grasp" and args.fake:
+        parser.error("grasp records cameras: run it on the lab machine")
     if args.command == "record-drop" and args.out.exists() and not args.replace:
         parser.error(f"{args.out} exists; pass --replace to archive it")
     if args.command == "record":
@@ -322,6 +424,8 @@ def main(argv=None):
                     record(driver, hand, route, meta, samples)
                 elif args.command == "run":
                     roundtrip(driver, hand, route, data, track)
+                elif args.command == "grasp":
+                    grasp_session(driver, hand, data, args, refs, hz)
                 elif args.command == "drop-test":
                     drop_test(driver, data, track, json.loads(args.drop.read_text(encoding="utf-8")))
                 elif args.command == "record-drop":

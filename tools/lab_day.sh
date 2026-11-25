@@ -17,6 +17,7 @@
 #     drop-beige   teach channel -> drop pose over the beige tray
 #     drop-pink    teach channel -> drop pose over the pink tray
 #     drop-test-beige / drop-test-pink   replay park -> channel -> drop pose -> release -> back (no leader)
+#     grasp        park-start grasp demonstrations from the terminal (no task cards), session outputs/<date>-park
 #     try          park -> channel, then t = leader test grasps from the channel (reach check for the cards)
 #     cards        create today's card positions from the template (once) and show them
 #     cards-drop   remove unreachable positions, e.g.  cards-drop pink_far:3,5  |  cards-drop --max-x pink=200
@@ -124,6 +125,11 @@ case "$step" in
     need "$ROUTE" "$drop"
     say "no leader: park -> channel -> $tray drop pose -> open -> back; g empty gripper, b hold a block"
     "$PY" tools/real_route.py drop-test "${MOTION[@]}" --route "$ROUTE" --drop "$drop" ;;
+  grasp)
+    # Park-start grasp demonstrations in the terminal: colour key per episode, c ends, p/b places, s/f result.
+    need "$ROUTE" "$DROP_BEIGE" "$DROP_PINK" "$TRAYS"
+    "$PY" tools/real_route.py grasp "${MOTION[@]}" --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" \
+      --trays "$TRAYS" --session "outputs/$DATE-park" ;;
   try)
     need "$ROUTE"
     say "at the channel press t, test grasps on the far/edge/60 deg card positions, c returns to the channel"
@@ -170,9 +176,9 @@ PYEOF
     fi ;;
   pack)
     items=()
-    for f in "$SESSION" "$ROUTES" "$SETUP" "$CARDS" "$(dirname "$TRAYS")" "outputs/$DATE-camera"; do [[ -e "$f" ]] && items+=("$f"); done
+    for f in "$SESSION" "outputs/$DATE-park" "$ROUTES" "$SETUP" "$CARDS" "$(dirname "$TRAYS")" "outputs/$DATE-camera"; do [[ -e "$f" ]] && items+=("$f"); done
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)
-    sed -n '2,33p' "$0"; exit 1 ;;
+    sed -n '2,34p' "$0"; exit 1 ;;
 esac

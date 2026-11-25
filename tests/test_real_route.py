@@ -398,3 +398,60 @@ def test_retrace_home_reverses_the_driven_path():
     assert lifts == sorted(lifts, reverse=True)          # monotonically back, no swing past the channel
     assert body_gap(track.points[-1], CHANNEL) < 1e-9 and track.points[-1]["gripper"] == 17.0
     assert body_gap(track.points[0], out[-1][1]) < 1e-9
+
+
+class FakeWriter:
+    def __init__(self, clock):
+        self.clock_fn, self.origin, self.rows, self.count = clock, clock(), [], 0
+
+    def clock(self):
+        return self.clock_fn() - self.origin
+
+    def add_control(self, row):
+        self.rows.append(row)
+        self.count += 1
+
+
+class GraspRoundCase(RouteCase):
+    def test_park_start_round_records_only_the_demo_and_places(self):
+        from agentic_sim.real_grasp import grasp_round
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        channel = data["channel"]["command"]
+        drop = {"tray": "pink", "waypoints": [channel, dict(channel) | {"shoulder_pan": channel["shoulder_pan"] - 15}],
+                "release_gripper": 35.0}
+        grasp = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 20, "elbow_flex": CHANNEL["elbow_flex"] - 10}
+        moves = [(0.5, dict.fromkeys(PARK, 0.0)), (3.0, {j: VIA[j] - PARK[j] for j in PARK}),
+                 (6.0, {j: grasp[j] - PARK[j] for j in PARK})]
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        leader = FakeDrivenLeader(clock, PARK, moves)
+        term = ScriptedTerminal(clock, [(16.0, "c")], ("a", "p", "r", "y", "s"))
+        driver = self.driver(follower, term, clock, "grasp")
+        writer = FakeWriter(clock)
+        checks = []
+        result = grasp_round(driver, leader, data, {"pink": drop}, writer, lambda: checks.append(1), "red")
+        driver.close_logs()
+        self.assertEqual(result["destination"], "pink")
+        self.assertTrue(result["success"] and result["placed"])
+        self.assert_released_at_park(follower)
+        self.assertEqual(result["demo_frames"], writer.count)          # rows stop at c
+        self.assertGreater(writer.count, 100)
+        self.assertTrue(checks)
+        first = writer.rows[0]["arms"]["right"]["readback"]
+        self.assertLess(body_gap(first, PARK), 4.0)                    # the demo starts at park
+        # Placement went out along the drop route (pan turned) after the demo.
+        self.assertTrue(any(cmd["shoulder_pan"] < channel["shoulder_pan"] - 10 for _, cmd in follower.sent))
+
+
+def test_retrace_to_stops_where_the_demo_passed_the_start_pose():
+    from agentic_sim.real_grasp import retrace_to
+
+    path = [dict(PARK)] + [dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 3 * i} for i in range(10)]
+    samples = list(enumerate(path))
+    track = retrace_to(samples, CHANNEL)
+    self_lifts = [p["shoulder_lift"] for p in track.points]
+    assert all(p["shoulder_lift"] >= CHANNEL["shoulder_lift"] - 1e-9 for p in track.points)  # never back toward park
+    assert self_lifts == sorted(self_lifts, reverse=True)

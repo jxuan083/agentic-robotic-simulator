@@ -174,6 +174,7 @@ class Driver:
         self.drive_leader = drive_leader  # hand-over: drive the leader to the follower pose, then release it
         self.clutch = None        # leader pose at a driven hand-over: teleop maps displacement from here
         self.leader_route = None  # park -> start Track: a folded leader is driven along it, not straight
+        self.on_send = None       # episode recorder hook: (command, readback) after each follower command
         self.clock = clock
         self.wait = wait
         self.limits = calibrated_limits(follower)
@@ -236,6 +237,8 @@ class Driver:
         if edges:
             row["range_edge"] = edges
         self.control.write(json.dumps(row, allow_nan=False) + "\n")
+        if self.on_send is not None:
+            self.on_send(sent, actual)
         return sent, actual, edges
 
     def hold(self, reason):
@@ -986,6 +989,15 @@ def drop_test(driver, data, track, drop):
     if choice == "b":
         follow(driver, Track([driver.target, driver.target | {"gripper": 0.0}], [0.0]), ("張爪", "閉爪"))
         driver.target = driver.target | {"gripper": max(0.0, driver.read()["gripper"] - CARRY_SQUEEZE)}
+    place_from_channel(driver, drop)
+    park_and_release(driver, track.reverse(), park, data["park_support"])
+    driver.term.say("已回停放位並解扭力。")
+    return True
+
+
+def place_from_channel(driver, drop):
+    """At the channel holding the block: follow the drop route, open, confirm, reverse back to the channel."""
+    tray = drop["tray"]
     grip = driver.target["gripper"]
     out = retimed([dict(driver.target), *[pose(p) | {"gripper": grip} for p in drop["waypoints"][1:]]])
     if follow(driver, out, ("通道位", f"{tray}放開位")) == f"{tray}放開位":
@@ -996,9 +1008,6 @@ def drop_test(driver, data, track, drop):
                     {"r": "回通道位"})
         back = retimed([dict(driver.target), *[pose(p) | {"gripper": opened} for p in drop["waypoints"][-2::-1]]])
         back_to_channel(driver, back, tray)
-    park_and_release(driver, track.reverse(), park, data["park_support"])
-    driver.term.say("已回停放位並解扭力。")
-    return True
 
 
 def build_setup(data, track, drops, *, version, workspace, cards, speed=20.0, trays=None):
