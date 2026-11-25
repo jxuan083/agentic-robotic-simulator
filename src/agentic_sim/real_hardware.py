@@ -154,15 +154,22 @@ class Leader(PositionBus):
             limit = (c.range_max - c.range_min) * 180 / self.resolution
             target[joint] = max(-limit, min(limit, target[joint]))
         target["gripper"] = max(0.0, min(100.0, target["gripper"]))
-        self.bus.sync_write("Goal_Position", target, num_retry=1)
+        self.bus.sync_write("Goal_Position", target, num_retry=3)
+
+    def read(self):
+        self.last_read = pose(self.bus.sync_read("Present_Position", num_retry=3))
+        return dict(self.last_read)
 
     def release(self):
         off = dict.fromkeys(JOINTS, 0)
-        for _ in range(3):
-            self.bus.sync_write("Torque_Enable", off, normalize=False, num_retry=2)
-            if self._torque_states() == off:
-                self.driven = False
-                return
+        for _ in range(6):
+            try:
+                self.bus.sync_write("Torque_Enable", off, normalize=False, num_retry=3)
+                if self.bus.sync_read("Torque_Enable", normalize=False, num_retry=3) == off:
+                    self.driven = False
+                    return
+            except (ConnectionError, RuntimeError, OSError):
+                pass
             sleep(.05)
         raise RuntimeError("could not verify leader torque off")
 

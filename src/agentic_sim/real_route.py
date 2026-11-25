@@ -459,8 +459,14 @@ class Driver:
                 outcome = self._drive_leader(leader, reference)
                 if outcome == "arrived":
                     outcome = self._countdown(leader)
-            except BaseException:
-                self._release_leader("error")
+            except BaseException as error:
+                self.event("leader_error", error=repr(error))
+                self.term.say(f"leader 交接出錯：{error}")
+                try:
+                    self._release_leader("error")
+                except Exception as release_error:  # noqa: BLE001 - keep the original failure
+                    self.event("leader_release_failed", error=repr(release_error))
+                    self.term.say(f"leader 解扭力也未確認：{release_error}")
                 raise
             if outcome == "released":
                 return self._after_release(leader, reference)
