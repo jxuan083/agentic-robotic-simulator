@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from agentic_sim.real_control import JOINTS  # noqa: E402
+from agentic_sim.real_dataset import MARKER_CAMERA, draw_markers  # noqa: E402
 
 
 def main(argv=None) -> int:
@@ -60,10 +61,16 @@ def main(argv=None) -> int:
                 problems.append(f"episode {e} row {i}: action differs")
             if item["task"] != src["instruction"][lang]:
                 problems.append(f"episode {e} row {i}: task {item['task']!r}")
+            if src.get("condition") and not np.allclose(item["observation.environment_state"].numpy(),
+                                                        src["condition"], atol=1e-4):
+                problems.append(f"episode {e} row {i}: environment_state differs from the condition")
             if int(item["is_handoff"].item()) != int(i == src["handoff"]):
                 problems.append(f"episode {e} row {i}: is_handoff {int(item['is_handoff'].item())}")
             for c, idx in src["camera_frames"].items():
-                want = np.asarray(Image.open(root_src / c / frames[c][idx[k]]["rgb"]).convert("RGB"), np.float32)
+                img = Image.open(root_src / c / frames[c][idx[k]]["rgb"]).convert("RGB")
+                if src.get("markers") and c == MARKER_CAMERA:
+                    img = draw_markers(img, src["markers"])
+                want = np.asarray(img, np.float32)
                 got = item[f"observation.images.{c}"].numpy()       # C, H, W in [0, 1]
                 got = np.transpose(got, (1, 2, 0)) * 255.0
                 diff = float(np.abs(got - want).mean())
