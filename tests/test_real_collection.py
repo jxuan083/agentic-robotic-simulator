@@ -185,3 +185,19 @@ def test_fake_demo_cli_runs_without_hardware_drivers(tmp_path):
     report = json.loads(result.stdout)
     assert (report["demonstrations"], report["replays"], report["next_card"]) == (2, 2, "D003")
     assert (tmp_path / "fake_device_trace.json").is_file()
+
+
+def test_each_card_uses_its_own_position():
+    import json
+    from pathlib import Path
+    from agentic_sim.real_collection import make_cards
+
+    layout = json.loads((Path(__file__).resolve().parents[1] / "configs/real_collection.cards.template.json").read_text())
+    cards, reserves = make_cards(layout)
+    assert len(cards) == 120 and len(reserves) == 20
+    positions = [(card["source_tray"], *card["pose"][:2]) for card in cards]
+    assert len(set(positions)) == 120
+    held = {(row["tray"], *row["pose"][:2]) for row in reserves}
+    assert not held & set(positions)
+    groups = {card["layout_group"] for card in cards}
+    assert all(group.split("-")[0] in ("pink", "beige") for group in groups) and len(groups) > 20

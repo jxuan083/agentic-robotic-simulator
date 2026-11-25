@@ -4,6 +4,7 @@
   show  CARDS                         numbered positions per zone, then the card/held-out check
   drop  CARDS pink_far:3,5 ...        remove numbered positions (numbers from `show`), in place
   drop  CARDS --max-x pink=200 ...    remove positions beyond a tray-local x (mm), e.g. an unreachable far edge
+        (also --max-y / --min-y)
   drop  CARDS --yaw 45                remove every position with this yaw
 
 Positions are tray-local [x mm, y mm, yaw deg]: origin at the inner tray corner nearest the arm base on its right,
@@ -28,6 +29,12 @@ def check(cards):
         print(f"NOT ENOUGH: {error}")
         return False
     print(f"OK: {len(made)} task cards, {len(reserves)} held-out positions")
+    distinct = {}
+    for card in made:
+        distinct.setdefault(f"{card['source_tray']}_{card['region']}", set()).add(tuple(card["pose"][:2]))
+    for zone, points in sorted(distinct.items()):
+        note = "" if len(points) >= 30 else "  (fewer than 30: some positions repeat; keep more points if possible)"
+        print(f"  {zone}: {len(points)} distinct card positions{note}")
     return True
 
 
@@ -48,6 +55,8 @@ def main(argv=None):
     p.add_argument("cards", type=Path)
     p.add_argument("items", nargs="*", help="zone:i,j,... using the numbers printed by show")
     p.add_argument("--max-x", action="append", default=[], help="tray=mm: drop positions with x above this")
+    p.add_argument("--max-y", action="append", default=[], help="tray=mm: drop positions with y above this")
+    p.add_argument("--min-y", action="append", default=[], help="tray=mm: drop positions with y below this")
     p.add_argument("--yaw", type=float, action="append", default=[], help="drop positions with this yaw")
     args = parser.parse_args(argv)
     cards = json.loads(args.cards.read_text(encoding="utf-8"))
@@ -60,14 +69,19 @@ def main(argv=None):
         if zone not in remove or not indices:
             parser.error(f"expected zone:i,j with zone in {sorted(remove)}")
         remove[zone] |= {int(i) for i in indices.split(",")}
-    limits = {}
-    for item in args.max_x:
-        tray, _, mm = item.partition("=")
-        limits[tray] = float(mm)
+    def bounds(items):
+        out = {}
+        for item in items:
+            tray, _, mm = item.partition("=")
+            out[tray] = float(mm)
+        return out
+
+    max_x, max_y, min_y = bounds(args.max_x), bounds(args.max_y), bounds(args.min_y)
     for zone, points in cards["zones"].items():
         tray = zone.split("_")[0]
-        for i, (x, _, yaw) in enumerate(points):
-            if x > limits.get(tray, float("inf")) or yaw in args.yaw:
+        for i, (x, y, yaw) in enumerate(points):
+            if (x > max_x.get(tray, float("inf")) or y > max_y.get(tray, float("inf"))
+                    or y < min_y.get(tray, float("-inf")) or yaw in args.yaw):
                 remove[zone].add(i)
     for zone, indices in remove.items():
         if any(i >= len(cards["zones"][zone]) for i in indices):

@@ -16,6 +16,7 @@ from agentic_sim.real_round import capture_round, replay_round, validate_setup
 COLORS = ("red", "blue", "yellow")
 TRAYS = ("pink", "beige")
 REGIONS = ("near", "far")
+GROUP_CELL_MM = 60
 
 
 def position(values):
@@ -58,18 +59,29 @@ def make_cards(layout):
             raise ValueError(f"{tray} {region}: no approved training position outside the held-out margin")
         candidates[tray, region] = list(distinct.values())
 
+    # Every card gets its own block position: the grasp does not depend on the colour, so spreading the
+    # 120 demonstrations over the tray covers more arm configurations than repeating a position per colour.
+    # Positions are drawn without replacement per tray and region (reused only if a zone has too few), and
+    # nearby positions share a layout group (GROUP_CELL_MM cells) so train / development splits stay apart.
+    pools = {}
+    for key, groups in candidates.items():
+        order = list(groups)
+        random.shuffle(order)
+        pools[key] = order
+    used = Counter()
     cards = []
     for i in range(20):
         region = REGIONS[i // 10]
         kind = "normal" if i % 10 < 6 else "small_offset"
-        available_pairs = min(len(candidates[tray, region]) for tray in TRAYS)
-        slot = i % 10 % available_pairs
         for tray, destination in (TRAYS, TRAYS[::-1]):
             for color in COLORS:
-                target = random.choice(candidates[tray, region][slot])
+                pool = pools[tray, region]
+                target = random.choice(pool[used[tray, region] % len(pool)])
+                used[tray, region] += 1
+                cell = f"{int(target[0] // GROUP_CELL_MM)}-{int(target[1] // GROUP_CELL_MM)}"
                 cards.append({"id": f"D{len(cards) + 1:03}", "source_tray": tray, "destination": destination,
-                              "color": color, "region": region, "kind": kind, "pose": target,
-                              "layout_group": f"{region}-{slot + 1:02}"})
+                              "color": color, "region": region, "kind": kind, "pose": list(target),
+                              "layout_group": f"{tray}-{region}-{cell}"})
     return cards, reserves
 
 
