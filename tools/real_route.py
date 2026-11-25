@@ -187,7 +187,7 @@ def tune(args):
     t = tuned["tuned"]
     print(f"saved {args.route} (previous: {old.name})")
     print(f"waypoints {t['waypoints_before']} -> {t['waypoints_after']}, playback about "
-          f"{sum(tuned['segment_seconds']):.1f} s (before {sum(data["segment_seconds"]):.1f} s); "
+          f"{sum(tuned['segment_seconds']):.1f} s (before {sum(data['segment_seconds']):.1f} s); "
           f"gripper {data['park']['pose']['gripper']:.1f} % until waypoint {t['open_from_waypoint']}, then "
           f"{grip:.1f} %. Verify again: route-test.")
     return 0
