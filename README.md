@@ -34,6 +34,7 @@ flowchart LR
 | 項目 | 狀態 |
 |---|---|
 | 實機遙操作、相機、校正、影像／狀態記錄 | 單臂與雙臂 CLI 已接上本機 LeRobot 設定，命令分流、錄製格式與離線讀回已用假硬體驗證，待實機驗收 |
+| 實機停放位／通道位路線與採集決定 | 分支 `feat/real-teleop-record-replay`：`tools/real_route.py` 以 leader 教示停放位 → 通道位，去程回放、回程倒放（假裝置驗證，待上機）。以實機採集為主、模擬只做流程驗證；從通道位開錄並標記交接幀（[docs/real-progress.md](docs/real-progress.md)） |
 | DAgger 接管（控制權切換、清空政策佇列、來源標記） | 假 follower 已驗證政策切人工、首筆命令對齊與逐幀來源，實機政策與再訓練待整合 |
 | SO-101 leader 讀取（JSONL 狀態格式、錄製與重播工具） | 既有雙臂版，待補單臂選擇與本機輸入 adapter |
 | Isaac Sim 場景、keyboard／mouse EE 操作 | 第一份 issue（[#1](https://github.com/jxuan083/agentic-robotic-simulator/issues/1)）：已實作，含主畫面滑鼠操作、專注模式、顏色 DR（預設關閉，可在面板切換）、1–8 顆積木與傾斜抓取（擴大到達範圍）。注入事件的驗收腳本通過，使用者實際操作確認手感可接受。場景數值為 provisional（[docs/isaac-ee-teleop.md](docs/isaac-ee-teleop.md)） |
@@ -69,6 +70,7 @@ flowchart LR
 | [docs/scenes-and-tasks.md](docs/scenes-and-tasks.md) | 資產、場地配置、任務定義與量測需求 |
 | [docs/teleop-data-training.md](docs/teleop-data-training.md) | 遙操作、episode 資料、檢查與分割、ACT 訓練 |
 | [docs/real-teleop.md](docs/real-teleop.md) | 單臂／雙臂實機 CLI、可攜 episode、離線讀回與假硬體接管 |
+| [docs/real-progress.md](docs/real-progress.md) | 實機最新進度、停放位／通道位、資料錄法與下一步（接手先讀） |
 | [docs/inference-dagger-evaluation.md](docs/inference-dagger-evaluation.md) | 自主推論、DAgger 閉環、再訓練比較與評估 |
 | [docs/agent.md](docs/agent.md) | Agent、任務執行器、需求帳本與缺料流程 |
 | [docs/task-executor.md](docs/task-executor.md) | 需求帳本與任務執行器的實作、改單規則、驗收場景（#5） |

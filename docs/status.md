@@ -12,6 +12,7 @@
 - 本 repo：實驗室場景與相機視角（2026-11-20 配置，單臂）。依實驗室 RGB-D 錄影、關節讀值與照片重建托盤擺位與桌面，加入 D455 global 與腕部相機視角（Isaac、MuJoCo 共用場景檔），相機位姿由深度點與手臂網格的 ICP 推算。見 [lab-scene-cameras.md](lab-scene-cameras.md)。
 - 本 repo：實驗室環境一鍵入口（#11）。`tools/lab.py` 依序開好模型服務、模擬伺服器（相機畫面固定在主畫面）與獨立的聊天視窗；腕部畫面預設套用由實拍推算的鏡頭變形。兩個引擎都完成「聊天下單 → 缺料詢問 → 聊天回答 → 完成」的競賽流程。見 [lab-entry.md](lab-entry.md)。
 - 本 repo：模擬示範採集與讀回（#13，單臂）。Isaac 遙操作時錄 global 與腕部 RGB、同一步的命令與狀態，格式沿用實機原始錄製；讀回工具檢查完整性，並找出夾爪閉合、積木離盤、目標盤放開三個時刻。人工操作的成功示範讀回通過。轉成 LeRobot dataset 與 ACT 訓練留給後續 issue。見 [demo-capture.md](demo-capture.md)。
+- 實機（2026-11-25，分支 `feat/real-teleop-record-replay`）：停放位 ⇄ 通道位路線工具 `tools/real_route.py`（假裝置驗證，待上機）、托盤疊圖對齊工具；正式示範 0 筆。採集決定與下一步見 [real-progress.md](real-progress.md)。
 - 既有實機工作區（尚未移入本 repo）：雙臂 SO-101 實機遙操作、相機串流、馬達校正、影像／狀態記錄、DAgger 接管與資料保存程式可運作。
 
 ## 可沿用與待補介面
