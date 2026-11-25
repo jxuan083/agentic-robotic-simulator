@@ -33,6 +33,8 @@ ENGAGE_SECONDS = 1.5
 ENGAGE_GAP = dict.fromkeys(BODY, 12.0) | {"gripper": 40.0}  # leader-follower gap to engage
 PLAY_SPEED = 30.0            # body joint cap during playback, deg/s
 GRIPPER_PLAY_SPEED = 60.0    # percent/s
+PUSH_LAG = 8.0               # between GATE_LAG and this, playback creeps on at PUSH_RATE (gravity sag) ...
+PUSH_RATE = 0.3              # ... beyond it the clock stops and a lasting lag pauses as an obstruction
 GATE_LAG = 4.0               # playback clock pauses while body lag exceeds this
 STALL_LAG = 15.0             # teleop: lag treated as obstruction ...
 STALL_SECONDS = 0.8          # ... when it persists this long (playback: gated time)
@@ -344,6 +346,11 @@ class Driver:
             lag = body_gap(sent, actual)
             if lag <= GATE_LAG:
                 tau += 1 / self.hz
+                stalled = 0.0
+            elif lag <= PUSH_LAG:
+                # Heavy, stretched poses sag a steady few degrees under gravity: keep advancing slowly, the
+                # growing command error adds servo torque. An obstacle drives the lag past PUSH_LAG instead.
+                tau += PUSH_RATE / self.hz
                 stalled = 0.0
             else:
                 stalled += 1 / self.hz
@@ -883,9 +890,18 @@ def record_drop(driver, leader, data, track, drop_path, tray, release):
     driver.term.say(f"{tray} 放開路線已保存：{len(drop.points)} 個路徑點 → {drop_path}")
     if driver.menu("確認空爪、回程淨空。r 倒放回通道位再回停放位並解扭力／x 緊急原地解扭力",
                    {"r": "回停放位", "x": "緊急解力"}) == "r":
-        follow(driver, drop.reverse(), (f"{tray}放開位", "通道位"))
+        back_to_channel(driver, drop.reverse(), tray)
         park_and_release(driver, track.reverse(), park, data["park_support"])
     return out
+
+
+def back_to_channel(driver, back, tray):
+    """Reverse a drop route to the channel; if the operator stepped back to the drop pose, offer it again."""
+    while follow(driver, back, (f"{tray}放開位", "通道位")) != "通道位":
+        driver.menu(f"已退回{tray}放開位並保持。r 再次沿放開路線倒放回通道位／x 緊急原地解扭力",
+                    {"r": "回通道位", "x": "緊急解力"})
+        start = dict(driver.target)
+        back = retimed([start, *back.points[1:]])
 
 
 def retimed(points):
@@ -921,7 +937,7 @@ def drop_test(driver, data, track, drop):
         driver.menu(f"已在{tray}盤放開位張爪到 {opened:.0f}%。確認方塊落進盤內、回程淨空後按 r 倒放回通道位",
                     {"r": "回通道位"})
         back = retimed([dict(driver.target), *[pose(p) | {"gripper": opened} for p in drop["waypoints"][-2::-1]]])
-        follow(driver, back, (f"{tray}放開位", "通道位"))
+        back_to_channel(driver, back, tray)
     park_and_release(driver, track.reverse(), park, data["park_support"])
     driver.term.say("已回停放位並解扭力。")
     return True

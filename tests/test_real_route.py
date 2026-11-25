@@ -323,3 +323,28 @@ class ReseatCase(RouteCase):
                 driver.arm_at(PARK)
             self.assertEqual(follower.torque_states(), OFF)
             self.assertFalse(follower.sent)
+
+
+class SagCase(RouteCase):
+    def test_steady_gravity_sag_above_gate_does_not_pause(self):
+        from agentic_sim.real_route import GATE_LAG, PUSH_LAG
+
+        clock = FakeClock()
+        sag = dict.fromkeys(PARK, 0.0) | {"shoulder_lift": (GATE_LAG + PUSH_LAG) / 2}  # e.g. stretched arm
+        follower = FakeFollower(clock, sag=sag)
+        term = ScriptedTerminal(clock)
+        driver = self.driver(follower, term, clock, "sag")
+        driver.arm_at(PARK)
+        driver.play(Track([PARK, CHANNEL], [1.0]), "往通道位")  # raises Paused if treated as a stall
+        self.assertLess(body_gap(follower.goal, CHANNEL), 1e-9)
+
+    def test_lag_beyond_push_still_pauses(self):
+        from agentic_sim.real_route import PUSH_LAG, Paused
+
+        clock = FakeClock()
+        sag = dict.fromkeys(PARK, 0.0) | {"shoulder_lift": PUSH_LAG + 3.0}
+        follower = FakeFollower(clock, sag=sag)
+        driver = self.driver(follower, ScriptedTerminal(clock), clock, "blocked")
+        driver.arm_at(PARK)
+        with self.assertRaises(Paused):
+            driver.play(Track([PARK, CHANNEL], [1.0]), "往通道位")

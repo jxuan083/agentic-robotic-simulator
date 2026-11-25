@@ -22,6 +22,9 @@ SETTLED = dict.fromkeys(JOINTS, 2.5) | {"gripper": 5.0}   # gravity sag allowanc
 CORRIDOR = dict.fromkeys(JOINTS, 3.0) | {"gripper": 100.0}  # start-of-route match (gripper free)
 READ_MARGIN = 3.0       # deg a readback may sit outside the approved limits (e.g. park on its support)
 GATE_LAG = 4.0          # route interpolation waits while the body lag exceeds this
+PUSH_LAG = 8.0          # between GATE_LAG and this it creeps on at PUSH_RATE: steady gravity sag on stretched poses
+PUSH_RATE = 0.3
+REACH_SETTLED = dict.fromkeys(JOINTS, 6.0) | {"gripper": 5.0}  # settle allowance at stretched drop poses
 STALL_LAG = 15.0        # teleop lag treated as an obstruction ...
 STALL_SECONDS = 1.0     # ... when it persists (routes: gated time)
 CARRY_SQUEEZE = 3.0  # gripper % below the grasp readback while carrying (= the follower's closing-gap cap)
@@ -198,12 +201,12 @@ class Motion:
         except Exception:  # noqa: BLE001 - the caller reports the original fault
             pass
 
-    def _settle(self, target):
+    def _settle(self, target, allowance=SETTLED):
         previous = None
         stable = 0
         for _ in range(80):
             actual = self.read()
-            if previous is not None and near(actual, target, SETTLED) and near(
+            if previous is not None and near(actual, target, allowance) and near(
                 actual, previous, dict.fromkeys(JOINTS, 0.15) | {"gripper": 0.3}
             ):
                 stable += 1
@@ -216,26 +219,29 @@ class Motion:
             self.wait(ROUTE_PERIOD)
         raise RuntimeError(f"{self.phase}: follower did not reach and settle at the target")
 
-    def _move(self, target, *, settle=True):
+    def _move(self, target, *, settle=True, allowance=SETTLED):
         target = self.plan.clip(pose(target))
         start = self.command if self.command is not None else self.plan.clip(self.read())
         delta = {joint: target[joint] - start[joint] for joint in JOINTS}
         steps = max(1, ceil(max(abs(delta[joint]) / self.plan.speed[joint] for joint in JOINTS) / ROUTE_PERIOD))
-        step, stalled = 1, 0.0
-        while step <= steps:
+        progress, stalled = 1.0, 0.0
+        while progress < steps + 1:
+            step = min(steps, int(progress))
             sent = self.send(target if step == steps else
                              {joint: start[joint] + delta[joint] * step / steps for joint in JOINTS})
             self.wait(ROUTE_PERIOD)
             lag = max(abs(self.read()[j] - sent[j]) for j in BODY)
             if lag <= GATE_LAG:
-                step, stalled = step + 1, 0.0
+                progress, stalled = step + 1.0, 0.0
+            elif lag <= PUSH_LAG:  # steady gravity sag: creep on, the growing command error adds torque
+                progress, stalled = progress + PUSH_RATE, 0.0
             else:  # wait for the follower instead of aborting; fault only on a persistent stall
                 stalled += ROUTE_PERIOD
                 if stalled > STALL_SECONDS:
                     self._hold(f"route stall lag {lag:.1f}")
                     raise RuntimeError(f"{self.phase}: follower stalled ({lag:.0f} deg behind); held in place")
         if settle:
-            self._settle(target)
+            self._settle(target, allowance)
 
     def align(self):
         initial = self.read()
@@ -272,9 +278,9 @@ class Motion:
         self.phase = "place"
         for point in drop["waypoints"][1:]:
             self._move(point | {"gripper": grip}, settle=False)
-        self._settle(self.command)
+        self._settle(self.command, REACH_SETTLED)
         release = drop["release_gripper"]
-        self._move(self.command | {"gripper": max(grip, release)})
+        self._move(self.command | {"gripper": max(grip, release)}, allowance=REACH_SETTLED)
         self.event("released_block", tray=tray, readback=self.last)
         self.phase = "place_return"
         for point in reversed(drop["waypoints"][:-1]):
