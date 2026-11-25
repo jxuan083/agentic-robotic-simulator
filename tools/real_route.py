@@ -215,7 +215,8 @@ def grasp_session(driver, hand, data, args, refs, hz):
         if key == "q":
             return
         color = COLORS[key]
-        destination = {"p": "pink", "b": "beige"}[term.choose("放到哪一盤？p 粉盤／b 米盤", {"p": "粉盤", "b": "米盤"})]
+        destination = args.destination or {"p": "pink", "b": "beige"}[
+            term.choose("放到哪一盤？p 粉盤／b 米盤", {"p": "粉盤", "b": "米盤"})]
         k = used.get(destination, 0) % len(slots[destination])
         slot = {"index": k + 1, "xy": slots[destination][k]}
         if not args.auto_place:
@@ -354,6 +355,11 @@ def main(argv=None):
             p.add_argument("--trays", type=Path, required=True, help="fixed D455 tray corners JSON")
             p.add_argument("--session", type=Path, required=True, help="output folder, e.g. outputs/261125-park")
             p.add_argument("--slots", type=Path, default=ROOT / "configs/real_slots.json", help="placement slots JSON")
+            p.add_argument("--destination", choices=("beige", "pink"), default="beige",
+                           help="finals flow is pink (storage) -> beige (delivery slots); --destination pink only "
+                                "for a separately tagged reverse set")
+            p.add_argument("--any-destination", dest="destination", action="store_const", const=None,
+                           help="ask for the destination tray each episode")
             p.add_argument("--auto-place", action="store_true",
                            help="old flow: record to the lift only, then place with the taught drop route")
         if name == "record-drop":
