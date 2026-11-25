@@ -64,7 +64,7 @@ def _candidates(episode, arm, warnings):
     return candidates, reasons
 
 
-def locate_opening(episode, card=None):
+def locate_opening(episode, card=None, quads=None):
     """D455 block positions (tray-local mm) in the opening global frame; the card's block if a card is given."""
     try:
         import cv2
@@ -80,7 +80,7 @@ def locate_opening(episode, card=None):
     image = cv2.imread(str(episode.root / "global" / first["rgb"]))
     if image is None:
         return {"error": "opening global frame unreadable"}
-    result = locate(image)
+    result = locate(image, quads)
     result["global_frame"] = first["frame"]
     if card:
         result["target"] = match_target(result, card)
@@ -106,18 +106,24 @@ def review_episode(root, *, source, arm, card=None, rgb_depth=None):
     )
     if card and (result.get("color") != card["color"] or result.get("placed") is not True):
         reasons.append("target color or destination placement has not been confirmed")
-    if card and not card.get("layout_confirmed"):
+    if card and not card.get("layout_confirmed") and not (located or {}).get("layout_from_d455"):
         reasons.append("actual tray layout requires review")
     global_info = m["cameras"].get("global", {})
     depth = global_info.get("depth") or {}
     depth_frames = sum("depth" in frame and (root / "global" / frame["depth"]).is_file()
                        for frame in episode.frames.get("global", []))
-    located = locate_opening(episode, card) if report["ok"] and source == "real" else None  # fake frames are synthetic
+    quads = (rgb_depth or {}).get("tray_quads")
+    located = locate_opening(episode, card, quads) if report["ok"] and source == "real" else None  # fake is synthetic
     if card and located is not None and "error" not in located:
-        if not located.get("target"):
+        target = located.get("target")
+        if not target:
             reasons.append("D455 did not find the target block in the opening frame")
-        elif located["target"]["tray_clipped"]:
+        elif target["tray_clipped"]:
             reasons.append("target tray touches the D455 image border; its D455 position is unreliable")
+        elif target["same_colour_in_tray"] > 1:
+            reasons.append("more than one block of the target colour in the source tray; confirm which one")
+        else:
+            located["layout_from_d455"] = [target["x_mm"], target["y_mm"], target["yaw_deg"]]
     report.update(candidates=candidates, review_reasons=reasons, operator_result=result, d455_blocks=located,
                   opening_global=(f"global/{episode.frames['global'][0]['rgb']}" if episode.frames.get("global") else None),
                   depth_summary={"frames": depth_frames, "units_m": depth.get("units_m"),

@@ -47,3 +47,18 @@ def test_clipped_tray_is_flagged():
     cv2.rectangle(image, (500, 260), (639, 470), PINK, -1)
     result = locate(image)
     assert result["trays"]["pink"]["clipped"] and result["warnings"]
+
+
+def test_fixed_quads_ignore_a_hand_over_the_tray():
+    from agentic_sim.real_locate import reference_quads
+
+    clean = scene()
+    quads = reference_quads(clean, require=("pink",))
+    busy = clean.copy()
+    cv2.rectangle(busy, (250, 280), (330, 330), (120, 150, 190), -1)  # skin-coloured hand over the far-left corner
+    moved = locate(busy)
+    fixed = locate(busy, quads)
+    blue_clean = next(b for b in locate(clean)["blocks"] if b["color"] == "blue")
+    blue_fixed = next(b for b in fixed["blocks"] if b["color"] == "blue")
+    assert abs(blue_fixed["x_mm"] - blue_clean["x_mm"]) < 1 and abs(blue_fixed["y_mm"] - blue_clean["y_mm"]) < 1
+    assert fixed["tray_source"] == "fixed reference quads" and moved["tray_source"] == "detected in this frame"

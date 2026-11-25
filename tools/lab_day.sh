@@ -6,6 +6,7 @@
 #     check        read-only device/calibration check (power on, torque off)
 #     overlay      D455 live overlay against the current tray reference (s saves, q quits)
 #     reference    after moving the trays: save a new D455 reference (markers 40/41/42) that overlay then uses
+#     trays        fix the D455 tray corners from the clean reference (once per tray layout)
 #     guide        live D455 placement guide (tray grid + block mm; --target TRAY X Y YAW COLOR or --reach-plan), s saves
 #     locate       D455 snapshot -> block positions in tray-local mm (+ annotated image)
 #     route        teach park -> channel with the leader, reverse to park   (needs SUPPORT="...")
@@ -42,6 +43,7 @@ ROUTE="$ROUTES/right-park-channel-$DATE.json"
 DROP_BEIGE="$ROUTES/right-drop-beige-$DATE.json"
 DROP_PINK="$ROUTES/right-drop-pink-$DATE.json"
 CARDS="outputs/$DATE-cards.json"
+TRAYS="outputs/$DATE-trays/trays.json"   # fixed D455 tray corners from the clean reference (step `trays`)
 SETUP="outputs/$DATE-right.setup.json"
 SESSION="outputs/$DATE-right"
 # D455 tray reference for `overlay`: the latest `reference` capture, else the 11/25 one (REFERENCE=... overrides)
@@ -83,13 +85,19 @@ case "$step" in
       echo "$root/$name/rgb.png" > outputs/current-reference.txt
       echo "overlay now uses $root/$name/rgb.png; re-teach both drop routes (REPLACE=1) after a tray move"
     fi ;;
+  trays)
+    # Fix the tray corners once from the clean reference (no hands or arm over the trays).
+    [[ -e "$TRAYS" ]] && { echo "$TRAYS exists; remove it to refit"; exit 1; }
+    "$PY" tools/real_locate.py --image "$REFERENCE" --save-trays --out "$(dirname "$TRAYS")" ;;
   guide)
     # Live D455 placement guide: tray grids, live block mm, optional target  (guide --target pink 120 80 30 red)
-    "$CAMPY" tools/real_place_guide.py --serial "$D455" --out "outputs/$DATE-camera/guide" "$@" ;;
+    TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
+    "$CAMPY" tools/real_place_guide.py --serial "$D455" --out "outputs/$DATE-camera/guide" "${TRAY_ARG[@]}" "$@" ;;
   locate)
     # D455 coarse block positions in tray-local mm (red/blue/yellow); annotated image to check against the table.
     out="outputs/$DATE-camera/locate-$(date +%H%M%S)"
-    "$PY" tools/real_locate.py --serial "$D455" --out "$out" ;;
+    TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
+    "$PY" tools/real_locate.py --serial "$D455" --out "$out" "${TRAY_ARG[@]}" ;;
   route)
     [[ -n "${SUPPORT:-}" ]] || { echo 'set SUPPORT="<park support description>"' >&2; exit 1; }
     mkdir -p "$ROUTES"
@@ -127,8 +135,8 @@ case "$step" in
     need "$CARDS"
     "$PY" tools/real_cards.py drop "$CARDS" "$@" ;;
   setup)
-    need "$ROUTE" "$DROP_BEIGE" "$DROP_PINK" "$CARDS"
-    "$PY" tools/real_route.py setup --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" --cards "$CARDS" \
+    need "$ROUTE" "$DROP_BEIGE" "$DROP_PINK" "$CARDS" "$TRAYS"
+    "$PY" tools/real_route.py setup --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" --cards "$CARDS" --trays "$TRAYS" \
       --version "right-$DATE-v1" --workspace "empty desk verified $DATE" --out "$SETUP" ;;
   collect)
     need "$SETUP"
@@ -162,9 +170,9 @@ PYEOF
     fi ;;
   pack)
     items=()
-    for f in "$SESSION" "$ROUTES" "$SETUP" "$CARDS" "outputs/$DATE-camera"; do [[ -e "$f" ]] && items+=("$f"); done
+    for f in "$SESSION" "$ROUTES" "$SETUP" "$CARDS" "$(dirname "$TRAYS")" "outputs/$DATE-camera"; do [[ -e "$f" ]] && items+=("$f"); done
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)
-    sed -n '2,32p' "$0"; exit 1 ;;
+    sed -n '2,33p' "$0"; exit 1 ;;
 esac

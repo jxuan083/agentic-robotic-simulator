@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from agentic_sim.real_locate import draw, locate  # noqa: E402
+from agentic_sim.real_locate import draw, locate, reference_quads  # noqa: E402
 
 
 def capture(serial, width=640, height=480, fps=30, warmup=30):
@@ -44,6 +44,9 @@ def main(argv=None):
     source.add_argument("--serial")
     source.add_argument("--image", type=Path)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--trays", type=Path, help="fixed tray corners JSON to use instead of detecting the trays")
+    parser.add_argument("--save-trays", action="store_true",
+                        help="the frame is a clean reference: save its tray corners as --out/trays.json")
     args = parser.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=False)
     if args.image:
@@ -53,7 +56,15 @@ def main(argv=None):
     else:
         image = capture(args.serial)
         cv2.imwrite(str(args.out / "rgb.png"), image)
-    result = locate(image)
+    if args.save_trays:
+        quads = reference_quads(image)
+        trays = {"quads": quads,
+                 "reference": str(args.image) if args.image else str(args.out / "rgb.png"),
+                 "saved_unix": time.time()}
+        (args.out / "trays.json").write_text(json.dumps(trays, indent=2) + "\n", encoding="utf-8")
+        print(f"saved fixed tray corners {args.out / 'trays.json'}")
+    quads = json.loads(args.trays.read_text(encoding="utf-8"))["quads"] if args.trays else None
+    result = locate(image, quads)
     result |= {"source": str(args.image) if args.image else f"D455 {args.serial} live", "captured_unix": time.time()}
     (args.out / "blocks.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     cv2.imwrite(str(args.out / "annotated.png"), draw(image, result))

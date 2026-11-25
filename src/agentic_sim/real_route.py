@@ -1001,7 +1001,7 @@ def drop_test(driver, data, track, drop):
     return True
 
 
-def build_setup(data, track, drops, *, version, workspace, cards, speed=20.0):
+def build_setup(data, track, drops, *, version, workspace, cards, speed=20.0, trays=None):
     """Collection setup JSON (configs/real_collection.setup.example.json shape) from taught routes."""
     limits = {j: list(v) for j, v in data["limits"].items()}
     clip = lambda p: {j: min(limits[j][1], max(limits[j][0], p[j])) for j in JOINTS}  # noqa: E731
@@ -1010,7 +1010,8 @@ def build_setup(data, track, drops, *, version, workspace, cards, speed=20.0):
         "calibrations": data["calibrations"], "park_support": data["park_support"],
         "park": clip(data["park"]["pose"]), "via": [clip(p) for p in track.points[1:-1]],
         "start": clip(data["channel"]["command"]), "limits": limits,
-        "speed": dict.fromkeys(BODY, float(speed)) | {"gripper": 25.0}, "rgb_depth": {},
+        "speed": dict.fromkeys(BODY, float(speed)) | {"gripper": 25.0},
+        "rgb_depth": {} if not trays else {"tray_quads": trays["quads"], "tray_reference": trays["reference"]},
         "drops": {}, "routes": {"park_channel": data.get("created_at")},
     }
     for drop in drops:

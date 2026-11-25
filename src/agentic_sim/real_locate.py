@@ -101,14 +101,27 @@ def _to_tray(H, points):
     return cv2.perspectiveTransform(np.asarray(points, np.float32).reshape(-1, 1, 2), H).reshape(-1, 2)
 
 
-def locate(image):
-    """Trays and blocks in one BGR frame. Returns {"trays": {...}, "blocks": [...], "warnings": [...]}."""
+def locate(image, quads=None):
+    """Trays and blocks in one BGR frame. Returns {"trays": {...}, "blocks": [...], "warnings": [...]}.
+
+    quads: fixed tray corners {tray: [[x, y] * 4]} from a clean reference frame (trays do not move during a
+    session). With them the tray outlines are not re-detected, so a hand or the arm over a tray cannot shift the
+    tray-local frame; only the blocks are found in this frame."""
     masks = color_masks(image)
     any_block = masks["red"] | masks["blue"] | masks["yellow"]
     height, width = image.shape[:2]
     trays, warnings = {}, []
+    if quads:
+        for tray, quad in quads.items():
+            quad = np.array(quad, np.float32)
+            region = np.zeros((height, width), np.uint8)
+            cv2.fillPoly(region, [quad.astype(np.int32)], 1)
+            clipped = bool((quad[:, 0] <= 1).any() or (quad[:, 1] <= 1).any() or (quad[:, 0] >= width - 2).any()
+                           or (quad[:, 1] >= height - 2).any())
+            trays[tray] = {"region": region.astype(bool), "quad_px": quad, "H": tray_homography(quad, tray),
+                           "clipped": clipped}
     taken = np.zeros(masks["pink"].shape, bool)
-    for tray in TRAYS:  # pink first: its rim shades into beige, so the beige mask excludes the pink tray
+    for tray in [] if quads else TRAYS:  # pink first: its rim shades into beige, so beige excludes the pink tray
         region, hull = tray_region(masks[tray] & ~taken, any_block)
         if region is None or region.sum() < 2000:
             warnings.append(f"{tray} tray not found")
@@ -146,7 +159,17 @@ def locate(image):
     public = {t: {"quad_px": info["quad_px"].round(1).tolist(), "clipped": info["clipped"]} for t, info in trays.items()}
     return {"trays": public, "blocks": blocks, "warnings": warnings,
             "frame": "tray-local mm: origin inner corner nearest the base on its right, +x forward, +y left",
-            "method": "colour segmentation + tray-outline homography (block-top parallax uncorrected)"}
+            "method": "colour segmentation + tray-outline homography (block-top parallax uncorrected)",
+            "tray_source": "fixed reference quads" if quads else "detected in this frame"}
+
+
+def reference_quads(image, require=tuple(TRAYS)):
+    """Tray corners from a clean frame (no hands or arm over the trays), to reuse for the whole session."""
+    result = locate(image)
+    missing = [t for t in require if t not in result["trays"]]
+    if missing or any(result["trays"][t]["clipped"] for t in require):
+        raise ValueError("; ".join(result["warnings"]) or f"trays missing: {missing}")
+    return {tray: info["quad_px"] for tray, info in result["trays"].items()}
 
 
 def draw(image, result):
@@ -170,4 +193,5 @@ def match_target(result, card):
     if not same:
         return None
     best = min(same, key=lambda b: (b["x_mm"] - pose[0]) ** 2 + (b["y_mm"] - pose[1]) ** 2)
-    return best | {"card_offset_mm": round(float(np.hypot(best["x_mm"] - pose[0], best["y_mm"] - pose[1])), 1)}
+    return best | {"card_offset_mm": round(float(np.hypot(best["x_mm"] - pose[0], best["y_mm"] - pose[1])), 1),
+                   "same_colour_in_tray": len(same)}

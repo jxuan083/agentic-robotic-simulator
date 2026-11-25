@@ -278,6 +278,14 @@ class Collection:
         except (OSError, KeyError, TypeError, ValueError) as error:
             entry.update(status="retry", error=f"readback: {error}")
         else:
+            observed = (report.get("d455_blocks") or {}).get("layout_from_d455")
+            if observed and not recorded_card.get("layout_confirmed"):
+                # Random placement: the D455 estimate at the opening frame is the actual layout.
+                try:
+                    layout = self._confirm_layout(recorded_card, observed) | {"layout_source": "d455_opening_frame"}
+                    write_json(self.root / entry["episode"] / "layout_review.json", layout)
+                except ValueError as error:
+                    report["review_reasons"].append(str(error))
             entry.update(report=f"{entry['episode']}/readback.json", opening_global=report["opening_global"],
                          review_reasons=report["review_reasons"], readback_ok=report["ok"])
             if not report["ok"] or captured.get("cancelled"):

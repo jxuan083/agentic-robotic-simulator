@@ -213,6 +213,7 @@ def main(argv=None):
             p.add_argument("--version", required=True, help="start/setup version, e.g. right-20261126-v1")
             p.add_argument("--workspace", required=True, help="verified workspace description/version")
             p.add_argument("--speed", type=float, default=20.0, help="route speed deg/s (<= 25)")
+            p.add_argument("--trays", type=Path, help="fixed D455 tray corners JSON (tools/real_locate.py --save-trays)")
             p.add_argument("--out", type=Path, required=True)
         if name in ("show", "setup"):
             continue
@@ -253,7 +254,8 @@ def main(argv=None):
         example = json.loads((ROOT / "configs/real_collection.setup.example.json").read_text(encoding="utf-8"))
         cards = json.loads(args.cards.read_text(encoding="utf-8")) if args.cards else example["cards"]
         setup = build_setup(data, track, drops, version=args.version, workspace=args.workspace,
-                            cards=cards.get("cards", cards), speed=args.speed)
+                            cards=cards.get("cards", cards), speed=args.speed,
+                            trays=json.loads(args.trays.read_text(encoding="utf-8")) if args.trays else None)
         from agentic_sim.real_motion import MotionPlan
 
         MotionPlan.load(setup["motion"])  # same validation as the collection desk

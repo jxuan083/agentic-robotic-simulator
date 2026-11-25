@@ -108,6 +108,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--serial", required=True)
     parser.add_argument("--target", nargs=5, metavar=("TRAY", "X", "Y", "YAW", "COLOR"))
+    parser.add_argument("--trays", type=Path, help="fixed tray corners JSON (hands over a tray cannot move the grid)")
     parser.add_argument("--reach-plan", action="store_true",
                         help="show the 10 reach-exploration points; n / p switch the current one")
     parser.add_argument("--out", type=Path, default=ROOT / "outputs" / f"{time.strftime('%y%m%d')}-camera" / "guide")
@@ -128,12 +129,13 @@ def main(argv=None):
     pipeline.start(cfg)
     window = "D455 placement guide | S save | Q quit"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-    frozen = None  # tray outlines settle once; re-fit every second so a moved tray is picked up
+    quads = json.loads(args.trays.read_text(encoding="utf-8"))["quads"] if args.trays else None
+    frozen = None  # without fixed trays: re-fit the outlines every second so a moved tray is picked up
     try:
         while True:
             image = np.asanyarray(pipeline.wait_for_frames(2000).get_color_frame().get_data()).copy()
-            result = locate(image)
-            if frozen is None or time.monotonic() - frozen[0] > 1.0:
+            result = locate(image, quads)
+            if quads or frozen is None or time.monotonic() - frozen[0] > 1.0:
                 frozen = (time.monotonic(), homographies_for(image, result))
             if plan:
                 tray, x, y = plan[current]
