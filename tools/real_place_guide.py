@@ -46,8 +46,23 @@ def draw_plan(shown, homographies, plan, current):
                     (255, 0, 255) if active else (160, 60, 160), 2 if active else 1, cv2.LINE_AA)
 
 
-def draw_guide(image, result, homographies, target, plan=None, current=0):
+def draw_slots(shown, homographies, slots):
+    for tray, points in slots.items():
+        if tray not in homographies:
+            continue
+        for i, (x, y) in enumerate(points):
+            square = [[x - 15, y - 15], [x + 15, y - 15], [x + 15, y + 15], [x - 15, y + 15]]
+            cv2.polylines(shown, [to_image(homographies[tray], square).astype(np.int32)], True, (0, 140, 0), 1,
+                          cv2.LINE_AA)
+            c = to_image(homographies[tray], [[x, y]])[0].astype(int)
+            cv2.putText(shown, f"S{i + 1}", (c[0] - 8, c[1] + 4), cv2.FONT_HERSHEY_SIMPLEX, .35, (0, 120, 0), 1,
+                        cv2.LINE_AA)
+
+
+def draw_guide(image, result, homographies, target, plan=None, current=0, slots=None):
     shown = image.copy()
+    if slots:
+        draw_slots(shown, homographies, slots)
     if plan:
         draw_plan(shown, homographies, plan, current)
     for tray, H in homographies.items():
@@ -109,12 +124,15 @@ def main(argv=None):
     parser.add_argument("--serial", required=True)
     parser.add_argument("--target", nargs=5, metavar=("TRAY", "X", "Y", "YAW", "COLOR"))
     parser.add_argument("--trays", type=Path, help="fixed tray corners JSON (hands over a tray cannot move the grid)")
+    parser.add_argument("--slots", type=Path, default=ROOT / "configs/real_slots.json", help="placement slots to draw")
     parser.add_argument("--reach-plan", action="store_true",
                         help="show the 10 reach-exploration points; n / p switch the current one")
     parser.add_argument("--out", type=Path, default=ROOT / "outputs" / f"{time.strftime('%y%m%d')}-camera" / "guide")
     args = parser.parse_args(argv)
     target = None
     plan = REACH_PLAN if args.reach_plan else None
+    slots = {k: v for k, v in json.loads(args.slots.read_text(encoding="utf-8")).items() if not k.startswith("_")} \
+        if args.slots and args.slots.exists() else None
     current = 0
     if args.target:
         tray, x, y, yaw, color = args.target
@@ -140,7 +158,7 @@ def main(argv=None):
             if plan:
                 tray, x, y = plan[current]
                 target = (tray, float(x), float(y), 0.0, "any")
-            shown = draw_guide(image, result, frozen[1], target, plan, current)
+            shown = draw_guide(image, result, frozen[1], target, plan, current, slots)
             if plan:
                 cv2.putText(shown, f"point {current + 1}/{len(plan)}  (n next, p previous, s save)", (8, 470),
                             cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 0, 255), 1, cv2.LINE_AA)

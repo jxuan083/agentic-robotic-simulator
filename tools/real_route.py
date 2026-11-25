@@ -190,8 +190,8 @@ def episode_capture(root, config, arm, refs, hz, layout):
 
 
 def grasp_session(driver, hand, data, args, refs, hz):
-    """Terminal loop: one park-start grasp demonstration per colour key, until q."""
-    from agentic_sim.real_grasp import COLORS, finalize, grasp_round
+    """Terminal loop: one park-start pick-and-place demonstration per colour key, until q."""
+    from agentic_sim.real_grasp import COLORS, TRAY_NAME, finalize, grasp_round, pick_place_round
 
     term = driver.term
     drops = {d["tray"]: d for d in (json.loads(path.read_text(encoding="utf-8")) for path in args.drop)}
@@ -199,9 +199,15 @@ def grasp_session(driver, hand, data, args, refs, hz):
         if drop["calibrations"] != data["calibrations"] or body_gap(drop["waypoints"][0], data["channel"]["command"]) > 3:
             raise ValueError(f"drop route {tray} does not match this route's calibration or start pose")
     quads = json.loads(args.trays.read_text(encoding="utf-8"))["quads"]
+    slots = json.loads(args.slots.read_text(encoding="utf-8"))
     episodes = args.session / "episodes"
     episodes.mkdir(parents=True, exist_ok=True)
     index = args.session / "index.jsonl"
+    used = {}
+    if index.exists():
+        for line in index.read_text(encoding="utf-8").splitlines():
+            dest = json.loads(line).get("result", {}).get("destination")
+            used[dest] = used.get(dest, 0) + 1
     while True:
         number = 1 + len(list(episodes.glob("P*")))
         key = term.choose(f"第 {number} 筆：先擺好方塊、手離開盤子與手臂，再選目標顏色 r 紅／b 藍／y 黃；q 結束",
@@ -209,26 +215,38 @@ def grasp_session(driver, hand, data, args, refs, hz):
         if key == "q":
             return
         color = COLORS[key]
+        destination = {"p": "pink", "b": "beige"}[term.choose("放到哪一盤？p 粉盤／b 米盤", {"p": "粉盤", "b": "米盤"})]
+        k = used.get(destination, 0) % len(slots[destination])
+        slot = {"index": k + 1, "xy": slots[destination][k]}
+        if not args.auto_place:
+            term.say(f"放置格位：{TRAY_NAME[destination]}第 {slot['index']} 格（x {slot['xy'][0]}, y {slot['xy'][1]} mm），"
+                     "格位上不要有方塊。")
         root = episodes / f"P{number:04}"
         with episode_capture(root, args.config, args.arm, refs, hz, data["layout_id"]) as (writer, check):
-            result = grasp_round(driver, hand, data, drops, writer, check, color)
+            if args.auto_place:
+                result = grasp_round(driver, hand, data, drops, writer, check, color)
+            else:
+                result = pick_place_round(driver, hand, data, writer, check, color=color, destination=destination,
+                                          slot=slot, quads=quads)
         if result.get("demo_frames") is None:
             term.say("這筆取消，未錄到示範。")
             continue
+        choice = result.get("target_choice")
         report, review = finalize(root, color=color, destination=result.get("destination"),
-                                  success=result.get("success"), quads=quads)
+                                  success=result.get("success"), quads=quads,
+                                  target_pose=choice and (choice["x_mm"], choice["y_mm"]),
+                                  slot=None if args.auto_place else slot, landed=result.get("landed"))
+        used[destination] = used.get(destination, 0) + 1
         target = review["target"]["d455"]
-        timing = report.get("control_timing") or {}
         line = {"episode": root.name, "color": color, "result": result, "ok": report["ok"],
                 "target": target and {k: target[k] for k in ("tray", "x_mm", "y_mm", "yaw_deg")},
-                "training_range": review.get("training_range"), "reasons": report["review_reasons"]}
+                "training_ranges": review.get("training_ranges"), "reasons": report["review_reasons"]}
         with index.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
         where = f"{target['tray']} x {target['x_mm']:.0f} y {target['y_mm']:.0f} mm" if target else "D455 未找到目標"
         term.say(f"{root.name}：讀回 {'OK' if report['ok'] else '有問題'}，{report.get('observed_control_hz')} Hz，"
-                 f"目標 {where}，訓練段 {review.get('training_range')}"
+                 f"目標 {where}，訓練段 {review.get('training_ranges')}"
                  + ("" if not report["review_reasons"] else f"；待確認：{'；'.join(report['review_reasons'])}"))
-
 
 def check_calibration(data, refs, *, leader):
     roles = ("leader", "follower") if leader else ("follower",)
@@ -335,6 +353,9 @@ def main(argv=None):
             p.add_argument("--drop", type=Path, action="append", required=True, help="drop route JSON (per tray)")
             p.add_argument("--trays", type=Path, required=True, help="fixed D455 tray corners JSON")
             p.add_argument("--session", type=Path, required=True, help="output folder, e.g. outputs/261125-park")
+            p.add_argument("--slots", type=Path, default=ROOT / "configs/real_slots.json", help="placement slots JSON")
+            p.add_argument("--auto-place", action="store_true",
+                           help="old flow: record to the lift only, then place with the taught drop route")
         if name == "record-drop":
             p.add_argument("--tray", required=True, choices=("pink", "beige"))
             p.add_argument("--out", type=Path, required=True, help="drop route JSON to write")

@@ -1,17 +1,21 @@
-"""One grasp demonstration from the park pose, driven from a terminal (no task cards).
+"""One pick-and-place demonstration from the park pose, driven from a terminal (no task cards).
 
-  park (torque on, small reseat) -> leader handed over at park -> [record: unfold, approach, close, lift] c ->
-  retrace to the start pose -> taught drop route of the chosen tray -> start pose -> park -> torque off
+  park (torque on, small reseat) -> leader handed over at park ->
+  [record: unfold, approach, close, lift, carry, place in the chosen slot, open, retreat near the start pose] c ->
+  start pose -> park -> torque off
 
-The recorded control rows cover only the demonstration (park to stable lift); cameras run for the whole round,
-so the opening global frame shows the untouched layout. The target block is found in that frame (fixed tray
-corners), and review.json gets start/close/lift and the D455 target like the collection desk.
+The demonstration covers the whole pick and place (no scripted detour back to the start pose before placing).
+Cameras run for the whole round: the opening global frame shows the untouched layout and gives the target
+block (fixed tray corners); the frame after c shows where the block landed. review.json gets
+start/close/lift/release/end and both targets. Training ranges: grasp [start, lift], place [lift, end].
 """
 
 from agentic_sim.real_control import JOINTS, pose
 from agentic_sim.real_route import (
     CARRY_SQUEEZE, Paused, Track, _simplify, body_gap, follow, park_and_release, place_from_channel, retimed,
 )
+
+END_NEAR_START = 30.0   # body deg: after c the arm goes straight to the start pose only from this close
 
 COLORS = {"r": "red", "b": "blue", "y": "yellow"}
 TRAY_NAME = {"pink": "粉盤", "beige": "米盤"}
@@ -52,7 +56,7 @@ def record_demo(driver, leader, writer, check_cameras):
         while True:
             try:
                 driver.stage("recording")
-                driver.term.say("錄製中：從停靠位用 leader 出收折區、接近、閉爪夾起並抬穩，停約 1 秒後按 c；Esc 暫停。腕部不要轉。")
+                driver.term.say(driver.demo_prompt)
                 driver.teleop(leader, {"c"}, samples)
                 return samples, True
             except Paused as pause:
@@ -74,6 +78,7 @@ def grasp_round(driver, leader, data, drops, writer, check_cameras, color):
     if not driver.align_leader(leader, driver.read()):
         park_and_release(driver, Track([driver.target, park], [0.0]), park, support)
         return {"cancelled": True}
+    driver.demo_prompt = "錄製中：從停靠位用 leader 出收折區、接近、閉爪夾起並抬穩，停約 1 秒後按 c；Esc 暫停。腕部不要轉。"
     samples, kept = record_demo(driver, leader, writer, check_cameras)
     demo_frames = writer.count
     if not kept:
@@ -94,8 +99,11 @@ def grasp_round(driver, leader, data, drops, writer, check_cameras, color):
             "success": outcome == "s" and kept, "demo_frames": demo_frames, "cancelled": not kept}
 
 
-def finalize(root, *, color, destination, success, quads):
-    """Readback, D455 target from the opening frame (fixed trays) and review.json (start/close/lift)."""
+def finalize(root, *, color, destination, success, quads, target_pose=None, slot=None, landed=None):
+    """Readback, D455 target from the opening frame (fixed trays) and review.json.
+
+    Frames: start (first motion), close, lift (first still moment after lifting), and for demonstrated placement
+    release and end. Ranges: grasp [start, lift]; place [lift, end] when the release is in the episode."""
     import json
 
     from agentic_sim.real_episode import Episode, write_json
@@ -103,35 +111,117 @@ def finalize(root, *, color, destination, success, quads):
 
     report = review_episode(root, source="real", arm="right", rgb_depth={"tray_quads": quads})
     episode = Episode(root)
-    probe = {"color": color, "pose": [0.0, 0.0, 0.0]}
-    target = None
-    located = None
+    probe = {"color": color, "pose": list(target_pose or (0.0, 0.0)) + [0.0]}
+    target = located = None
     for tray in ("pink", "beige"):
         result = locate_opening(episode, probe | {"source_tray": tray}, quads)
-        if result and result.get("target"):
+        if result and result.get("target") and (target is None or result["target"]["card_offset_mm"]
+                                                 < target["card_offset_mm"]):
             located, target = result, result["target"]
-            break
     marks = {key: value["frame"] for key, value in report.get("candidates", {}).items()}
     review = {"outcome": {"color": color, "destination": destination, "success": success,
                           "placed": bool(success and destination)},
               "target": {"tray": target and target["tray"], "color": color, "frame": "tray-local mm, deg",
                          "card_pose": None, "actual_pose": None, "d455": target},
+              "place_target": slot and {"tray": destination, "slot": slot["index"], "xy_mm": slot["xy"],
+                                        "landed_d455": landed},
               "start_pose": "park"}
-    if {"close", "lift"} <= marks.keys():
-        frames = confirmed_frames(episode, {"start": 0, "close": marks["close"], "lift": marks["lift"]})
-        review |= {"frames": frames, "training_range": [frames["start"]["frame"], frames["lift"]["frame"]]}
+    if {"start", "close", "lift"} <= marks.keys():
+        frames = confirmed_frames(episode, {k: marks[k] for k in ("start", "close", "lift")})
+        for extra in ("release", "end"):
+            if extra in marks:
+                frames[extra] = {"frame": marks[extra], "timestamp_ns": episode.rows[marks[extra]]["timestamp_ns"]}
+        review |= {"frames": frames, "training_range": [frames["start"]["frame"], frames["lift"]["frame"]],
+                   "training_ranges": {"grasp": [frames["start"]["frame"], frames["lift"]["frame"]]}}
+        if "release" in frames and "end" in frames:
+            review["training_ranges"]["place"] = [frames["lift"]["frame"], frames["end"]["frame"]]
     else:
         review["frames"] = None
         report["review_reasons"].append("no gripper closure / lift found: mark close and lift by hand")
     if target is None:
-        report["review_reasons"].append(f"D455 found no single {color} block in the opening frame")
-    elif target["same_colour_in_tray"] > 1:
+        report["review_reasons"].append(f"D455 found no {color} block in the opening frame")
+    elif target["same_colour_in_tray"] > 1 and target_pose is None:
         report["review_reasons"].append(f"more than one {color} block in the {target['tray']} tray")
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     manifest["task_card"] = {"color": color, "source_tray": target and target["tray"], "destination": destination,
                              "pose": target and [target["x_mm"], target["y_mm"], target["yaw_deg"]],
+                             "slot": slot and slot["index"], "slot_xy": slot and slot["xy"],
                              "start": "park", "layout_group": None}
     manifest["operator_result"] = review["outcome"]
     write_json(root / "manifest.json", manifest)
     write_json(root / "review.json", review | {"review_reasons": report["review_reasons"], "d455_blocks": located})
     return report, review
+
+def latest_global(writer):
+    """The newest saved global colour frame of the running episode (BGR), or None."""
+    import cv2
+
+    from agentic_sim.real_episode import _image_name
+
+    count = getattr(writer, "camera_counts", {}).get("global", 0)
+    if not count:
+        return None
+    return cv2.imread(str(writer.root / "global" / _image_name(count - 1)))
+
+
+def choose_target(term, blocks, color):
+    """The operator picks which block of the colour when there is more than one (advanced finals: a given block)."""
+    same = [b for b in blocks if b["color"] == color]
+    if len(same) <= 1:
+        return same[0] if same else None
+    keys = {str(i + 1): b for i, b in enumerate(same[:9])}
+    lines = "／".join(f"{k} {TRAY_NAME[b['tray']]} x {b['x_mm']:.0f} y {b['y_mm']:.0f}" for k, b in keys.items())
+    return keys[term.choose(f"有 {len(same)} 顆{color}方塊，要夾哪一顆？{lines}", {k: k for k in keys})]
+
+
+def pick_place_round(driver, leader, data, writer, check_cameras, *, color, destination, slot, quads):
+    """Park -> demonstrated pick and place (ending near the start pose) -> park. Returns the operator result."""
+    from agentic_sim.real_locate import locate
+
+    park, channel, support = data["park"]["pose"], data["channel"]["command"], data["park_support"]
+    route = Track(data["waypoints"], data["segment_seconds"])
+    driver.leader_route = route
+    opening = latest_global(writer)
+    target = choose_target(driver.term, locate(opening, quads)["blocks"], color) if opening is not None else None
+    if target is None:
+        driver.term.say(f"D455 開場畫面沒找到{color}方塊；仍可錄，讀回時再確認。")
+    driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 搬到{TRAY_NAME[destination]}第 {slot['index']} 格"
+                          f"（x {slot['xy'][0]:.0f}, y {slot['xy'][1]:.0f}）放下張爪 → 抬起退回起姿附近，停穩按 c。"
+                          "Esc 暫停，腕部不要轉。")
+    driver.arm_at(park)
+    if not driver.align_leader(leader, driver.read()):
+        park_and_release(driver, Track([driver.target, park], [0.0]), park, support)
+        return {"cancelled": True, "demo_frames": None}
+    while True:
+        samples, kept = record_demo(driver, leader, writer, check_cameras)
+        if not kept or body_gap(driver.read(), channel) <= END_NEAR_START:
+            break
+        choice = driver.menu(f"離起姿還有 {body_gap(driver.last, channel):.0f}°。t 重新交接繼續錄、把手臂帶回起姿附近"
+                             "／r 沿剛才的路徑退回起姿（這段不錄）", {"t": "繼續錄", "r": "退回"})
+        if choice == "r" or not driver.align_leader(leader, driver.read()):
+            break
+    demo_frames = writer.count
+    landed = None
+    final = latest_global(writer)
+    if final is not None and kept:
+        located = locate(final, quads)
+        near = [b for b in located["blocks"] if b["color"] == color and b["tray"] == destination]
+        if near:
+            landed = min(near, key=lambda b: (b["x_mm"] - slot["xy"][0]) ** 2 + (b["y_mm"] - slot["xy"][1]) ** 2)
+            landed = landed | {"slot_offset_mm": round(((landed["x_mm"] - slot["xy"][0]) ** 2
+                                                       + (landed["y_mm"] - slot["xy"][1]) ** 2) ** .5, 1)}
+    if body_gap(driver.read(), channel) <= END_NEAR_START:
+        follow(driver, retimed([dict(driver.target), pose(channel) | {"gripper": driver.target["gripper"]}]),
+               ("結束位", "起姿"))
+    else:
+        follow(driver, retrace_to(samples + [(driver.clock(), dict(driver.target))], channel), ("結束位", "起姿"))
+    if not kept or landed is None:
+        driver.menu("在起姿保持。若夾爪裡還有方塊請取下，回程淨空後按 r 回停放位", {"r": "回停放位"})
+    driver.target = driver.target | {"gripper": channel["gripper"]}
+    park_and_release(driver, route.reverse(), park, support)
+    seen = (f"D455：方塊在{TRAY_NAME[destination]} x {landed['x_mm']:.0f} y {landed['y_mm']:.0f}，離格位 "
+            f"{landed['slot_offset_mm']:.0f} mm。" if landed else "D455 沒在目的盤看到這顆方塊。")
+    outcome = driver.menu(seen + "結果：s 成功／f 失敗", {"s": "成功", "f": "失敗"})
+    return {"color": color, "destination": destination, "slot": slot, "target_choice": target,
+            "landed": landed, "placed": landed is not None and outcome == "s", "success": outcome == "s" and kept,
+            "demo_frames": demo_frames, "cancelled": not kept}

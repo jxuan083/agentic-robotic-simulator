@@ -455,3 +455,31 @@ def test_retrace_to_stops_where_the_demo_passed_the_start_pose():
     self_lifts = [p["shoulder_lift"] for p in track.points]
     assert all(p["shoulder_lift"] >= CHANNEL["shoulder_lift"] - 1e-9 for p in track.points)  # never back toward park
     assert self_lifts == sorted(self_lifts, reverse=True)
+
+
+class PickPlaceRoundCase(RouteCase):
+    def test_demonstrated_place_ends_near_start_then_parks(self):
+        from agentic_sim.real_grasp import pick_place_round
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        grasp = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 20, "elbow_flex": CHANNEL["elbow_flex"] - 10}
+        place = dict(grasp) | {"shoulder_pan": grasp["shoulder_pan"] + 40}
+        d = lambda pose_: {j: pose_[j] - PARK[j] for j in PARK}  # noqa: E731
+        moves = [(0.5, dict.fromkeys(PARK, 0.0)), (3.0, d(VIA)), (6.0, d(grasp)), (9.0, d(place)),
+                 (12.0, d(CHANNEL) | {"shoulder_pan": 4.0})]
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        leader = FakeDrivenLeader(clock, PARK, moves)
+        term = ScriptedTerminal(clock, [(22.0, "c")], ("a", "r", "y", "s"))
+        driver = self.driver(follower, term, clock, "pick-place")
+        writer = FakeWriter(clock)
+        result = pick_place_round(driver, leader, data, writer, lambda: None, color="red", destination="beige",
+                                  slot={"index": 1, "xy": [70, 60]}, quads=None)
+        driver.close_logs()
+        self.assert_released_at_park(follower)
+        self.assertTrue(result["success"]) and self.assertEqual(result["demo_frames"], writer.count)
+        last = writer.rows[-1]["arms"]["right"]["readback"]
+        self.assertLess(body_gap(last, CHANNEL), 30)          # the demonstration ended near the start pose
+        self.assertTrue(any(cmd["shoulder_pan"] > grasp["shoulder_pan"] + 30 for _, cmd in follower.sent))

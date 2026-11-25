@@ -1,7 +1,6 @@
 """Offline keyframe candidates and camera evidence for real collection cards."""
 
 from bisect import bisect_left
-from itertools import pairwise
 from pathlib import Path
 
 from agentic_sim.real_control import JOINTS
@@ -15,35 +14,78 @@ def _nearest(frames, stamp):
     return min(frames[max(0, i - 1):i + 1], key=lambda frame: abs(frame["capture_ns"] - stamp))
 
 
+CLOSE_DROP = 4.0       # % below the opening reached before the grasp
+HOLD_FRAMES = 5        # the drop lasts at least this many frames
+RELEASE_FRAMES = 15    # a release stays open this many frames (0.5 s at 30 Hz)
+STILL_DEG = 0.25       # per-frame body change counted as still
+LIFT_DEG = 3.0         # body motion after the closure that counts as lifting
+STABLE_FRAMES = 10     # still frames that make a stable lift
+RELEASE_RISE = 4.0     # % above the held opening: the block is released (placement demonstrations)
+
+
+def keyframes(joints):
+    """start / close / lift / release / end from follower readbacks (slow closures and any lifting joint)."""
+    grip = [sample["gripper"] for sample in joints]
+    n = len(joints)
+    step = [0.0] + [max(abs(joints[i][j] - joints[i - 1][j]) for j in JOINTS[:-1]) for i in range(1, n)]
+    moving = [i for i in range(n) if step[i] > STILL_DEG or (i and abs(grip[i] - grip[i - 1]) > 0.5)]
+    if not moving:
+        return {}
+    marks = {"start": max(0, moving[0] - 5), "end": min(n - 1, moving[-1] + 5)}
+    peak = grip[0]
+    close = None
+    for i in range(0, n - 2):
+        peak = max(peak, grip[i])
+        if grip[i] <= peak - CLOSE_DROP and all(g <= peak - CLOSE_DROP for g in grip[i:i + HOLD_FRAMES]):
+            close = i
+            while close > 0 and grip[close - 1] > grip[close] + 0.1:
+                close -= 1
+            break
+    if close is None:
+        return marks
+    marks["close"] = close
+    held_at = next((i for i in range(close, n - 3) if abs(grip[i + 3] - grip[i]) < 0.5), close)
+    hold = grip[held_at]
+    base = joints[held_at]
+    lifting = next((i for i in range(held_at, n)
+                    if max(abs(joints[i][j] - base[j]) for j in JOINTS[:-1]) >= LIFT_DEG), None)
+    if lifting is not None:
+        lift = None
+        for i in range(lifting, n - STABLE_FRAMES):
+            if all(step[k] <= STILL_DEG for k in range(i, i + STABLE_FRAMES)):
+                lift = i
+                break
+        marks["lift"] = lift if lift is not None else min(n - 1, lifting + 30)
+        release = next((i for i in range(marks["lift"], n - RELEASE_FRAMES)
+                        if all(g >= hold + RELEASE_RISE for g in grip[i:i + RELEASE_FRAMES])), None)
+        if release is not None:
+            while release > marks["lift"] and grip[release - 1] < grip[release] - 0.1:
+                release -= 1
+            marks["release"] = release
+    return marks
+
+
 def _candidates(episode, arm, warnings):
     rows = episode.rows
     if len(rows) < 6:
         return {}, ["too few task frames to locate a grasp"]
     joints = [row["arms"][arm]["readback"] for row in rows]
-    grip = [sample["gripper"] for sample in joints]
-    close = next((i for i in range(1, len(grip) - 2)
-                  if grip[i - 1] - grip[i] > .2 and grip[i - 1] - grip[i + 2] >= 3
-                  and all(a >= b - .1 for a, b in pairwise(grip[i - 1:i + 3]))), None)
-    if close is None:
+    marks = keyframes(joints)
+    if "close" not in marks:
         return {}, ["no sustained measured gripper closure"]
-
-    def quiet(i):
-        return all(abs(joints[i][j] - joints[i - 1][j]) <= .25 for j in JOINTS[:-1])
-
+    close, lift = marks["close"], marks.get("lift")
     stamps = [row["timestamp_ns"] for row in rows]
-    # The motion cue only proposes a window for the lift. Image evidence verifies it.
-    lift = next((i for i in range(close + 2, len(joints) - 1)
-                 if grip[i] < grip[close - 1] - 2
-                 and (abs(joints[i]["shoulder_lift"] - joints[close]["shoulder_lift"])
-                      + abs(joints[i]["elbow_flex"] - joints[close]["elbow_flex"])) >= 1.5), None)
     # The policy learns the whole approach: training starts at the settled standard start (first task frame).
-    hints = {"start": (0, "first task frame at the settled standard start"),
-             "close": (close, "sustained decrease in measured gripper opening")}
+    hints = {"start": (marks["start"], "first arm motion (minus 5 frames)"),
+             "close": (close, "sustained decrease in measured gripper opening"),
+             "end": (marks["end"], "last arm motion (plus 5 frames)")}
+    if "release" in marks:
+        hints["release"] = (marks["release"], "gripper reopened after the lift (placement)")
     reasons = []
     if lift is None:
         reasons.append("no lift candidate with a closed gripper")
     else:
-        hints["lift"] = (lift, "arm motion with gripper closed; check consecutive images for a stable lift")
+        hints["lift"] = (lift, "first still moment after lifting with the gripper closed")
     candidates = {}
     for name, (index, basis) in hints.items():
         stamp = stamps[index]

@@ -1,0 +1,5 @@
+{
+  "_note": "Placement slots, tray-local mm (origin: inner tray corner nearest the arm base on its right; +x forward, +y left). 70 mm apart so the open gripper fits between placed blocks (as the sim's beige slots); kept in the near part of each tray, inside the reach measured on 2026-11-25 (pink x <= ~100 mm). Each episode takes the next slot of its destination tray.",
+  "beige": [[70, 60], [70, 128], [70, 196]],
+  "pink": [[70, 50], [70, 110], [70, 170]]
+}
