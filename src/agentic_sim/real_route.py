@@ -616,6 +616,7 @@ def save_route(path, data):
     write_json(path, data)
 
 
+RETRACE_PATH_ERROR = 2.0    # body deg: reversed task path back to the channel
 TUNE_PATH_ERROR = 1.0      # body deg: drops hand jitter from a taught route, keeps its shape
 OPEN_AFTER_LIFT = 45.0     # gripper stays at park opening until shoulder_lift has risen this far from park
 
@@ -743,6 +744,16 @@ def _resume_teleop(driver, leader, samples):
     return True
 
 
+def retrace_home(samples, channel):
+    """Back to the channel along the path just driven, reversed: it is known to clear the trays and the arm never
+    swings back over itself (raising shoulder_lift alone with a straight elbow did). Hand jitter and pauses are
+    dropped and it plays at the route speed caps; the gripper keeps its current opening."""
+    points = [p for _, p in samples]
+    points = [points[i] for i in sorted(_simplify(points, RETRACE_PATH_ERROR))][::-1]
+    grip = points[0]["gripper"]
+    return retimed([*(p | {"gripper": grip} for p in points[:-1]), pose(channel) | {"gripper": grip}])
+
+
 def lift_home(current, channel):
     """Back to the channel without retracing: raise shoulder_lift to the channel value first (the upper arm tilts
     back, the gripper rises away from the trays), then move the other joints straight to the channel pose."""
@@ -772,7 +783,7 @@ def task_session(driver, leader, channel_command):
             if choice == "c" or not _resume_teleop(driver, leader, task):
                 break
     task.append((driver.clock(), dict(driver.target)))
-    follow(driver, lift_home(driver.target, channel_command), ("任務位", "通道位"))
+    follow(driver, retrace_home(task, channel_command), ("任務位", "通道位"))
 
 
 def record(driver, leader, route_path, meta, park_samples):

@@ -385,3 +385,16 @@ class LeaderRouteCase(RouteCase):
         # Passed close to the route's via pose on the way (not a straight joint move).
         driver.leader_route = None
         self.assertEqual(len(driver._leader_goals(start, reference)), 2)
+
+
+def test_retrace_home_reverses_the_driven_path():
+    from agentic_sim.real_route import retrace_home
+
+    out = [(i, dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 4 * i,
+                                "elbow_flex": CHANNEL["elbow_flex"] - 5 * min(i, 8), "gripper": 17.0})
+           for i in range(16)]
+    track = retrace_home(out, CHANNEL)
+    lifts = [p["shoulder_lift"] for p in track.points]
+    assert lifts == sorted(lifts, reverse=True)          # monotonically back, no swing past the channel
+    assert body_gap(track.points[-1], CHANNEL) < 1e-9 and track.points[-1]["gripper"] == 17.0
+    assert body_gap(track.points[0], out[-1][1]) < 1e-9

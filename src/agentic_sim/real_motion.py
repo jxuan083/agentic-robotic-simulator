@@ -274,6 +274,10 @@ class Motion:
         grip = max(0.0, held["gripper"] - CARRY_SQUEEZE)
         self.command = None
         self._move(held)
+        # Back to the standard start along the measured task path, reversed (a straight joint move from a
+        # stretched grasp swings the arm back over itself).
+        for point in reversed(simplified(self.path)):
+            self._move(point | {"gripper": grip}, settle=False)
         self._move(self.plan.start | {"gripper": grip}, settle=False)
         self.phase = "place"
         for point in drop["waypoints"][1:]:
