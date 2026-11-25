@@ -181,7 +181,7 @@ def tune(args):
         if spread > 2.0:
             raise SystemExit(f"leader gripper moved while reading ({spread:.1f} %); hold it still and retry")
         print(f"leader gripper reads {grip:.1f} %")
-    tuned = tune_route(data, grip=grip, straight_from=args.straight_from)
+    tuned = tune_route(data, grip=grip, straight_from=args.straight_from, hold_roll=args.hold_roll)
     old = archive_existing(args.route)
     save_route(args.route, tuned)
     t = tuned["tuned"]
@@ -202,6 +202,8 @@ def main(argv=None):
         if name == "tune":
             p.add_argument("--grip", type=float, help="fixed gripper opening %% at the channel (cube-ready)")
             p.add_argument("--config", type=Path, help="read the opening from the leader gripper instead (read-only)")
+            p.add_argument("--hold-roll", action="store_true",
+                           help="keep wrist_roll at the park value along the route (no wrist turn)")
             p.add_argument("--straight-from", type=int,
                            help="waypoint index in the route file after which to go straight to the channel")
             continue

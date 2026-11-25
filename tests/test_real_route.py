@@ -245,6 +245,8 @@ def test_tune_route_removes_pauses_and_fixes_gripper():
     assert tuned["channel"]["command"]["gripper"] == 45.0
     assert tuned["verified"] == {"reverse_to_park": None, "forward_to_channel": None}
     assert track.points[0] == park
+    held = tune_route(data, grip=45.0, hold_roll=True)
+    assert {p["wrist_roll"] for p in held["waypoints"]} == {park["wrist_roll"]}
 
 
 class DrivenHandoverCase(RouteCase):

@@ -590,12 +590,14 @@ TUNE_PATH_ERROR = 1.0      # body deg: drops hand jitter from a taught route, ke
 OPEN_AFTER_LIFT = 45.0     # gripper stays at park opening until shoulder_lift has risen this far from park
 
 
-def tune_route(data, *, grip, body_error=TUNE_PATH_ERROR, open_after_lift=OPEN_AFTER_LIFT, straight_from=None):
+def tune_route(data, *, grip, body_error=TUNE_PATH_ERROR, open_after_lift=OPEN_AFTER_LIFT, straight_from=None,
+               hold_roll=False):
     """Route without the taught pauses: speed-capped timing, jitter removed, fixed gripper opening.
 
     The gripper keeps the park opening through the folded area and switches to `grip` once shoulder_lift has
     risen `open_after_lift` deg from park (reverse: closes there before entering the folded area).
     straight_from: waypoint index after which the final adjustments become one straight joint move to the channel.
+    hold_roll: keep wrist_roll at the park value along the whole route (no wrist turn; protects the wrist camera mount).
     """
     if not 0.0 <= grip <= 100.0:
         raise ValueError("gripper opening must be within 0..100 %")
@@ -610,6 +612,8 @@ def tune_route(data, *, grip, body_error=TUNE_PATH_ERROR, open_after_lift=OPEN_A
     if switch is None:
         raise ValueError(f"shoulder_lift never rises {open_after_lift} deg from park along this route")
     points = [p | {"gripper": park_grip if i < switch else float(grip)} for i, p in enumerate(points)]
+    if hold_roll:
+        points = [p | {"wrist_roll": data["park"]["pose"]["wrist_roll"]} for p in points]
     points = [points[i] for i in sorted(_simplify(points, body_error))]
     seconds = [max(1e-3, body_gap(a, b) / PLAY_SPEED, abs(a["gripper"] - b["gripper"]) / GRIPPER_PLAY_SPEED)
                for a, b in zip(points, points[1:])]
@@ -620,7 +624,7 @@ def tune_route(data, *, grip, body_error=TUNE_PATH_ERROR, open_after_lift=OPEN_A
     out["tuned"] = {"at": datetime.now().astimezone().isoformat(), "gripper_open_pct": float(grip),
                     "gripper_open_after_lift_deg": open_after_lift, "path_tolerance_deg": body_error,
                     "timing": f"speed cap {PLAY_SPEED} deg/s, {GRIPPER_PLAY_SPEED} %/s; taught pauses removed",
-                    "straight_from": straight_from, "waypoints_before": len(data["waypoints"]), "waypoints_after": len(points),
+                    "straight_from": straight_from, "hold_roll": hold_roll, "waypoints_before": len(data["waypoints"]), "waypoints_after": len(points),
                     "open_from_waypoint": next(i for i, p in enumerate(points) if p["gripper"] == float(grip))}
     return out
 
@@ -916,6 +920,8 @@ def drop_test(driver, data, track, drop):
     park, tray = data["park"]["pose"], drop["tray"]
     if drop["calibrations"] != data["calibrations"] or drop["layout_id"] != data["layout_id"]:
         raise ValueError(f"drop route {tray} was taught with another calibration or layout")
+    if body_gap(drop["waypoints"][0], data["channel"]["command"]) > ENDPOINT:
+        raise ValueError(f"drop route {tray} starts at an older channel pose; teach it again (REPLACE=1)")
     driver.arm_at(park)
     if follow(driver, track, ("停放位", "通道位")) != "通道位":
         park_and_release(driver, Track([driver.target, park], [0.0]), park, data["park_support"])
