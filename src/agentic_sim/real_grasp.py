@@ -1,8 +1,8 @@
 """One pick-and-place demonstration from the park pose, driven from a terminal (no task cards).
 
   park (torque on, small reseat) -> leader handed over at park ->
-  [record: unfold, approach, close, lift, carry, place in the chosen slot, open, retreat near the start pose] c ->
-  start pose -> park -> torque off
+  [record: unfold, approach, close, lift, carry, place in the chosen slot, open, lift] c ->
+  (straight up to 12 cm when c is pressed away from the start pose) start pose -> park -> torque off
 
 The demonstration covers the whole pick and place (no scripted detour back to the start pose before placing).
 Cameras run for the whole round: the opening global frame shows the untouched layout and gives the target
@@ -16,6 +16,8 @@ from agentic_sim.real_route import (
 )
 
 END_NEAR_START = 30.0   # body deg: after c the arm goes straight to the start pose only from this close
+RETURN_LIFT_Z = 0.12    # m, grasp centre: after c farther away, first straight up to this height (clears rims, blocks)
+RETURN_MIN_Z = 0.05     # m: lowest grasp-centre height allowed on the straight move from there to the start pose
 WRIST_FREE = "wrist_roll"   # turned to square up with the block during the demo; the straight move back restores it
 
 
@@ -50,6 +52,31 @@ def placed_block(before, after, color, tray, slot):
     reference = {"x_mm": slot["xy"][0], "y_mm": slot["xy"][1]}
     return landed | {"slot_offset_mm": round(dist(landed, reference), 1),
                      "neighbour_mm": round(min(dist(landed, b) for b in others), 1) if others else None}
+
+
+def lift_and_return(reading, channel, follower_id):
+    """After c away from the start pose (placed in the beige tray and lifted): straight up to RETURN_LIFT_Z over
+    the same spot (IK on the follower's calibration-file joint map), then to the start pose. Returns a Track, or None
+    when the lift has no IK or the move would pass below RETURN_MIN_Z (the caller falls back to the menu)."""
+    import numpy as np
+    from pathlib import Path
+    from agentic_sim.real_kinematics import ArmModel, find_calibration
+
+    model = ArmModel.from_file(find_calibration(follower_id), Path(__file__).resolve().parents[2])
+    now = dict(reading)
+    ee = model.ee(now)
+    points = [now]
+    if ee[2] < RETURN_LIFT_Z:
+        up, _ = model.hover(np.array([ee[0], ee[1], RETURN_LIFT_Z]), model.radial(ee[:2]), now, 30.0)
+        if up is None:
+            return None
+        points.append(up | {"gripper": now["gripper"]})
+    end = pose(channel) | {"gripper": now["gripper"]}
+    for a, b in zip(points[-1:], [end]):
+        for t in np.linspace(0, 1, 15):
+            if model.ee({j: a[j] + (b[j] - a[j]) * t for j in a})[2] < RETURN_MIN_Z - 1e-3:
+                return None
+    return retimed(points + [end])
 
 
 def retrace_to(samples, channel):
@@ -259,16 +286,23 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
     if not driver.align_leader(leader, driver.read()):
         park_and_release(driver, Track([driver.target, park], [0.0]), park, support)
         return {"cancelled": True, "demo_frames": None}
+    back = None
     while True:
         samples, kept = record_demo(driver, leader, writer, check_cameras)
         if not kept or reach_gap(driver.read(), channel) <= END_NEAR_START:
+            break
+        back = lift_and_return(driver.target, channel, data["calibrations"]["follower"]["id"])
+        if back is not None:      # c after placing and lifting: straight up, then to the start pose (not recorded)
+            driver.term.say("錄製結束。夾爪先垂直抬高，再回起姿與停放位。")
             break
         choice = driver.menu(f"離起姿還有 {reach_gap(driver.last, channel):.0f}°。t 重新交接繼續錄、把手臂帶回起姿附近"
                              "／r 沿剛才的路徑退回起姿（這段不錄）", {"t": "繼續錄", "r": "退回"})
         if choice == "r" or not driver.align_leader(leader, driver.read()):
             break
     demo_frames = writer.count
-    if reach_gap(driver.read(), channel) <= END_NEAR_START:
+    if back is not None:
+        follow(driver, back, ("結束位", "起姿"))
+    elif reach_gap(driver.read(), channel) <= END_NEAR_START:
         follow(driver, retimed([dict(driver.target), pose(channel) | {"gripper": driver.target["gripper"]}]),
                ("結束位", "起姿"))
     else:
