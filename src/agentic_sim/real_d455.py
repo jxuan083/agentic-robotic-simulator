@@ -294,11 +294,18 @@ def slot_square(xy, yaw, z=EDGE_M):
 
 
 def draw(bgr, cam: Camera, blocks, *, selected=None, quads=None, rejected=(), arm=None, lines=(), slots=(),
-         next_slot=None):
+         next_slot=None, zone=None):
     """slots: [(xy, yaw)] placement squares (beige); next_slot: index of the next one (highlighted), None = all done."""
     img = bgr.copy()
     for quad in (quads or {}).values():
         cv2.polylines(img, [np.asarray(quad, np.int32)], True, (90, 200, 90), 1)
+    if zone:   # safe grasp zone: outer limit per direction and the inner radius, on the table
+        phis = np.radians(np.arange(zone["phi_deg"][0], zone["phi_deg"][-1] + 0.1, 2.0))
+        r_out = np.interp(np.degrees(phis), zone["phi_deg"], zone["r_safe_m"])
+        for r in (r_out, np.full_like(phis, zone["r_min_m"])):
+            arc = cam.project(np.stack([r * np.cos(phis), r * np.sin(phis), np.zeros_like(phis)], 1))
+            ok = (arc[:, 0] > -50) & (arc[:, 0] < img.shape[1] + 50) & (arc[:, 1] > -50) & (arc[:, 1] < img.shape[0] + 50)
+            cv2.polylines(img, [arc[ok].astype(np.int32)], False, (0, 140, 255), 1, cv2.LINE_AA)
     for k, (xy, yaw) in enumerate(slots):
         poly = cam.project(slot_square(xy, yaw)).astype(np.int32)
         nxt = k == next_slot
@@ -320,11 +327,14 @@ def draw(bgr, cam: Camera, blocks, *, selected=None, quads=None, rejected=(), ar
         col = LABEL.get(b["color"], (128, 128, 128))
         cv2.polylines(img, [poly], True, (255, 255, 255) if k == selected else col, 3 if k == selected else 2)
         c = poly.mean(0).astype(int)
+        if b.get("reach") is False:   # outside the safe grasp zone
+            cv2.drawMarker(img, (int(c[0]), int(c[1])), (0, 0, 255), cv2.MARKER_TILTED_CROSS, 22, 2)
         cv2.putText(img, str(k), (int(c[0]) - 4, int(c[1]) - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3)
         cv2.putText(img, str(k), (int(c[0]) - 4, int(c[1]) - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         turn = f" wrist{math.degrees(b['turn']):+.0f}" if "turn" in b else ""
+        out = "  OUT" if b.get("reach") is False else ""
         rows.append((f"{k} {b['color']}{'?' if b.get('color_distance', 0) > 0.6 else ''}  x{b['x'] * 1000:.0f} "
-                     f"y{b['y'] * 1000:.0f}  yaw{math.degrees(b['yaw']):.0f}{turn}", col))
+                     f"y{b['y'] * 1000:.0f}  yaw{math.degrees(b['yaw']):.0f}{turn}{out}", col))
     lines = list(lines)
     y0 = 18 + 16 * len(lines)
     if rows:

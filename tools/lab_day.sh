@@ -198,7 +198,7 @@ PYEOF
     ;;
   d455)
     TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
-    "$PY" tools/finals_reach.py preview --serial "$D455" "${TRAY_ARG[@]}" ${POSE:+--pose "$POSE"} "$@" ;;
+    "$PY" tools/finals_reach.py preview --serial "$D455" "${TRAY_ARG[@]}" ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} "$@" ;;
   reach)
     need "$ROUTE"
     TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")

@@ -65,6 +65,7 @@ class Live:
         self.blocks, self.rejected, self.image, self.info, self.raw = [], [], None, {}, None
         self.selected, self.arm_xyz, self.lines = None, None, []
         self.slots, self.next_slot = [], 0      # beige placement squares drawn on the preview
+        self.zone = None                        # safe grasp zone (safe_zone): blocks outside are marked "out"
         self.lock, self.running = threading.Lock(), True
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
@@ -80,9 +81,11 @@ class Live:
             if self.model is not None:
                 for b in blocks:
                     b["turn"] = self.model.wrist_turn((b["x"], b["y"]), b["yaw"])
+            for b in blocks:
+                b["reach"] = in_zone(self.zone, b["x"], b["y"])
             lines = self.lines + (["! something over the trays: hidden / shifted blocks"] if info.get("occluded") else [])
             img = draw(bgr, self.cam, blocks, selected=self.selected, quads=self.quads, rejected=rejected,
-                       arm=self.arm_xyz, lines=lines, slots=self.slots, next_slot=self.next_slot)
+                       arm=self.arm_xyz, lines=lines, slots=self.slots, next_slot=self.next_slot, zone=self.zone)
             with self.lock:
                 self.blocks, self.rejected, self.image, self.raw = blocks, rejected, img, (bgr, depth)
 
@@ -134,6 +137,68 @@ class Window:
         self.root.update()
 
 
+def make_corr(spec):
+    """--corr "radial mm, rotation deg, z mm" -> corr_at(xyz): command minus target (gravity sag), mount m."""
+    radial_c, tangent_c, z_c = (float(c) for c in spec.split(","))
+
+    def corr_at(xyz):
+        x, y = float(xyz[0]), float(xyz[1])
+        r = math.hypot(x, y) or 1.0
+        u, v = np.array([x, y]) / r, np.array([-y, x]) / r
+        xy = u * radial_c / 1000 + v * r * math.radians(tangent_c)
+        return np.array([xy[0], xy[1], z_c / 1000])
+    return corr_at
+
+
+ZONE_PHI = list(range(-90, 91, 10))   # directions from the base (deg, 0 = +X, + = towards +Y)
+ZONE_MARGIN = 0.015                    # inside the IK limit
+ZONE_MIN_R = 0.12                      # nearer than this the vertical grasp folds into the base
+
+
+def safe_zone(model, corr_at, follower_id, corr_spec, out_dir):
+    """Safe grasp zone: per direction the farthest block centre whose hover (top + 45 mm) and grasp both solve
+    with <= FAR_TILT tilt and whose carry can start at 8 cm, minus ZONE_MARGIN. 11/26: a yellow at r 340 mm (36 deg)
+    grasped but could not be carried (limit there ~345 mm). Depends on the calibration file and --corr only, so it is
+    cached in out_dir/safe_zone_<follower>.json (~10 s to compute)."""
+    key = {"offsets": [round(float(o), 3) for o in model.offsets_deg], "corr": corr_spec, "phi": ZONE_PHI,
+           "margin": ZONE_MARGIN, "version": 1}
+    path = Path(out_dir) / f"safe_zone_{follower_id}.json"
+    if path.exists():
+        cached = json.loads(path.read_text())
+        if cached.get("key") == key:
+            return cached
+    seed = {"shoulder_pan": 0.0, "shoulder_lift": -20.0, "elbow_flex": 40.0, "wrist_flex": 70.0, "wrist_roll": 0.0}
+    centre = EDGE_M / 2
+
+    def ok(x, y):
+        sd = dict(seed, shoulder_pan=-math.degrees(math.atan2(y, x)))
+        for z in (centre + HOVER_M, centre + GRASP_M, 0.08):
+            xyz = np.array([x, y, z])
+            if model.hover(xyz + corr_at(xyz), 0.0, sd, FAR_TILT)[0] is None:
+                return False
+        return True
+    r_max = []
+    for phi in ZONE_PHI:
+        c, s_ = math.cos(math.radians(phi)), math.sin(math.radians(phi))
+        lo, hi = 0.15, 0.45
+        for _ in range(10):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if ok(mid * c, mid * s_) else (lo, mid)
+        r_max.append(round(lo - ZONE_MARGIN, 4))
+    zone = {"key": key, "phi_deg": ZONE_PHI, "r_safe_m": r_max, "r_min_m": ZONE_MIN_R,
+            "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(zone, indent=1))
+    return zone
+
+
+def in_zone(zone, x, y):
+    if not zone:
+        return True
+    r, phi = math.hypot(x, y), math.degrees(math.atan2(y, x))
+    return zone["r_min_m"] <= r <= float(np.interp(phi, zone["phi_deg"], zone["r_safe_m"]))
+
+
 def beige_slots(cam, quads):
     """Beige slots in the mount frame and the tray's x axis direction (rad), from the tray corners."""
     import cv2
@@ -158,6 +223,8 @@ def preview(args):
                 ArmModel.from_file(find_calibration(args.follower_id), ROOT))
     if profile_quads and "beige" in profile_quads:
         live.slots = beige_slots(live.cam, profile_quads)
+    print("安全夾取區（第一次約 10 秒）…", flush=True)
+    live.zone = safe_zone(live.model, make_corr(args.corr), args.follower_id, args.corr, args.out)
     win = Window("D455 finals locate")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -206,16 +273,11 @@ def reach(args):
     park, start, support = data["park"]["pose"], data["channel"]["command"], data["park_support"]
     model = ArmModel.from_file(find_calibration(args.follower_id), ROOT)
     quads = json.loads(Path(args.trays).read_text())["quads"] if args.trays and Path(args.trays).exists() else None
-    radial_c, tangent_c, z_c = (float(c) for c in args.corr.split(","))
-
-    def corr_at(xyz):
-        """Command minus target: radial (mm) outward, a rotation about the base (deg, + = towards +y), z (mm)."""
-        x, y = float(xyz[0]), float(xyz[1])
-        r = math.hypot(x, y) or 1.0
-        u, v = np.array([x, y]) / r, np.array([-y, x]) / r
-        xy = u * radial_c / 1000 + v * r * math.radians(tangent_c)
-        return np.array([xy[0], xy[1], z_c / 1000])
+    corr_at = make_corr(args.corr)
+    print("安全夾取區（第一次約 10 秒）…", flush=True)
+    zone = safe_zone(model, corr_at, args.follower_id, args.corr, args.out)
     live = Live(args.serial, load_pose(args.pose), quads, model)
+    live.zone = zone
     win = Window("D455 finals reach")
     log_path = Path(args.out) / "aim_checks.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -347,6 +409,8 @@ def reach(args):
                             term.say(f"沒有第 {k} 顆")
                             continue
                         snap = live.snapshot()
+                        if not in_zone(zone, blocks[k - 1]["x"], blocks[k - 1]["y"]):
+                            term.say(f"第 {k} 顆在安全夾取區外（可能 IK 無解或搬不走）；a 不會自動做，g 可手動試")
                         if live.info.get("occluded"):
                             term.say("注意：托盤上方有東西（手或手臂），方塊位置可能偏移；移開後再選一次")
                         b = min(snap, key=lambda c: math.hypot(c["x"] - blocks[k - 1]["x"], c["y"] - blocks[k - 1]["y"]))
@@ -390,6 +454,9 @@ def reach(args):
                         err = place()
                         term.say(err or "已放進米盤，在格位上方。b 回起姿。")
                     elif key == "a" and state["at"] == "start" and state["aim"] is not None:
+                        if not in_zone(zone, state["aim"]["x"], state["aim"]["y"]):
+                            term.say("這顆在安全夾取區外，不自動夾。換一顆，或用 g / l / c 手動試。")
+                            continue
                         err = go_hover() or go_level(GRASP_M, "grasp", "low", ("方塊上方", "夾取高度"))
                         if err is None:
                             held = set_grip(CLOSED_PCT, "閉合")
