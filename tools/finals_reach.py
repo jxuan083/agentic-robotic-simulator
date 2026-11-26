@@ -74,8 +74,9 @@ class Live:
             if self.model is not None:
                 for b in blocks:
                     b["turn"] = self.model.wrist_turn((b["x"], b["y"]), b["yaw"])
+            lines = self.lines + (["! something over the trays: hidden / shifted blocks"] if info.get("occluded") else [])
             img = draw(bgr, self.cam, blocks, selected=self.selected, quads=self.quads, rejected=rejected,
-                       arm=self.arm_xyz, lines=self.lines)
+                       arm=self.arm_xyz, lines=lines)
             with self.lock:
                 self.blocks, self.rejected, self.image, self.raw = blocks, rejected, img, (bgr, depth)
 
@@ -174,6 +175,7 @@ def preview(args):
                         np.savez_compressed(out / f"locate-{stamp}.npz", bgr=raw[0], depth=raw[1].astype(np.float32))
                     (out / f"locate-{stamp}.json").write_text(json.dumps(
                         {"blocks": blocks, "rejected": rejected, "table_z_mm": live.info.get("table_z_mm"),
+                         "over_trays_px": live.info.get("over_trays_px"), "occluded": live.info.get("occluded"),
                          "pose": args.pose, "frame": "mount, m"}, indent=1, ensure_ascii=False))
                     for k, b in enumerate(blocks, 1):
                         term.say(f"{k} {b['color']:11s} x {b['x'] * 1000:6.1f}  y {b['y'] * 1000:6.1f}  高 "
@@ -308,6 +310,8 @@ def reach(args):
                             term.say(f"沒有第 {k} 顆")
                             continue
                         snap = live.snapshot()
+                        if live.info.get("occluded"):
+                            term.say("注意：托盤上方有東西（手或手臂），方塊位置可能偏移；移開後再選一次")
                         b = min(snap, key=lambda c: math.hypot(c["x"] - blocks[k - 1]["x"], c["y"] - blocks[k - 1]["y"]))
                         state.update(block=k, aim=b, nudge=np.zeros(3))
                         live.selected = k

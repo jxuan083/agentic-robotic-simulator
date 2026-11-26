@@ -24,6 +24,7 @@ EDGE_M = 0.0295
 TOP_MIN = 0.026              # above the beige rim (~23 mm), below a block lying on the table (29.5 mm)
 TOP_MAX = 0.045              # one block (29.5 mm) on a tray floor; grippers / hands above are not blocks
 TOP_BAND = 0.008
+OVER_M, OVER_PX = 0.050, 400   # tray pixels higher than this: something over the trays may hide blocks
 SPLIT_M = 0.048             # a same-colour part longer than this is two or more touching blocks
 SIDE_M = (0.016, 0.042)      # accepted rectangle sides  # 16: far, dark (blue) tops lose ~8 mm to depth edge smoothing
 MIN_PX = 40
@@ -159,6 +160,25 @@ def _split_kmeans(xy, emit, max_k=4):
     return False
 
 
+def _spread(parts, iters=5):
+    """Blocks split from one same-colour part: their outer edges are eroded by depth smoothing, which pulls the
+    centres together (25-27 mm apart for touching 29.5 mm blocks). Push pairs closer than EDGE_M apart."""
+    for _ in range(iters):
+        moved = False
+        for i in range(len(parts)):
+            for j in range(i + 1, len(parts)):
+                a, b = parts[i], parts[j]
+                d = np.array([b["x"] - a["x"], b["y"] - a["y"]])
+                n = float(np.linalg.norm(d))
+                if 1e-6 < n < EDGE_M - 0.0005:
+                    push = d / n * (EDGE_M - n) / 2
+                    a["x"], a["y"] = a["x"] - push[0], a["y"] - push[1]
+                    b["x"], b["y"] = b["x"] + push[0], b["y"] + push[1]
+                    moved = True
+        if not moved:
+            break
+
+
 def detect(bgr, depth_m, cam: Camera, quads=None):
     """Blocks in one aligned colour / depth frame (depth_m: metres per colour pixel, 0 = none).
     Returns (blocks, rejected, info); block x / y / z_top in metres (mount frame), yaw in rad mod 90 deg."""
@@ -191,17 +211,21 @@ def detect(bgr, depth_m, cam: Camera, quads=None):
                 np.array([-math.sin(math.radians(ang)), math.cos(math.radians(ang))])
             proj = (xy - [cx, cy]) @ axis
             edges = np.linspace(proj.min(), proj.max() + 1e-9, k + 1)
+            n0 = len(blocks)
             for j in range(k):
                 sel = (proj >= edges[j]) & (proj < edges[j + 1])
                 if sel.sum() >= 6:
                     add(us[sel], vs[sel], top, name, dist, med, split=False)
+            _spread(blocks[n0:])
             return
         smeared = SIDE_M[0] <= short <= SIDE_M[1] < long_ <= SPLIT_M   # one block whose side face joins the top
         if not (SIDE_M[0] <= short and long_ <= SIDE_M[1]) and not smeared:
             if short < 0.012:          # rim slivers and edges: not worth listing
                 return
+            n0 = len(blocks)
             if split and long_ > SPLIT_M and \
                     _split_kmeans(xy, lambda sel: add(us[sel], vs[sel], top, name, dist, med, split=False)):
+                _spread(blocks[n0:])
                 return                 # blocks touching at an offset / corner: one cluster per block
             rejected.append({"color": name, "pixel": [float(np.mean(us)), float(np.mean(vs))],
                              "why": f"size {w * 1000:.0f}x{h * 1000:.0f} mm"})
@@ -252,7 +276,9 @@ def detect(bgr, depth_m, cam: Camera, quads=None):
                 name, dist = classify(med)
                 add(pu, pv, top, name, dist, med)
     blocks.sort(key=lambda b: (b["tray"] or "~", -b["x"], -b["y"]))
-    return blocks, rejected, {"table_z_mm": round(table_z * 1000, 1)}
+    over = int(np.count_nonzero(trays & (np.nan_to_num(rel, nan=0.0) > OVER_M)))  # a hand / arm above the trays
+    return blocks, rejected, {"table_z_mm": round(table_z * 1000, 1), "over_trays_px": over,
+                              "occluded": over > OVER_PX}
 
 
 def corners(block):
