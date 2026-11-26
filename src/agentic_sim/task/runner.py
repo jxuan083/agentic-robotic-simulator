@@ -59,6 +59,8 @@ class TaskRunner:
             cfg["shortage"] = {**cfg["shortage"], "options": ["substitute", "wait"]}
         tr = trays(scene_cfg)
         from agentic_sim.config import v
+        if "placement_slots" in scene_cfg:   # lab scenes carry the slots measured in their own beige tray
+            cfg["placement_slots"] = [list(map(float, s)) for s in v(scene_cfg["placement_slots"])]
         world = World(trays={"storage": tr["storage_pink"], "placement": tr["placement_beige"]},
                       edge=float(v(scene_cfg["block"]["edge"])), colors=list(colors),
                       init_pos=[np.asarray(p, float) for p in block_init_pos], home=np.asarray(ctrl.p.home_ee, float),
