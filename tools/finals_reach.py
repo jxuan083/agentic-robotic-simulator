@@ -40,6 +40,7 @@ from agentic_sim.real_kinematics import ArmModel, find_calibration  # noqa: E402
 
 HOVER_M = 0.045      # grasp centre above the block centre while hovering (fingertips ~3 cm over the top)
 TILT = {"above": 30.0, "hover": 15.0, "grasp": 8.0, "place": 25.0}   # releasing may tilt: far slots need ~20 deg   # max gripper tilt from vertical (deg) per phase
+GRIP_MIN_S, GRIP_STILL_S, GRIP_STILL_PCT, GRIP_MAX_S = 0.4, 0.3, 0.6, 2.5   # gripper wait: stopped = < 0.6 % in 0.3 s
 FAR_TILT = 30        # fallback tilt when the phase limit has no IK solution
 GRASP_M = 0.015      # grasp centre above the block centre when lowered (11/26 aims: command top + 20..30 mm grasps)
 SAFE_Z = 0.05        # lowest grasp-centre height along a move between start pose and hover
@@ -338,10 +339,26 @@ def reach(args):
         return None
 
     def set_grip(pct, label):
+        """Move the gripper and hold until it has stopped (closed on the block or fully open). Driver.settle only
+        watches the body joints: 11/26 the arm lifted while the gripper still read ~30 % and dropped blocks."""
         state["grip"] = pct
         move([dict(driver.target) | {"gripper": pct}], ("夾爪", label))
-        driver.settle(0.6)
-        return float(driver.read()["gripper"])
+        began = driver.clock()
+        seen = []
+        while True:
+            t = driver.clock()
+            if driver.stop_requested():          # Esc holds here like every other move
+                driver.hold("operator stop")
+                raise Paused("操作者暫停")
+            _, actual, _ = driver.send(driver.target)
+            g = float(actual["gripper"])
+            seen.append((t, g))
+            seen = [(ts, v) for ts, v in seen if t - ts <= GRIP_STILL_S * 1e9]
+            settled = t - began >= GRIP_MIN_S * 1e9 and t - seen[0][0] >= GRIP_STILL_S * 0.9e9 and \
+                max(v for _, v in seen) - min(v for _, v in seen) < GRIP_STILL_PCT
+            if settled or t - began >= GRIP_MAX_S * 1e9:
+                return g
+            driver.tick(t)
 
     def place():
         """Holding a block at hover: carry it into the next free beige slot, release, rise over the slot."""
@@ -532,7 +549,7 @@ def main(argv=None):
     ap.add_argument("--corr", default="21,-1.3,20",
                     help="command minus target: radial mm, rotation about the base deg (+ towards +y), z mm "
                          "(11/26 aim checks: radial 17-25, rotation -0.6..-2.6)")
-    ap.add_argument("--speed", type=float, default=60.0, help="reach: body joint cap deg/s (collection playback: 45)")
+    ap.add_argument("--speed", type=float, default=75.0, help="reach: body joint cap deg/s (collection playback: 45)")
     ap.add_argument("--out", default=str(ROOT / "outputs/d455"))
     a = ap.parse_args(argv)
     if a.mode == "reach" and not a.route:

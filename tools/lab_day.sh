@@ -37,7 +37,7 @@
 #     pack         ZIP the round into AllenHZL/ and archive the handoff dir (NOTES="path ..." optional)
 #
 # Finals: POSE (D455 pose file, default outputs/d455/pose_261125.json), CORR (reach sag correction: radial mm, rotation deg, z mm),
-# SPEED (reach joint cap deg/s, default 60).
+# SPEED (reach joint cap deg/s, default 75).
 # Settings (environment): LAB_DATE (default today, YYMMDD; session folders), RIG_DATE (day whose routes and tray
 # corners to reuse, default LAB_DATE), SUPPORT (park support description, for `route`),
 # PY (default the conda lerobot python), FOLLOWER_PORT + FOLLOWER_ID (joints / torque with the follower only), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
