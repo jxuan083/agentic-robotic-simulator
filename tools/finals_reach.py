@@ -46,7 +46,11 @@ SAFE_Z = 0.05        # lowest grasp-centre height along a move between start pos
 OPEN_PCT, CLOSED_PCT = 40.0, 8.0
 HELD_PCT = 12.0      # gripper reading above this after closing: a block is between the jaws (held ~16.5 %)
 PLACE_Z = 0.026      # grasp centre (= block centre) height when releasing in the beige tray (bottom ~6 mm above floor)
-SLOTS_MM = [[70, 30], [70, 95], [70, 160], [70, 225]]   # configs/real_slots.json beige, tray-local mm
+# Beige slots, tray-local mm (x from the near inner wall, y towards +Y): the 2 x 2 corner nearest the base and the pink
+# tray, 55 mm apart, nearest first (11/26: the old row's first slot sat 35 mm from the far right rim, r 311 mm, and the
+# block hit the rim). Mount ~ (210,-65) (210,-120) (265,-65) (265,-120) mm with the 11/25 trays.
+SLOTS_MM = [[50, 190], [50, 132], [108, 190], [108, 132]]
+CARRY_Z = 0.11       # grasp-centre height while carrying a block between trays (block bottom ~6 cm over the rims)
 NUDGE_M = 0.005
 
 
@@ -281,12 +285,24 @@ def reach(args):
             return "米盤 4 格都放過了；清空後重開 reach。"
         xy, tray_yaw = slots[state["slot"]]
         top = np.array([xy[0], xy[1], PLACE_Z + HOVER_M])
-        above = pose_for(top + [0, 0, 0.03], tray_yaw, driver.target, "above")
-        over = pose_for(top, tray_yaw, above or driver.target, "place")
-        low = pose_for(np.array([xy[0], xy[1], PLACE_Z]), tray_yaw, over or driver.target, "place")
+        # Straight up to the carry height, across at that height (Cartesian waypoints: a joint-space move between
+        # the trays dips and the block's bottom caught the beige rim), then down into the slot.
+        here = model.ee(driver.target)
+        here = here - corr_at(here)
+        held_yaw = state["aim"]["yaw"] if state["aim"] is not None else tray_yaw
+        path, seed = [], driver.target
+        for k, s_ in enumerate(np.linspace(0, 1, 6)):
+            p_xy = here[:2] + (xy - here[:2]) * s_
+            p = pose_for(np.array([p_xy[0], p_xy[1], CARRY_Z]), tray_yaw if k == 5 else held_yaw, seed, "above")
+            if p is None:
+                return f"搬運路徑第 {k + 1} 點 IK 無解，不移動。"
+            path.append(p)
+            seed = p
+        over = pose_for(top, tray_yaw, seed, "place")
+        low = pose_for(np.array([xy[0], xy[1], PLACE_Z]), tray_yaw, over or seed, "place")
         if over is None or low is None:
             return "格位 IK 無解，不移動。"
-        move(([above] if above is not None else []) + [over, low], ("方塊上方", f"米盤第 {state['slot'] + 1} 格"))
+        move(path + [over, low], ("方塊上方", f"米盤第 {state['slot'] + 1} 格"))
         set_grip(OPEN_PCT, "張開")
         move([over | {"gripper": OPEN_PCT}], ("格位", "格位上方"))
         state["slot"] += 1
