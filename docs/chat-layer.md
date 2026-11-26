@@ -304,6 +304,21 @@ uv run tools/lab.py --web [--stt-model small]     # 一鍵入口改開網頁（�
 
 限制：實機還沒有 D455 到基座的外參，實機上的 `storage_blocks` 位置尚不存在；目前只在模擬（相機盤點或真值）成立。
 
+## 決賽規則：不搬回，只回報（no_return）
+
+依 `docs/real-progress.md`〈決賽策略更動〉：實機手臂只會從粉盤夾到米盤，所以放出去的方塊不會再夾回來。打開方式是同時把 `configs/task.yaml` 與 `configs/chat.yaml` 的 `no_return` 設成 `true`。兩者預設都是 `false`，此時行為與原本相同。
+
+| 情況 | 預設（原本） | `no_return: true` |
+|---|---|---|
+| 多交（改單前已放出） | 從米盤取回粉盤 | 不取回。聊天窗回報「放置盤的紅色比需求多 1 顆，手臂不會夾回。請把多的取走，或改需求把它算進去。」帳本記為多交（`over`） |
+| 改單時夾著用不到的方塊 | 放回原位／放到指定位置／照樣送出 | 照樣送出（`deliver`）／停住等人取下（`hold`）。選 `hold` 後再問一題（`removal`），使用者說「取下了」（`removed`）後才鬆爪繼續 |
+| 米盤沒空位 | 放回原位／放到指定位置 | 直接停住等人取下 |
+| 停住等取下時新需求用得到這顆 | 不適用 | 取消提問，直接送出 |
+
+- 模擬端在 `removed` 時把方塊移出場景（MuJoCo 的 `remove_block`）。Isaac 沒有這個介面，鬆爪後方塊會掉在原地。
+- 打開 `no_return` 時，模型多了 `hold`／`removed` 兩個選項和一行規則，schema 與提示詞會跟量測時不同，上場前要用 `tools/chat_eval.py` 在真模型上重測。關閉時與 `main` 逐字相同（已比對）。
+- 驗收：`configs/tasks/no_return_over_delivery.yaml`、`configs/tasks/no_return_hold.yaml`。原本的 `retrieve_over_delivery`、`hold_return` 不動。測試在 `tests/test_no_return.py`。
+
 ## 相容性（feat/chat-web-ui）
 
 原有入口與行為不變：`tools/chat.py`、`tools/chat_window.py`、`tools/lab.py`（不加 `--web`）照舊；`task_order` 不帶 `pick` 時與原本相同（協定驗證 `server/protocol.py` 允許選填的 `pick`）；`TaskExecutor.view()` 的欄位不變；預設設定下模型的 schema／提示詞與 main 逐字相同。唯一預設開啟的新行為是 `[進度]` 行（`progress_reports: false` 可關）。Python 3.11 全套測試與 main 同樣通過（未裝感知套件的 3 個測試兩邊都失敗）。
