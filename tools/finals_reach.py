@@ -7,7 +7,7 @@
 Mount frame of the right follower: +X forward, +Y left, +Z up, origin on the table below the base. The D455 pose
 comes from --pose (tools/finals_calib.py, arm depth + table plane), the joint map from the follower's own LeRobot
 calibration file (agentic_sim.real_kinematics). The real arm sags a little under gravity, so the reach adds a
-correction --corr (mm, command minus target; from the 11/25 grasp frames) and the operator can nudge the hover;
+correction --corr (radial mm, rotation about the base deg, z mm: command minus target; 11/26 aim checks) and the operator can nudge the hover;
 k logs each aimed block to outputs/d455/aim_checks.jsonl, the data for fitting the correction.
 
 Keys (terminal; the preview window only shows):
@@ -40,7 +40,8 @@ from agentic_sim.real_kinematics import ArmModel, find_calibration  # noqa: E402
 
 HOVER_M = 0.045      # grasp centre above the block centre while hovering (fingertips ~3 cm over the top)
 TILT = {"above": 30.0, "hover": 15.0, "grasp": 8.0, "place": 25.0}   # releasing may tilt: far slots need ~20 deg   # max gripper tilt from vertical (deg) per phase
-GRASP_M = 0.003      # grasp centre above the block centre when lowered
+FAR_TILT = 30        # fallback tilt when the phase limit has no IK solution
+GRASP_M = 0.015      # grasp centre above the block centre when lowered (11/26 aims: command top + 20..30 mm grasps)
 SAFE_Z = 0.05        # lowest grasp-centre height along a move between start pose and hover
 OPEN_PCT, CLOSED_PCT = 40.0, 8.0
 HELD_PCT = 12.0      # gripper reading above this after closing: a block is between the jaws (held ~16.5 %)
@@ -198,7 +199,15 @@ def reach(args):
     park, start, support = data["park"]["pose"], data["channel"]["command"], data["park_support"]
     model = ArmModel.from_file(find_calibration(args.follower_id), ROOT)
     quads = json.loads(Path(args.trays).read_text())["quads"] if args.trays and Path(args.trays).exists() else None
-    corr = np.array([float(c) for c in args.corr.split(",")]) / 1000.0
+    radial_c, tangent_c, z_c = (float(c) for c in args.corr.split(","))
+
+    def corr_at(xyz):
+        """Command minus target: radial (mm) outward, a rotation about the base (deg, + = towards +y), z (mm)."""
+        x, y = float(xyz[0]), float(xyz[1])
+        r = math.hypot(x, y) or 1.0
+        u, v = np.array([x, y]) / r, np.array([-y, x]) / r
+        xy = u * radial_c / 1000 + v * r * math.radians(tangent_c)
+        return np.array([xy[0], xy[1], z_c / 1000])
     live = Live(args.serial, load_pose(args.pose), quads, model)
     win = Window("D455 finals reach")
     log_path = Path(args.out) / "aim_checks.jsonl"
@@ -212,7 +221,10 @@ def reach(args):
         win.show(img)
 
     def pose_for(xyz, block_yaw, seed, phase="hover"):
-        reading, info = model.hover(xyz + corr, block_yaw, seed, TILT[phase])
+        for tilt in (TILT[phase], FAR_TILT):   # far blocks (r > ~0.30 m) need the gripper tilted more
+            reading, info = model.hover(xyz + corr_at(xyz), block_yaw, seed, tilt)
+            if reading is not None:
+                break
         if reading is None:
             return None
         return reading | {"gripper": state["grip"]}
@@ -284,7 +296,7 @@ def reach(args):
     try:
         with Terminal() as term:
             term.say("決賽定位＋手臂對準方塊。確認 follower 在停放位、扭力關、夾爪空、工作區淨空，有人隨時可按 Esc。"
-                     f"\n下垂補償 {args.corr} mm（指令減目標）。")
+                     f"\n下垂補償 {args.corr}（徑向 mm、繞基座 °、z mm；指令減目標）。")
             if term.choose("y 開始（開扭力，走固定路線到起姿）／n 離開", {"y": "開始", "n": "離開"}) != "y":
                 return 0
             with real_devices(args.config, "right", leader=False) as (_, follower, refs, hz):
@@ -335,7 +347,7 @@ def reach(args):
                     elif key == "k" and state["aim"] is not None and state["at"] in ("hover", "low"):
                         rb = driver.read()
                         row = {"t": time.time(), "at": state["at"], "block": state["aim"], "nudge_m": state["nudge"].tolist(),
-                               "corr_m": corr.tolist(), "command": driver.target, "readback": rb,
+                               "corr_m": corr_at([b["x"], b["y"], 0]).tolist(), "corr": args.corr, "command": driver.target, "readback": rb,
                                "ee_command_m": model.ee(driver.target).tolist(), "ee_readback_m": model.ee(rb).tolist(),
                                "pose_file": args.pose, "route": args.route}
                         with log_path.open("a") as fh:
@@ -375,7 +387,7 @@ def reach(args):
                             up = dict(driver.target)
                             ee = model.ee(up)
                             yaw = state["aim"]["yaw"] if state["aim"] is not None else model.radial(ee)
-                            lift = pose_for(ee - corr + [0, 0, 0.05], yaw, up, "above")
+                            lift = pose_for(ee - corr_at(ee) + [0, 0, 0.05], yaw, up, "above")
                             back = [lift] if lift is not None else []
                             move(back + [start | {"gripper": start["gripper"]}], ("方塊上方", "起姿"))
                             state["at"] = "start"
@@ -399,7 +411,9 @@ def main(argv=None):
     ap.add_argument("--follower-id", default="my_awesome_follower_arm")
     ap.add_argument("--config", default=str(ROOT / "outputs/single.local.yaml"))
     ap.add_argument("--route", default=None)
-    ap.add_argument("--corr", default="20,0,20", help="command minus target, mm (gravity sag), x,y,z")
+    ap.add_argument("--corr", default="21,-1.3,20",
+                    help="command minus target: radial mm, rotation about the base deg (+ towards +y), z mm "
+                         "(11/26 aim checks: radial 17-25, rotation -0.6..-2.6)")
     ap.add_argument("--out", default=str(ROOT / "outputs/d455"))
     a = ap.parse_args(argv)
     if a.mode == "reach" and not a.route:
