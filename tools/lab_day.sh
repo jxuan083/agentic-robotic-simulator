@@ -185,6 +185,45 @@ print("torque OFF on all joints" if off else "TORQUE STILL ON OR UNREADABLE — 
 sys.exit(0 if off else 1)
 PYEOF
     ;;
+  joints)
+    # Read-only joint readout for the joint-map check and touch points (writes nothing to the arm, torque stays off).
+    # Each Enter saves the current reading with a typed label to outputs/<date>-joints/samples.jsonl; q quits.
+    mkdir -p "outputs/$DATE-joints"
+    "$PY" - "$CONFIG" "outputs/$DATE-joints/samples.jsonl" <<'PYEOF'
+import json, sys, time
+sys.path.insert(0, "src")
+import numpy as np
+from agentic_sim.config import load
+from agentic_sim.kinematics import So101Chain
+from agentic_sim.real_hardware import check_devices, load_profile, open_follower
+from agentic_sim.real_joints import lerobot_to_shared
+profile = load_profile(sys.argv[1])
+check_devices(profile)
+(arm, pair), = profile["arms"].items()
+chain = So101Chain.from_dict(load("configs/so101_chain.yaml"))
+chain.ee_offset = np.array(load("configs/teleop.yaml")["ee_offset_in_gripper_link"]["value"], float)
+chain.base_pos = np.array([0.0, 0.0, -0.0301])
+names = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
+with open_follower(arm, pair["follower"], managed=True, resume=True) as follower, open(sys.argv[2], "a") as out:
+    if any(follower.torque_states().values()):
+        sys.exit("torque is on: support the arm and run tools/lab_day.sh recover first")
+    print("torque off. Move the arm by hand. Enter = save with a label, q + Enter = quit.")
+    while True:
+        r = follower.read()
+        vals = [float(r[n]) for n in names]
+        q, _ = lerobot_to_shared(vals)
+        ee = chain.ee_pose_mount(np.clip(q, chain.lower, chain.upper))[:3, 3] * 1000
+        print("LeRobot " + " ".join(f"{v:7.1f}" for v in vals) + "   EE(map) mm " + " ".join(f"{v:6.0f}" for v in ee))
+        label = input("label (Enter = next reading, text = save, q = quit): ").strip()
+        if label == "q":
+            break
+        if label:
+            out.write(json.dumps({"t": time.time(), "label": label, "lerobot": dict(zip(names, vals)),
+                                  "ee_map_mm": [round(float(v), 1) for v in ee]}, ensure_ascii=False) + "\n")
+            out.flush()
+            print("saved:", label)
+PYEOF
+    ;;
   status)
     for f in "$ROUTE" "$DROP_BEIGE" "$DROP_PINK"; do [[ -e "$f" ]] && echo "$f ok"; done
     [[ -e "$ROUTE" ]] && "$PY" tools/real_route.py show --route "$ROUTE" | grep -E '"(waypoints|recorded_moving_seconds|reverse_to_park|forward_to_channel)"'
