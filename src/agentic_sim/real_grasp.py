@@ -62,7 +62,10 @@ def lift_and_return(reading, channel, follower_id):
     from pathlib import Path
     from agentic_sim.real_kinematics import ArmModel, find_calibration
 
-    model = ArmModel.from_file(find_calibration(follower_id), Path(__file__).resolve().parents[2])
+    try:
+        model = ArmModel.from_file(find_calibration(follower_id), Path(__file__).resolve().parents[2])
+    except FileNotFoundError:     # no calibration file (rehearsal): the caller falls back to the old way back
+        return None
     now = dict(reading)
     ee = model.ee(now)
     points = [now]
@@ -156,7 +159,8 @@ def grasp_round(driver, leader, data, drops, writer, check_cameras, color):
             "success": outcome == "s" and kept, "demo_frames": demo_frames, "cancelled": not kept}
 
 
-def finalize(root, *, color, destination, success, quads, target_pose=None, slot=None, landed=None, extra=None):
+def finalize(root, *, color, destination, success, quads, target_pose=None, slot=None, landed=None, extra=None,
+             start="park"):
     """Readback, D455 target from the opening frame (fixed trays) and review.json.
 
     Frames: start (first motion), close, lift (first still moment after lifting), and for demonstrated placement
@@ -182,7 +186,7 @@ def finalize(root, *, color, destination, success, quads, target_pose=None, slot
                          "card_pose": None, "actual_pose": None, "d455": target},
               "place_target": slot and {"tray": destination, "slot": slot["index"], "xy_mm": slot["xy"],
                                         "landed_d455": landed},
-              "start_pose": "park"} | (extra or {})
+              "start_pose": start} | (extra or {})
     if {"start", "close", "lift"} <= marks.keys():
         frames = confirmed_frames(episode, {k: marks[k] for k in ("start", "close", "lift")})
         for extra in ("release", "end"):
@@ -203,7 +207,7 @@ def finalize(root, *, color, destination, success, quads, target_pose=None, slot
     manifest["task_card"] = {"color": color, "source_tray": target and target["tray"], "destination": destination,
                              "pose": target and [target["x_mm"], target["y_mm"], target["yaw_deg"]],
                              "slot": slot and slot["index"], "slot_xy": slot and slot["xy"],
-                             "start": "park", "layout_group": None}
+                             "start": start, "layout_group": None}
     manifest["operator_result"] = review["outcome"]
     write_json(root / "manifest.json", manifest)
     write_json(root / "review.json", review | {"review_reasons": report["review_reasons"], "d455_blocks": located})
@@ -257,6 +261,19 @@ def choose_target(term, blocks, color):
     return keys[term.choose(f"有 {len(same)} 顆{color}方塊，要夾哪一顆？{lines}", {k: k for k in keys})]
 
 
+def leader_home_goals(now, channel, route, rest, follower_id):
+    """Driven leader from where the demonstration ended back to its folded rest: straight up and to the start pose
+    (the follower's way back, lift_and_return), then the taught route reversed, ending at the rest pose read before
+    the hand-over (or the route's park pose)."""
+    grip = float(now["gripper"])
+    back = lift_and_return(now, channel, follower_id)
+    goals = list(back.points[1:]) if back is not None else [pose(channel) | {"gripper": grip}]
+    rev = route.reverse()
+    goals += [pose(p) | {"gripper": grip} for p in rev.points[1:-1]]
+    goals.append(pose(rest) if rest is not None else pose(rev.points[-1]))
+    return goals
+
+
 def program_place(driver, placer, slot_mount, label):
     """After a demonstration that ended at a stable lift: carry the held block into the slot with IK
     (agentic_sim.real_place). Returns a dict for the episode result (not recorded as demonstration rows)."""
@@ -299,16 +316,20 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
     if target is None:
         driver.term.say(f"D455 開場畫面沒找到{color}方塊；仍可錄，讀回時再確認。")
     if placer is not None:
-        driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊 → 抬起約 5 cm 停穩，按 c（不用放）。"
-                              f"之後放下 leader，程式會把方塊放進{TRAY_NAME[destination]} P{slot['index']}、回停放位。"
-                              "Esc 暫停；腕部只在 ±30° 內對齊方塊。")
+        driver.demo_prompt = (f"錄製中：從起姿 → 夾起{color}方塊 → 抬起約 5 cm 停穩，按 c（不用放）。"
+                              f"按 c 後 leader 會上扭力定住，手放開；程式把方塊放進{TRAY_NAME[destination]} P{slot['index']}，"
+                              "follower 回停放位後 leader 自動收回。Esc 暫停；腕部只在 ±30° 內對齊方塊。")
     else:
         driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]} P{slot['index']}"
                               "（overlay 圖上的格位：米盤靠基座、靠粉盤的角落，P1 最近；貼近盤面再張爪）→ 抬起退回起姿附近，停穩按 c。"
                               "Esc 暫停；腕部只在 ±30° 內對齊方塊。")
     driver.arm_at(park)
+    if placer is not None:
+        # The demonstration starts at the start pose (ACT learns start -> lift); the fixed route gets there.
+        follow(driver, route, ("停放位", "起姿"))
     if not driver.align_leader(leader, driver.read()):
-        park_and_release(driver, Track([driver.target, park], [0.0]), park, support)
+        park_and_release(driver, route.reverse() if placer is not None else Track([driver.target, park], [0.0]),
+                         park, support)
         return {"cancelled": True, "demo_frames": None}
     back, programmed = None, None
     while True:
@@ -326,7 +347,11 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         if choice == "r" or not driver.align_leader(leader, driver.read()):
             break
     demo_frames = writer.count
+    leader_end = None
     if kept and placer is not None:
+        driver.hold_leader(leader)          # c: the leader holds where the operator left it
+        leader_end = pose(leader.read())
+        driver.term.say("leader 已上扭力定住，手可以放開。")
         programmed = program_place(driver, placer, slot_mount, f"{TRAY_NAME[destination]} P{slot['index']}")
         back = lift_and_return(driver.target, channel, data["calibrations"]["follower"]["id"])
         if back is None:
@@ -342,6 +367,9 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         driver.menu("在起姿保持。若夾爪裡還有方塊請取下，回程淨空後按 r 回停放位", {"r": "回停放位"})
     driver.target = driver.target | {"gripper": channel["gripper"]}
     park_and_release(driver, route.reverse(), park, support)
+    if leader_end is not None:
+        driver.park_leader(leader, leader_home_goals(leader_end, channel, route, driver.leader_rest,
+                                                     data["calibrations"]["follower"]["id"]))
     # Landing is read only now: with the arm folded at park it neither hides the trays nor shades the colour masks.
     final = latest_global(writer) if kept else None
     landed = placed_block(blocks, locate(final, quads)["blocks"], color, destination, slot) if final is not None else None

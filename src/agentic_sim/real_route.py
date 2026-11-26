@@ -175,6 +175,7 @@ class Driver:
         self.drive_leader = drive_leader  # hand-over: drive the leader to the follower pose, then release it
         self.clutch = None        # leader pose at a driven hand-over: teleop maps displacement from here
         self.leader_route = None  # park -> start Track: a folded leader is driven along it, not straight
+        self.leader_rest = None   # the leader's own folded pose, read before it is driven out (its way home ends here)
         self.on_send = None       # episode recorder hook: (command, readback) after each follower command
         self.clock = clock
         self.wait = wait
@@ -462,6 +463,10 @@ class Driver:
             if choice == "m":
                 return self._manual_align(leader, reference)
             self._leader = leader
+            start = pose(leader.read())
+            route = self.leader_route
+            if route is not None and body_gap(start, route.points[0]) <= LEADER_ROUTE_NEAR:
+                self.leader_rest = start
             leader.drive_on()
             self.event("leader_torque_on", leader=pose(leader.read()), follower=reference)
             try:
@@ -503,9 +508,28 @@ class Driver:
         goals.append(pose(reference))
         return goals
 
-    def _drive_leader(self, leader, reference):
+    def hold_leader(self, leader):
+        """Torque the leader on where it is (end of a demonstration): the operator lets go and it does not drop."""
+        self._leader = leader
+        leader.drive_on()
+        self.event("leader_hold", leader=pose(leader.read()))
+
+    def park_leader(self, leader, goals):
+        """Drive a held leader along goals (the last one: its folded rest pose) and release it there. Returns
+        True when it arrived; otherwise it holds until the operator supports it, then releases."""
+        self._leader = leader
+        outcome = self._drive_leader(leader, goals[-1], goals=[dict(g) for g in goals])
+        if outcome == "arrived":
+            self._release_leader("rest")
+            return True
+        notes = {"esc": "已暫停", "stall": "leader 被擋住或卡住", "short": "leader 沒回到收折位"}
+        self.term.say(f"{notes.get(outcome, outcome)}，leader 原地保持中。")
+        self._release_leader_supported()
+        return False
+
+    def _drive_leader(self, leader, reference, goals=None):
         goal = pose(leader.read())
-        goals = self._leader_goals(goal, reference)
+        goals = goals or self._leader_goals(goal, reference)
         self.event("leader_drive_plan", waypoints=len(goals), via_route=len(goals) > 2)
         stall_since = reached_at = None
         next_status = 0

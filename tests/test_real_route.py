@@ -510,6 +510,49 @@ class PickPlaceRoundCase(RouteCase):
         at_start = next(i for i in range(turned, len(sent)) if body_gap(sent[i], CHANNEL) < 1.0)
         self.assertLess(turned, at_start)                     # the wrist is back before the route to park starts
 
+    def test_program_place_round_hands_over_at_the_start_pose_and_parks_the_leader(self):
+        from agentic_sim.real_grasp import pick_place_round
+        from agentic_sim.real_route import follow
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        lift = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 15, "elbow_flex": CHANNEL["elbow_flex"] - 8,
+                                "gripper": 17.0}
+        d = lambda pose_: {j: pose_[j] - CHANNEL[j] for j in CHANNEL}  # noqa: E731  (after the hand-over at the start)
+        moves = [(0.5, dict.fromkeys(CHANNEL, 0.0)), (4.0, d(lift))]
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        rest = dict(PARK) | {"shoulder_pan": PARK["shoulder_pan"] + 2.0, "gripper": 1.0}   # the leader's own fold
+        leader = FakeDrivenLeader(clock, rest, moves)
+        term = ScriptedTerminal(clock, [(30.0, "c")], ("a", "y", "s"))
+        driver = self.driver(follower, term, clock, "program-place")
+        placed = []
+
+        class StubPlacer:
+            def carry_and_place(self, xy, yaw, held, label, grip):
+                placed.append((xy, label, grip))
+                follow(driver, Track([dict(driver.target), dict(driver.target) | {"shoulder_pan": 30.0}], [0.0]),
+                       ("方塊上方", label))
+                return None
+
+        writer = FakeWriter(clock)
+        result = pick_place_round(driver, leader, data, writer, lambda: None, color="red", destination="beige",
+                                  slot={"index": 2, "xy": [50, 132]}, quads=None,
+                                  placer=StubPlacer(), slot_mount=((0.21, -0.12), 0.0))
+        driver.close_logs()
+        self.assert_released_at_park(follower)
+        self.assertTrue(result["success"])
+        self.assertEqual(len(placed), 1)                                   # the program placed the held block
+        self.assertTrue(result["program_place"]["held"])
+        first = writer.rows[0]["arms"]["right"]["readback"]
+        self.assertLess(body_gap(first, CHANNEL), 5.0)                     # the demo starts at the start pose
+        last = writer.rows[-1]["arms"]["right"]["readback"]
+        self.assertLess(body_gap(last, lift), 6.0)                         # ... and ends at the lift (c)
+        kinds = [k for k, _ in leader.log]
+        self.assertEqual(kinds, ["on", "off", "on", "off"])                # hand-over, then held at c and parked
+        self.assertLess(body_gap(leader.goal, rest), 1e-6)                 # driven home to its own fold
+
     def test_round_chooser_sets_the_colour_and_cancels_on_an_empty_tray(self):
         from agentic_sim.real_grasp import pick_place_round
         from agentic_sim.real_route_fake import FakeDrivenLeader

@@ -135,7 +135,8 @@ def fake_devices(*, leader, resume=False):
 
 
 @contextmanager
-def episode_capture(root, config, arm, refs, hz, layout):
+def episode_capture(root, config, arm, refs, hz, layout, *, tool="tools/real_route.py grasp", start_pose="park",
+                    mapping="driven hand-over, relative"):
     """Cameras + episode writer for one park-start grasp demonstration (same files as the collection desk)."""
     from threading import Event
 
@@ -158,8 +159,7 @@ def episode_capture(root, config, arm, refs, hz, layout):
                     time.sleep(1)
             cameras[name] = {k: v for k, v in spec.items() if k not in ("device", "depth")} | info
         writer = EpisodeWriter(root, source="real", arms={arm: refs}, cameras=cameras,
-                               provenance=provenance("tools/real_route.py grasp") | {"start_pose": "park",
-                                                                                     "leader_mapping": "driven hand-over, relative"},
+                               provenance=provenance(tool) | {"start_pose": start_pose, "leader_mapping": mapping},
                                hz=hz, layout=layout)
         stopped = Event()
         workers = [CameraWorker(name, profile["cameras"][name], streams[name], writer, stopped) for name in cameras]
@@ -300,7 +300,8 @@ def grasp_session(driver, hand, data, args, refs, hz):
             term.say(f"放置：{TRAY_NAME[destination]}第 {slot['index']} 個位置，照固定順序接在上一顆旁邊"
                      f"（參考 x {slot['xy'][0]}, y {slot['xy'][1]} mm；落點由 D455 在停放位量）。")
         root = episodes / f"P{number:04}"
-        with episode_capture(root, args.config, args.arm, refs, hz, data["layout_id"]) as (writer, check):
+        with episode_capture(root, args.config, args.arm, refs, hz, data["layout_id"],
+                             start_pose="start" if placer else "park") as (writer, check):
             if args.auto_place:
                 result = grasp_round(driver, hand, data, drops, writer, check, color)
             else:
@@ -330,7 +331,8 @@ def grasp_session(driver, hand, data, args, refs, hz):
                                   success=result.get("success"), quads=quads,
                                   target_pose=choice and (choice["x_mm"], choice["y_mm"]),
                                   slot=None if args.auto_place else slot, landed=result.get("landed"),
-                                  extra=round_info and {"round": round_info, "scene": result["scene"]})
+                                  extra=round_info and {"round": round_info, "scene": result["scene"]},
+                                  start="start" if placer else "park")   # program place: hand-over at the start pose
         target = review["target"]["d455"]
         line = {"episode": root.name, "color": color, "result": result, "ok": report["ok"],
                 "target": target and {k: target[k] for k in ("tray", "x_mm", "y_mm", "yaw_deg")},
