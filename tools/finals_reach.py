@@ -39,7 +39,7 @@ from agentic_sim.real_d455 import EDGE_M, Camera, detect, draw, open_aligned  # 
 from agentic_sim.real_kinematics import ArmModel, find_calibration  # noqa: E402
 
 HOVER_M = 0.045      # grasp centre above the block centre while hovering (fingertips ~3 cm over the top)
-TILT = {"above": 30.0, "hover": 15.0, "grasp": 8.0}   # max gripper tilt from vertical (deg) per phase
+TILT = {"above": 30.0, "hover": 15.0, "grasp": 8.0, "place": 25.0}   # releasing may tilt: far slots need ~20 deg   # max gripper tilt from vertical (deg) per phase
 GRASP_M = 0.003      # grasp centre above the block centre when lowered
 SAFE_Z = 0.05        # lowest grasp-centre height along a move between start pose and hover
 OPEN_PCT, CLOSED_PCT = 40.0, 8.0
@@ -263,8 +263,8 @@ def reach(args):
         xy, tray_yaw = slots[state["slot"]]
         top = np.array([xy[0], xy[1], PLACE_Z + HOVER_M])
         above = pose_for(top + [0, 0, 0.03], tray_yaw, driver.target, "above")
-        over = pose_for(top, tray_yaw, above or driver.target)
-        low = pose_for(np.array([xy[0], xy[1], PLACE_Z]), tray_yaw, over or driver.target, "grasp")
+        over = pose_for(top, tray_yaw, above or driver.target, "place")
+        low = pose_for(np.array([xy[0], xy[1], PLACE_Z]), tray_yaw, over or driver.target, "place")
         if over is None or low is None:
             return "格位 IK 無解，不移動。"
         move(([above] if above is not None else []) + [over, low], ("方塊上方", f"米盤第 {state['slot'] + 1} 格"))
