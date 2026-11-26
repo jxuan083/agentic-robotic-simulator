@@ -7,7 +7,7 @@ from agentic_sim.task.pick_ref import REF_ZH
 NUM = {0: "零", 1: "一", 2: "兩", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九", 10: "十"}
 ORD = {**NUM, 2: "二"}   # ordinals: 第二顆, not 第兩顆
 CHOICE_ZH = {"return": "放回原位", "place_at": "放到指定位置", "deliver": "照樣送出", "substitute": "換成其他顏色",
-             "reduce": "減少數量", "wait": "等補料"}
+             "reduce": "減少數量", "wait": "等補料", "hold": "停住等你取下", "removed": "已取下"}
 
 
 def report_line(line: str) -> str:
@@ -40,6 +40,12 @@ class Words:
     # ---- questions -------------------------------------------------------------------------------
     def question(self, q: dict) -> str:
         k = q.get("qkind") or q.get("kind")     # an event carries the question kind as qkind
+        if k == "held_item" and "hold" in q.get("options", []):
+            return (f"手上的{self.color(q['color'])}積木，新的需求用不到。手臂不會放回粉盤：要照樣送出，"
+                    f"還是停在這裡等你取下？（問題 {q['id']}）")
+        if k == "removal":
+            return (f"手臂夾著{self.color(q['color'])}積木停住了，請從夾爪取下，取下後跟我說「取下了」。"
+                    f"（問題 {q['id']}）")
         if k == "held_item":
             if "deliver" in q.get("options", []):
                 return (f"手上的{self.color(q['color'])}積木，新的需求用不到。要放回原位、放到其他位置，還是照樣送出？"
@@ -67,9 +73,14 @@ class Words:
             return self.question(e)
         if k == "observation_unclear":
             return f"看不清來源盤（{e.get('reason') or '視野受遮擋或身分不明'}），先繼續觀測，不提問。"
+        if k == "block_removed":
+            return f"好，{self.color(e['color'])}積木已取下，手臂放開夾爪繼續。"
         if k == "question_dropped":
             return f"問題 {e['id']} 已取消：新的需求已經用得到手上的積木，會直接送出。"
         if k == "over_delivery":
+            if e.get("over", 0) > 0 and e.get("action") == "left_for_operator":
+                return (f"放置盤的{self.color(e['color'])}比需求多 {e['over']} 顆，手臂不會夾回。"
+                        f"請把多的取走，或改需求把它算進去。")
             if e.get("over", 0) > 0:
                 return f"{self.color(e['color'])}多交了 {e['over']} 顆，會從放置盤取回來源盤。"
             return f"{self.color(e['color'])}比需求多 {e['delivered'] - e['target']} 顆（你同意送出的），不取回。"

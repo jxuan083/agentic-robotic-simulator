@@ -25,6 +25,7 @@ from agentic_sim.task.pick_ref import REF_ZH, REFS, resolve
 
 INTENTS = ("order_total", "order_add", "order_set", "order_pick", "answer", "status", "clarify", "reject", "stop")
 CHOICES = ("return", "place_at", "deliver", "substitute", "reduce", "wait")
+NO_RETURN_CHOICES = ("hold", "removed")     # configs/chat.yaml no_return (the executor's task.yaml no_return)
 
 
 PICK_RULE = """- order_pick：用位置指定某一顆積木（「我要左上角那顆紅色」「拿最左邊的藍色」「離手臂最近的那顆黃的」）。items 只放那個顏色、數量 1，pick_ref 填位置：
@@ -33,10 +34,16 @@ PICK_RULE = """- order_pick：用位置指定某一顆積木（「我要左上�
 """
 
 
-def schema(palette: list, max_count: int, pick: bool = False) -> dict:
-    """pick: also the order_pick intent and its pick_ref field (configs/chat.yaml pick_by_position). Off, the schema is
-    the one the utterance table was measured with."""
+NO_RETURN_RULE = """  hold＝停住等人取下／先拿著不要動，removed＝已經取下／拿走了。
+"""
+
+
+def schema(palette: list, max_count: int, pick: bool = False, no_return: bool = False) -> dict:
+    """pick: also the order_pick intent and its pick_ref field (configs/chat.yaml pick_by_position). no_return: also
+    the hold / removed answers. Both off, the schema is the one the utterance table was measured with."""
     s = _schema(palette, max_count)
+    if no_return:
+        s["properties"]["choice"]["anyOf"][0]["enum"] += list(NO_RETURN_CHOICES)
     if not pick:
         s["properties"]["intent"]["enum"].remove("order_pick")
         del s["properties"]["pick_ref"]
@@ -69,11 +76,14 @@ def _schema(palette: list, max_count: int) -> dict:
     }
 
 
-def system_prompt(colors_cfg: dict, max_count: int, pick: bool = False) -> str:
-    """pick: add the order_pick rule (configs/chat.yaml pick_by_position); off, the prompt is the measured one."""
+def system_prompt(colors_cfg: dict, max_count: int, pick: bool = False, no_return: bool = False) -> str:
+    """pick: add the order_pick rule (configs/chat.yaml pick_by_position); no_return: the hold / removed answers. Both
+    off, the prompt is the measured one."""
     p = _system_prompt(colors_cfg, max_count)
     if not pick:
         p = p.replace(PICK_RULE, "")
+    if not no_return:
+        p = p.replace(NO_RETURN_RULE, "")
     return p
 
 
@@ -95,7 +105,7 @@ intent 規則：
 - answer：回答系統目前的問題。question_id 填目前問題的 id，choice 從該問題的 options 選：
   return＝放回原位／放回去，place_at＝放到指定位置（要有座標 xy，單位公尺；沒有座標就 clarify），deliver＝照樣送出／還是放進去，
   substitute＝換成別的顏色（substitute_color 填顏色），reduce＝減少數量／不用補了，wait＝等補料。
-- status：詢問進度、數量、狀態（「現在做到哪」「還差幾顆」）。
+{NO_RETURN_RULE}- status：詢問進度、數量、狀態（「現在做到哪」「還差幾顆」）。
 - clarify：意思不清楚、顏色或數量不確定時反問，reply 寫一句繁體中文的問題。「幾顆」「一些」「多一點」沒有說數字，就是數量不確定。數量照使用者說的填，不要自己改小。
 - reject：不是任務需求或系統做不到（例如直接控制手臂往哪裡移動、不在色票裡的顏色、超過 {max_count} 顆），reply 寫一句繁體中文的說明。
 - stop：要求立刻停止、急停、暫停手臂。
