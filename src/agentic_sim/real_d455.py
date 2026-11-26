@@ -22,7 +22,7 @@ import numpy as np
 
 EDGE_M = 0.0295
 TOP_MIN = 0.026              # above the beige rim (~23 mm), below a block lying on the table (29.5 mm)
-TOP_MAX = 0.075
+TOP_MAX = 0.045              # one block (29.5 mm) on a tray floor; grippers / hands above are not blocks
 TOP_BAND = 0.008
 SPLIT_M = 0.048             # a same-colour part longer than this is two or more touching blocks
 SIDE_M = (0.016, 0.042)      # accepted rectangle sides  # 16: far, dark (blue) tops lose ~8 mm to depth edge smoothing
@@ -34,6 +34,7 @@ COLOR_REF = {   # D455 median HSV, 11/26 night light: mean of the pink- and beig
     "dark_green": (52, 143, 113), "cyan": (89, 196, 150), "blue": (100, 255, 160), "purple": (136, 78, 148),
 }
 MIN_SAT = 40
+MIN_VAL = 45
 COLOR_TOL = 1.0
 LABEL = {"red": (40, 40, 230), "orange": (20, 130, 255), "yellow": (30, 210, 230), "light_green": (60, 220, 160),
          "dark_green": (40, 120, 30), "cyan": (200, 200, 40), "blue": (230, 120, 30), "purple": (180, 60, 140),
@@ -49,8 +50,8 @@ def classify(hsv):
         d = math.sqrt((dh * min(1.0, s / 90.0)) ** 2 + ((s - rs) / 90.0) ** 2 + ((v - rv) / 110.0) ** 2)
         if d < best[1]:
             best = (name, d)
-    if s < MIN_SAT:                 # grey / white (rims, the arm): the palette's least saturated, purple, is S 65+
-        return ("unknown", best[1])
+    if s < MIN_SAT or v < MIN_VAL:  # grey / white (rims, the arm) or black (grippers, cables, shadow):
+        return ("unknown", best[1])  # the palette's least saturated (purple) is S 65+, darkest (dark green) V 99+
     return best if best[1] <= COLOR_TOL else ("unknown", best[1])
 
 
@@ -206,6 +207,10 @@ def detect(bgr, depth_m, cam: Camera, quads=None):
                              "why": f"size {w * 1000:.0f}x{h * 1000:.0f} mm"})
             return
         u0, v0 = cam.project([[cx, cy, top + table_z]])[0]
+        if name == "unknown":        # block-sized but not a block colour: shown as rejected, never selectable
+            rejected.append({"color": "unknown", "pixel": [float(u0), float(v0)],
+                             "why": f"colour HSV {[int(x) for x in med]}"})
+            return
         yaw_e = edge_yaw(bgr_f, cam, [cx, cy, top + table_z], med)
         yaw = yaw_e if yaw_e is not None else math.radians(ang) % (math.pi / 2)
         tray = next((t for t, r in regions.items() if r[min(max(int(v0), 0), r.shape[0] - 1),
