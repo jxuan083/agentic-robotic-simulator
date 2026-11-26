@@ -135,11 +135,26 @@ class Placer:
         """Holding a block: straight up to the carry height, across on Cartesian waypoints (a joint-space move
         between the trays dips and caught the beige rim on 11/26), down into the slot, open, rise over the slot.
         Returns an error string (nothing moved) or None."""
+        plan = self.plan_place(xy, tray_yaw, held_yaw, grip, self.driver.target)
+        if isinstance(plan, str):
+            return plan
+        self.execute_place(plan, label)
+        return None
+
+    def execute_place(self, plan, label):
+        path, over, low = plan
+        self.move(path + [over, low], ("方塊上方", label))
+        self.set_grip(OPEN_PCT, "張開")
+        self.move([over | {"gripper": OPEN_PCT}], ("格位", "格位上方"))
+
+    def plan_place(self, xy, tray_yaw, held_yaw, grip, current):
+        """IK only (no motion, no bus access; safe in a thread): (path, over, low) from the current command, or an
+        error string."""
         xy = np.asarray(xy, float)
         top = np.array([xy[0], xy[1], PLACE_Z + HOVER_M])
-        here = self.model.ee(self.driver.target)
+        here = self.model.ee(current)
         here = here - self.corr_at(here)
-        path, seed = [], self.driver.target
+        path, seed = [], dict(current)
         for k, s_ in enumerate(np.linspace(0, 1, 6)):
             p_xy = here[:2] + (xy - here[:2]) * s_
             p = None
@@ -155,7 +170,27 @@ class Placer:
         low = self.pose_for([xy[0], xy[1], PLACE_Z], tray_yaw, over or seed, "place", grip)
         if over is None or low is None:
             return "格位 IK 無解，不移動。"
-        self.move(path + [over, low], ("方塊上方", label))
-        self.set_grip(OPEN_PCT, "張開")
-        self.move([over | {"gripper": OPEN_PCT}], ("格位", "格位上方"))
-        return None
+        return path, over, low
+
+
+def hold_while(driver, fn):
+    """Run fn (IK planning, leader bus writes) in a thread while the follower keeps sending its current command, so
+    an episode recorder on driver.on_send sees no gap (control rows every period). Returns fn's result."""
+    import threading
+    out = {}
+
+    def work():
+        try:
+            out["value"] = fn()
+        except BaseException as error:  # noqa: BLE001 - re-raised in the caller's thread
+            out["error"] = error
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    while thread.is_alive():
+        began = driver.clock()
+        driver.send(driver.target)
+        driver.tick(began)
+    thread.join()
+    if "error" in out:
+        raise out["error"]
+    return out.get("value")

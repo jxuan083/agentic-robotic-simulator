@@ -530,11 +530,17 @@ class PickPlaceRoundCase(RouteCase):
         placed = []
 
         class StubPlacer:
-            def carry_and_place(self, xy, yaw, held, label, grip):
-                placed.append((xy, label, grip))
-                follow(driver, Track([dict(driver.target), dict(driver.target) | {"shoulder_pan": 30.0}], [0.0]),
-                       ("方塊上方", label))
-                return None
+            def plan_place(self, xy, yaw, held, grip, current):
+                import time as _time
+                _time.sleep(0.05)                    # IK wall time: the follower keeps sending meanwhile
+                return [dict(current) | {"shoulder_pan": 30.0}], dict(current) | {"shoulder_pan": 30.0}, \
+                    dict(current) | {"shoulder_pan": 30.0, "gripper": grip}
+
+            def execute_place(self, plan, label):
+                placed.append(label)
+                path, over, low = plan
+                follow(driver, Track([dict(driver.target), *path, low, low | {"gripper": 40.0}, over | {"gripper": 40.0}],
+                                     [0.0] * 4), ("方塊上方", label))
 
         writer = FakeWriter(clock)
         result = pick_place_round(driver, leader, data, writer, lambda: None, color="red", destination="beige",
@@ -547,8 +553,14 @@ class PickPlaceRoundCase(RouteCase):
         self.assertTrue(result["program_place"]["held"])
         first = writer.rows[0]["arms"]["right"]["readback"]
         self.assertLess(body_gap(first, CHANNEL), 5.0)                     # the demo starts at the start pose
-        last = writer.rows[-1]["arms"]["right"]["readback"]
-        self.assertLess(body_gap(last, lift), 6.0)                         # ... and ends at the lift (c)
+        sources = [r["command_source"] for r in writer.rows]
+        k = sources.index("script")
+        self.assertEqual(result["demo_frames"], k)                         # people up to c ...
+        self.assertTrue(all(src == "manual" for src in sources[:k]) and all(src == "script" for src in sources[k:]))
+        self.assertLess(body_gap(writer.rows[k - 1]["arms"]["right"]["readback"], lift), 6.0)   # ... c at the lift
+        stamps = [r["timestamp_ns"] for r in writer.rows]
+        self.assertLess(max(b - a for a, b in zip(stamps, stamps[1:])), 1.5e9 / 60)          # no gap at the switch
+        self.assertEqual(writer.rows[-1]["arms"]["right"]["command"]["gripper"], 40.0)       # ... through the release
         kinds = [k for k, _ in leader.log]
         self.assertEqual(kinds, ["on", "off", "on", "off"])                # hand-over, then held at c and parked
         self.assertLess(body_gap(leader.goal, rest), 1e-6)                 # driven home to its own fold

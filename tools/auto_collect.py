@@ -11,8 +11,9 @@ Per episode (the follower parks in between, like the human rounds):
   2. The episode recording opens; the fixed route takes the follower to the start pose (not recorded, as for people).
   3. Recorded, command_source "script": start pose -> over the block (half of the episodes first over a point
      offset by up to 10 mm / 10 deg, then corrected: recovery data) -> grasp height -> close (until the gripper stops)
-     -> lift 5 cm and hold 0.5 s. That is the part ACT learns (start -> lift).
-  4. Not recorded: carry into the next beige slot (P1-P4), release, straight up, start pose, park.
+     -> lift 5 cm and hold 0.5 s (the grasp segment ACT learns) -> carry into the next beige slot (P1-P4), release,
+     rise over the slot (the place segment; VLA learns the whole episode).
+  4. Not recorded: straight up, start pose, park.
   5. review.json as for the human rounds (start "start", D455 target from the opening frame, training range up to the
      lift); success = the gripper held after the lift and the D455 sees the block in the beige tray at park.
      Failures move to <session>-rejected/ and the loop waits for the operator.
@@ -38,7 +39,7 @@ import numpy as np  # noqa: E402
 
 from agentic_sim.real_place import (  # noqa: E402
     CARRY_Z, CLOSED_PCT, EDGE_M, GRASP_M, HELD_PCT, HOVER_M, OPEN_PCT, Placer, beige_slots, camera_from_pose,
-    make_corr,
+    hold_while, make_corr,
 )
 
 LIFT_M = 0.05            # recorded lift above the grasp height (the human prompt: about 5 cm)
@@ -310,17 +311,23 @@ def run(args):
                                                                                  "task_is_policy": 1})
                     driver.play_speed = RECORD_SPEED
                     driver.on_send = on_send
+                    place_err = None
                     try:
                         held, err = eps.grasp(target, perturb)
+                        demo_frames = writer.count          # start -> lift (the grasp segment)
+                        ok_hold = held is not None and held >= HELD_PCT
+                        if ok_hold:                         # recorded on to the rise over the slot, like the demos
+                            xy, yaw = slots[slot_k]
+                            current = dict(driver.target)
+                            plan = hold_while(driver, lambda: placer.plan_place(xy, yaw, yaw, CLOSED_PCT, current))
+                            if isinstance(plan, str):
+                                place_err = plan
+                            else:
+                                placer.execute_place(plan, f"米盤 P{slot_k + 1}")
                     finally:
                         driver.on_send = None
                         driver.play_speed = MOVE_SPEED
-                    demo_frames = writer.count
-                    ok_hold = held is not None and held >= HELD_PCT
-                    place_err = None
                     if ok_hold:
-                        xy, yaw = slots[slot_k]
-                        place_err = eps.place(xy, yaw, f"米盤 P{slot_k + 1}")
                         if place_err:   # still holding: never open on the way home
                             term.choose(f"程式放置沒有執行（{place_err}）。扶住夾爪裡的方塊後按 o 張爪",
                                         {"o": "張爪"})

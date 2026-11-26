@@ -3,6 +3,9 @@
   park (torque on, small reseat) -> leader handed over at park ->
   [record: unfold, approach, close, lift, carry, place in the chosen slot, open, lift] c ->
   (straight up to 12 cm when c is pressed away from the start pose) start pose -> park -> torque off
+With --program-place (lab_day grasp default since 11/26): the follower takes the route to the start pose, hand-over
+there, [record "manual": start -> grasp -> stable lift] c [record "script": programmed carry into the slot, open,
+rise over the slot] -> start pose -> park; the leader holds at c and is driven home.
 
 The demonstration covers the whole pick and place (no scripted detour back to the start pose before placing).
 Cameras run for the whole round: the opening global frame shows the untouched layout and gives the target
@@ -275,18 +278,35 @@ def leader_home_goals(now, channel, route, rest, follower_id):
     return goals
 
 
+def script_recorder(writer, check_cameras):
+    """driver.on_send hook for programmed motion inside an episode: rows tagged command_source "script"."""
+    rows = [0]
+
+    def on_send(sent, actual):
+        rows[0] += 1
+        if rows[0] % 15 == 0:
+            check_cameras()
+        writer.add_control(control_row(writer, sent, actual) | {"command_source": "script", "task_is_policy": 1})
+    return on_send
+
+
 def program_place(driver, placer, slot_mount, label):
     """After a demonstration that ended at a stable lift: carry the held block into the slot with IK
-    (agentic_sim.real_place). Returns a dict for the episode result (not recorded as demonstration rows)."""
-    from agentic_sim.real_place import HELD_PCT
+    (agentic_sim.real_place), open, rise over the slot. With a recorder on driver.on_send these are the episode's
+    "script" rows (the IK is planned while the follower keeps sending, so the rows have no gap)."""
+    from agentic_sim.real_place import HELD_PCT, hold_while
     grip = float(driver.read()["gripper"])
     if grip < HELD_PCT:
         driver.term.say(f"夾爪讀數 {grip:.1f}%：像是空爪，不放置，直接回起姿。")
         return {"held": False, "gripper_pct": round(grip, 1)}
     xy, yaw = slot_mount
-    err = placer.carry_and_place(xy, yaw, yaw, label, driver.target["gripper"])
+    current = dict(driver.target)
+    plan = hold_while(driver, lambda: placer.plan_place(xy, yaw, yaw, current["gripper"], current))
+    err = plan if isinstance(plan, str) else None
     if err:
         driver.term.say(f"程式放置沒有執行：{err}")
+    else:
+        placer.execute_place(plan, label)
     return {"held": True, "gripper_pct": round(grip, 1), "slot_mount_m": [round(float(v), 4) for v in xy],
             "error": err}
 
@@ -350,10 +370,19 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
     demo_frames = writer.count
     leader_end = None
     if kept and placer is not None:
-        driver.hold_leader(leader)          # c: the leader holds where the operator left it
-        leader_end = pose(leader.read())
-        driver.term.say("leader 已上扭力定住，手可以放開。")
-        programmed = program_place(driver, placer, slot_mount, f"{TRAY_NAME[destination]} P{slot['index']}")
+        # The recording goes on through the programmed placing (rows "script") up to the rise over the slot.
+        from agentic_sim.real_place import hold_while
+
+        def hold():                      # c: the leader holds where the operator left it
+            driver.hold_leader(leader)
+            return pose(leader.read())
+        driver.on_send = script_recorder(writer, check_cameras)
+        try:
+            leader_end = hold_while(driver, hold)
+            driver.term.say("leader 已上扭力定住，手可以放開。")
+            programmed = program_place(driver, placer, slot_mount, f"{TRAY_NAME[destination]} P{slot['index']}")
+        finally:
+            driver.on_send = None
         back = lift_and_return(driver.target, channel, data["calibrations"]["follower"]["id"])
         if back is None:
             driver.term.say("從這裡回起姿的路徑算不出來，改沿示範路徑退回。")
