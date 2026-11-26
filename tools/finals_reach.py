@@ -14,6 +14,8 @@ Keys (terminal; the preview window only shows):
   1-9  choose a block           g  go over it (hover)         w/s a/d r/f  nudge +x/-x +y/-y +z/-z by 5 mm
   l    lower to grasp height     c  close the gripper          o  open the gripper        u  up to hover
   k    log the aim check         b  back to the start pose     q  back to park, release torque, quit
+  p    holding a block over its tray: carry it into the next beige slot, release, rise
+  a    automatic pick and place of the chosen block (g, l, c, u, grip check, p, b); stops on a miss
   Esc  pause (route menu)
 """
 
@@ -41,6 +43,9 @@ TILT = {"above": 30.0, "hover": 15.0, "grasp": 8.0}   # max gripper tilt from ve
 GRASP_M = 0.003      # grasp centre above the block centre when lowered
 SAFE_Z = 0.05        # lowest grasp-centre height along a move between start pose and hover
 OPEN_PCT, CLOSED_PCT = 40.0, 8.0
+HELD_PCT = 12.0      # gripper reading above this after closing: a block is between the jaws (held ~16.5 %)
+PLACE_Z = 0.026      # grasp centre (= block centre) height when releasing in the beige tray (bottom ~6 mm above floor)
+SLOTS_MM = [[70, 30], [70, 95], [70, 160], [70, 225]]   # configs/real_slots.json beige, tray-local mm
 NUDGE_M = 0.005
 
 
@@ -122,6 +127,19 @@ class Window:
         self.root.update()
 
 
+def beige_slots(cam, quads):
+    """Beige slots in the mount frame and the tray's x axis direction (rad), from the tray corners."""
+    import cv2
+    from agentic_sim.real_locate import tray_homography
+    quad = np.asarray(quads["beige"], np.float32)
+    Hinv = np.linalg.inv(tray_homography(quad, "beige"))
+    pts = cv2.perspectiveTransform(np.asarray(SLOTS_MM, np.float32).reshape(-1, 1, 2), Hinv).reshape(-1, 2)
+    xy = cam.on_plane(pts, 0.023)[:, :2]
+    c = cam.on_plane(quad, 0.023)[:, :2]
+    yaw = math.atan2(c[1, 1] - c[0, 1], c[1, 0] - c[0, 0])
+    return [(p, yaw) for p in xy]
+
+
 def load_pose(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -178,7 +196,8 @@ def reach(args):
     win = Window("D455 finals reach")
     log_path = Path(args.out) / "aim_checks.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    state = {"block": None, "nudge": np.zeros(3), "at": "park", "aim": None, "grip": start["gripper"]}
+    state = {"block": None, "nudge": np.zeros(3), "at": "park", "aim": None, "grip": start["gripper"], "slot": 0}
+    slots = beige_slots(live.cam, quads) if quads and "beige" in quads else []
 
     def refresh(*_):
         with live.lock:
@@ -201,6 +220,59 @@ def reach(args):
     def move(points, label):
         follow(driver, Track([dict(driver.target), *points], [0.0] * len(points)), (label[0], label[1]))
         live.arm_xyz = model.ee(driver.target)
+
+    def block_z(h):
+        b = state["aim"]
+        return np.array([b["x"], b["y"], b["z_top"] - EDGE_M / 2 + h])
+
+    def go_hover():
+        b = state["aim"]
+        target = block_z(HOVER_M) + state["nudge"]
+        state["grip"] = OPEN_PCT
+        above = pose_for(target + [0, 0, 0.05], b["yaw"], driver.target, "above")
+        hover = pose_for(target, b["yaw"], above or driver.target)
+        if hover is None:
+            return "IK 無解（超出可達範圍，夾爪要傾斜超過 15°），不移動。"
+        via = [above] if above is not None and state["at"] == "start" else []
+        if state["at"] == "start" and not path_ok(driver.target, (via or [hover])[0]):
+            return "起姿到方塊上方的路徑太低，不移動。"
+        move(via + [hover], ("目前位置", "方塊上方"))
+        state["at"] = "hover"
+        return None
+
+    def go_level(h, phase, at, label):
+        p = pose_for(block_z(h) + state["nudge"] * [1, 1, 0], state["aim"]["yaw"], driver.target, phase)
+        if p is None:
+            return "IK 無解，不移動。"
+        move([p], label)
+        state["at"] = at
+        return None
+
+    def set_grip(pct, label):
+        state["grip"] = pct
+        move([dict(driver.target) | {"gripper": pct}], ("夾爪", label))
+        driver.settle(0.6)
+        return float(driver.read()["gripper"])
+
+    def place():
+        """Holding a block at hover: carry it into the next free beige slot, release, rise over the slot."""
+        if not slots:
+            return "沒有米盤盤角（--trays），不能放。"
+        if state["slot"] >= len(slots):
+            return "米盤 4 格都放過了；清空後重開 reach。"
+        xy, tray_yaw = slots[state["slot"]]
+        top = np.array([xy[0], xy[1], PLACE_Z + HOVER_M])
+        above = pose_for(top + [0, 0, 0.03], tray_yaw, driver.target, "above")
+        over = pose_for(top, tray_yaw, above or driver.target)
+        low = pose_for(np.array([xy[0], xy[1], PLACE_Z]), tray_yaw, over or driver.target, "grasp")
+        if over is None or low is None:
+            return "格位 IK 無解，不移動。"
+        move(([above] if above is not None else []) + [over, low], ("方塊上方", f"米盤第 {state['slot'] + 1} 格"))
+        set_grip(OPEN_PCT, "張開")
+        move([over | {"gripper": OPEN_PCT}], ("格位", "格位上方"))
+        state["slot"] += 1
+        state["at"] = "slot"
+        return None
 
     try:
         with Terminal() as term:
@@ -236,22 +308,9 @@ def reach(args):
                         live.selected = k
                         term.say(f"選 {k}：{b['color']} x {b['x'] * 1000:.1f} y {b['y'] * 1000:.1f} mm，yaw "
                                  f"{math.degrees(b['yaw']):.1f}°，轉腕 {math.degrees(model.wrist_turn((b['x'], b['y']), b['yaw'])):+.1f}°。g 過去")
-                    elif key == "g" and state["aim"] is not None:
-                        b = state["aim"]
-                        target = np.array([b["x"], b["y"], b["z_top"] - EDGE_M / 2 + HOVER_M]) + state["nudge"]
-                        state["grip"] = OPEN_PCT
-                        above = pose_for(target + [0, 0, 0.05], b["yaw"], driver.target, "above")
-                        hover = pose_for(target, b["yaw"], above or driver.target)
-                        if hover is None:
-                            term.say("IK 無解（超出可達範圍，夾爪要傾斜超過 15°），不移動。")
-                            continue
-                        via = [above] if above is not None and state["at"] == "start" else []
-                        if state["at"] == "start" and not path_ok(driver.target, (via or [hover])[0]):
-                            term.say("起姿到方塊上方的路徑太低，不移動。")
-                            continue
-                        move(via + [hover], ("目前位置", "方塊上方"))
-                        state["at"] = "hover"
-                        term.say(f"已在方塊上方。看夾爪中心是否對準方塊中心；w/s a/d r/f 微調，k 記錄，l 下降。")
+                    elif key == "g" and state["aim"] is not None and state["at"] in ("start", "hover"):
+                        err = go_hover()
+                        term.say(err or "已在方塊上方。看夾爪中心是否對準方塊中心；w/s a/d r/f 微調，k 記錄，l 下降。")
                     elif key in "wsadrf" and state["at"] in ("hover", "low") and state["aim"] is not None:
                         step = {"w": (1, 0, 0), "s": (-1, 0, 0), "a": (0, 1, 0), "d": (0, -1, 0),
                                 "r": (0, 0, 1), "f": (0, 0, -1)}[key]
@@ -273,24 +332,32 @@ def reach(args):
                         with log_path.open("a") as fh:
                             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                         term.say(f"已記錄：微調 {np.round(state['nudge'] * 1000).astype(int).tolist()} mm → {log_path}")
-                    elif key == "l" and state["at"] == "hover":
-                        b = state["aim"]
-                        p = pose_for(np.array([b["x"], b["y"], b["z_top"] - EDGE_M / 2 + GRASP_M]) + state["nudge"] * [1, 1, 0],
-                                     b["yaw"], driver.target, "grasp")
-                        if p is None:
-                            term.say("IK 無解，不下降。")
-                            continue
-                        move([p], ("方塊上方", "夾取高度"))
-                        state["at"] = "low"
-                    elif key in "co" and state["at"] in ("hover", "low"):
-                        state["grip"] = CLOSED_PCT if key == "c" else OPEN_PCT
-                        move([dict(driver.target) | {"gripper": state["grip"]}], ("夾爪", "閉合" if key == "c" else "張開"))
+                    elif key == "l" and state["at"] == "hover" and state["aim"] is not None:
+                        term.say(go_level(GRASP_M, "grasp", "low", ("方塊上方", "夾取高度")) or "已在夾取高度。c 閉爪")
+                    elif key in "co" and state["at"] in ("hover", "low", "slot"):
+                        got = set_grip(CLOSED_PCT if key == "c" else OPEN_PCT, "閉合" if key == "c" else "張開")
+                        if key == "c":
+                            term.say(f"夾爪讀數 {got:.1f}%：" + ("有夾到" if got >= HELD_PCT else "像是空爪"))
                     elif key == "u" and state["at"] == "low":
-                        b = state["aim"]
-                        p = pose_for(np.array([b["x"], b["y"], b["z_top"] - EDGE_M / 2 + HOVER_M]) + state["nudge"] * [1, 1, 0],
-                                     b["yaw"], driver.target)
-                        move([p], ("夾取高度", "方塊上方"))
-                        state["at"] = "hover"
+                        term.say(go_level(HOVER_M, "hover", "hover", ("夾取高度", "方塊上方")) or "已升回方塊上方。p 放進米盤")
+                    elif key == "p" and state["at"] == "hover" and state["grip"] == CLOSED_PCT:
+                        err = place()
+                        term.say(err or "已放進米盤，在格位上方。b 回起姿。")
+                    elif key == "a" and state["at"] == "start" and state["aim"] is not None:
+                        err = go_hover() or go_level(GRASP_M, "grasp", "low", ("方塊上方", "夾取高度"))
+                        if err is None:
+                            held = set_grip(CLOSED_PCT, "閉合")
+                            err = go_level(HOVER_M, "hover", "hover", ("夾取高度", "方塊上方"))
+                            held = float(driver.read()["gripper"])
+                            if err is None and held < HELD_PCT:
+                                set_grip(OPEN_PCT, "張開")
+                                err = f"沒夾到（夾爪讀數 {held:.1f}% < {HELD_PCT:.0f}%），停在方塊上方。"
+                        if err is None:
+                            err = place()
+                        if err is None:
+                            term.say(f"自動夾放完成（夾爪讀數 {held:.1f}%）。b 回起姿，或選下一顆。")
+                        else:
+                            term.say(err)
                     elif key in "bq":
                         if state["at"] != "start":
                             if state["at"] == "low":
