@@ -52,7 +52,7 @@ class Live:
         self.read, intr, self.stop_cam = open_aligned(serial)
         self.cam = Camera(intr, R, t)
         self.quads, self.model = quads, arm_model
-        self.blocks, self.rejected, self.image = [], [], None
+        self.blocks, self.rejected, self.image, self.info = [], [], None, {}
         self.selected, self.arm_xyz, self.lines = None, None, []
         self.lock, self.running = threading.Lock(), True
         self.thread = threading.Thread(target=self._loop, daemon=True)
@@ -64,7 +64,8 @@ class Live:
                 bgr, depth = self.read()
             except RuntimeError:
                 continue
-            blocks, rejected = detect(bgr, depth, self.cam, self.quads)
+            blocks, rejected, info = detect(bgr, depth, self.cam, self.quads)
+            self.info = info
             if self.model is not None:
                 for b in blocks:
                     b["turn"] = self.model.wrist_turn((b["x"], b["y"]), b["yaw"])
@@ -150,9 +151,11 @@ def preview(args):
                     (out / f"locate-{stamp}.json").write_text(json.dumps(
                         {"blocks": blocks, "pose": args.pose, "frame": "mount, m"}, indent=1, ensure_ascii=False))
                     for k, b in enumerate(blocks, 1):
-                        term.say(f"{k} {b['color']:6s} x {b['x'] * 1000:6.1f}  y {b['y'] * 1000:6.1f}  頂面 "
-                                 f"{b['z_top'] * 1000:4.1f} mm  yaw {math.degrees(b['yaw']):4.1f}°  "
-                                 f"轉腕 {math.degrees(b.get('turn', 0)):+5.1f}°  {b['tray'] or ''}")
+                        term.say(f"{k} {b['color']:11s} x {b['x'] * 1000:6.1f}  y {b['y'] * 1000:6.1f}  高 "
+                                 f"{b['height_mm']:4.1f} mm  yaw {math.degrees(b['yaw']):4.1f}°  "
+                                 f"轉腕 {math.degrees(b.get('turn', 0)):+5.1f}°  {b['tray'] or ''}  "
+                                 f"HSV {b['hsv']} 色距 {b['color_distance']}")
+                    term.say(f"桌面 z {live.info.get('table_z_mm')} mm；被排除：{[r['why'] for r in live.rejected]}")
                     term.say(f"已存 {out}/locate-{stamp}.json")
     finally:
         live.close()

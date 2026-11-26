@@ -42,3 +42,10 @@ def test_block_corners_project_back_through_the_camera():
     assert np.allclose(np.linalg.norm(c[0] - c[1]), EDGE_M)
     uv = cam.project(c)
     assert np.allclose(cam.on_plane(uv, 0.034), c, atol=1e-9)
+
+
+def test_colour_names_cover_the_finals_palette():
+    from agentic_sim.real_d455 import COLOR_REF, classify
+    assert set(COLOR_REF) == {"red", "orange", "yellow", "light_green", "dark_green", "cyan", "blue", "purple"}
+    assert classify((101, 255, 145))[0] == "blue" and classify((177, 228, 160))[0] == "red"
+    assert classify((0, 10, 200))[0] == "unknown"      # grey / white is not a block colour
