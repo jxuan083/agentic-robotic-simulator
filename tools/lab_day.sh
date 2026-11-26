@@ -26,10 +26,16 @@
 #     setup        build today's collection setup from the routes and cards
 #     collect      open the collection desk (empty-desk check first, then cards)
 #     recover      follower left holding with torque on: follow the route home and release
+#     d455         finals: live D455 blocks (colour, mount-frame mm, yaw, wrist turn); s saves, q quits
+#     reach        finals: d455 + arm over a chosen block (park -> start -> hover, nudge, k logs the aim)
+#     d455-capture finals: torque off, follower moved by hand to ~8 poses -> D455 depth + readings (camera pose)
+#     d455-fit     fit the D455 pose from the capture (uv / MuJoCo) -> outputs/d455/pose_<date>.json; use POSE=...
+#     joints       read-only live joint readout; Enter + label saves a sample
 #     torque       read-only per-joint torque readback of the follower (end of day: all must be 0)
 #     status       route summaries and collection progress
 #     pack         ZIP the round into AllenHZL/ and archive the handoff dir (NOTES="path ..." optional)
 #
+# Finals: POSE (D455 pose file, default outputs/d455/pose_261125.json), CORR (reach sag correction mm x,y,z).
 # Settings (environment): LAB_DATE (default today, YYMMDD; session folders), RIG_DATE (day whose routes and tray
 # corners to reuse, default LAB_DATE), SUPPORT (park support description, for `route`),
 # PY (default the conda lerobot python), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
@@ -185,6 +191,21 @@ print("torque OFF on all joints" if off else "TORQUE STILL ON OR UNREADABLE — 
 sys.exit(0 if off else 1)
 PYEOF
     ;;
+  d455)
+    TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
+    "$PY" tools/finals_reach.py preview --serial "$D455" "${TRAY_ARG[@]}" ${POSE:+--pose "$POSE"} "$@" ;;
+  reach)
+    need "$ROUTE"
+    TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
+    "$PY" tools/finals_reach.py reach --serial "$D455" --route "$ROUTE" --config "$CONFIG" "${TRAY_ARG[@]}" \
+        ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} "$@" ;;
+  d455-capture)
+    "$PY" tools/finals_calib.py capture --serial "$D455" --config "$CONFIG" --out "outputs/d455/capture-$DATE-$(date +%H%M)" "$@" ;;
+  d455-fit)
+    cap="${CAPTURE:-$(ls -d outputs/d455/capture-* | tail -1)}"
+    MENAGERIE_DIR="${MENAGERIE_DIR:-$ROOT/outputs/mujoco_menagerie}" uv run -q --with opencv-python-headless \
+        tools/finals_calib.py fit --capture "$cap" ${POSE:+--init "$POSE"} --out "outputs/d455/pose_$DATE.json" "$@"
+    echo "use it: export POSE=outputs/d455/pose_$DATE.json" ;;
   joints)
     # Read-only joint readout for the joint-map check and touch points (writes nothing to the arm, torque stays off).
     # Each Enter saves the current reading with a typed label to outputs/<date>-joints/samples.jsonl; q quits.
