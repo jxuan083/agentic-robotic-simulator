@@ -24,7 +24,7 @@ EDGE_M = 0.0295
 TOP_MIN = 0.026              # above the beige rim (~23 mm), below a block lying on the table (29.5 mm)
 TOP_MAX = 0.075
 TOP_BAND = 0.008
-SIDE_M = (0.020, 0.042)      # accepted rectangle sides
+SIDE_M = (0.016, 0.042)      # accepted rectangle sides  # 16: far, dark (blue) tops lose ~8 mm to depth edge smoothing
 MIN_PX = 40
 # OpenCV HSV (H 0-180) of the block tops seen by the D455; red / blue / yellow from the 11/25 lab frames, the
 # others first guesses from the palette (tools/finals_reach.py preview prints the measured values to refine them)
