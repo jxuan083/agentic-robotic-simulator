@@ -494,10 +494,34 @@ def reach(args):
     return 0
 
 
+def zone_image(args):
+    """The tray reference frame annotated with the tray outlines, the safe grasp zone, the placement squares and the
+    mount axes: tools/lab_day.sh overlay blends it with the live D455 image, so trays and blocks are laid inside the
+    zone (and a re-mounted camera is aligned against the same lines)."""
+    import cv2
+    pose = load_pose(args.pose)
+    K = pose.get("intrinsics_640x480") or pose["intrinsics"]
+    cam = Camera(K, pose["mount_from_color"]["R"], pose["mount_from_color"]["t"])
+    quads = json.loads(Path(args.trays).read_text())["quads"] if args.trays and Path(args.trays).exists() else None
+    model = ArmModel.from_file(find_calibration(args.follower_id), ROOT)
+    zone = safe_zone(model, make_corr(args.corr), args.follower_id, args.corr, args.out)
+    ref = cv2.imread(args.reference)
+    if ref is None:
+        sys.exit(f"cannot read {args.reference}")
+    img = draw(ref, cam, [], quads=quads, slots=beige_slots(cam, quads) if quads and "beige" in quads else [],
+               next_slot=0, zone=zone, lines=["orange: safe grasp zone   P1-P4: beige slots (P1 first)"])
+    Path(args.image_out).parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(args.image_out, img)
+    print(f"{args.image_out}  (reference {args.reference}, pose {args.pose}, zone {args.out}/safe_zone_{args.follower_id}.json)")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=("preview", "reach"))
-    ap.add_argument("--serial", required=True)
+    ap.add_argument("mode", choices=("preview", "reach", "zone-image"))
+    ap.add_argument("--serial", default=None)
+    ap.add_argument("--reference", default=None, help="zone-image: the tray reference RGB frame")
+    ap.add_argument("--image-out", default=None, help="zone-image: annotated output PNG")
     ap.add_argument("--pose", default=str(ROOT / "outputs/d455/pose_261125.json"))
     ap.add_argument("--trays", default=None, help="tray corners (trays.json) for tray names and outlines")
     ap.add_argument("--follower-id", default="my_awesome_follower_arm")
@@ -510,6 +534,12 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.mode == "reach" and not a.route:
         ap.error("reach needs --route")
+    if a.mode == "zone-image":
+        if not (a.reference and a.image_out):
+            ap.error("zone-image needs --reference and --image-out")
+        return zone_image(a)
+    if not a.serial:
+        ap.error("--serial is required")
     return preview(a) if a.mode == "preview" else reach(a)
 
 

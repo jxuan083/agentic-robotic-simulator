@@ -4,7 +4,8 @@
 #   tools/lab_day.sh <step> [args]          steps in order:
 #     env          show the day's settings, commit and control rate
 #     check        read-only device/calibration check (power on, torque off)
-#     overlay      D455 live overlay against the current tray reference (s saves, q quits)
+#     overlay      D455 live overlay against the current tray reference (s saves, q quits); uses overlay-zone.png if made
+#     zone-image   draw the safe grasp zone + beige slots on the tray reference -> <reference dir>/overlay-zone.png
 #     reference    after moving the trays: save a new D455 reference (markers 40/41/42) that overlay then uses
 #     trays        fix the D455 tray corners from the clean reference (once per tray layout)
 #     guide        live D455 placement guide (tray grid + block mm; --target TRAY X Y YAW COLOR or --reach-plan), s saves
@@ -83,8 +84,16 @@ case "$step" in
     "$PY" tools/real_teleop.py check --config "$CONFIG" && echo "check OK" ;;
   overlay)
     need "$REFERENCE"
-    say "move the trays until their rims overlap the reference; s saves, q quits"
-    "$CAMPY" tools/tray_overlay.py "$REFERENCE" --serial "$D455" --output "outputs/$DATE-camera/tray-overlay.png" ;;
+    # The zone-annotated reference (step zone-image: safe grasp zone + placement squares) when it exists.
+    ZONE_REF="$(dirname "$REFERENCE")/overlay-zone.png"; OVER_REF="$REFERENCE"; [[ -e "$ZONE_REF" ]] && OVER_REF="$ZONE_REF"
+    say "move the trays until their rims overlap the reference ($OVER_REF); lay blocks inside the orange arc; s saves, q quits"
+    "$CAMPY" tools/tray_overlay.py "$OVER_REF" --serial "$D455" --output "outputs/$DATE-camera/tray-overlay.png" ;;
+  zone-image)
+    # Reference frame + tray outlines + safe grasp zone (orange) + beige slots P1-P4 -> <reference dir>/overlay-zone.png
+    need "$REFERENCE"
+    TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
+    "$PY" tools/finals_reach.py zone-image --reference "$REFERENCE" --image-out "$(dirname "$REFERENCE")/overlay-zone.png" \
+        "${TRAY_ARG[@]}" ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} "$@" ;;
   reference)
     # After moving the trays: new D455 RGB-D reference with markers 40/41/42, compared with the previous one.
     name="${1:-trays-$(date +%H%M)}"; root="outputs/$DATE-camera"; mkdir -p "$root"
