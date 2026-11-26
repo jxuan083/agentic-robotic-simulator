@@ -379,7 +379,8 @@ def reach(args):
                             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                         term.say(f"已記錄：微調 {np.round(state['nudge'] * 1000).astype(int).tolist()} mm → {log_path}")
                     elif key == "l" and state["at"] == "hover" and state["aim"] is not None:
-                        term.say(go_level(GRASP_M, "grasp", "low", ("方塊上方", "夾取高度")) or "已在夾取高度。c 閉爪")
+                        term.say(go_level(GRASP_M, "grasp", "low", ("方塊上方", "夾取高度")) or
+                                 f"已在夾取高度（夾爪傾斜 {placer.last_tilt:.0f}°，因傾斜抬高 {placer.last_raise * 1000:.0f} mm）。c 閉爪")
                     elif key in "co" and state["at"] in ("hover", "low", "slot"):
                         got = set_grip(CLOSED_PCT if key == "c" else OPEN_PCT, "閉合" if key == "c" else "張開")
                         if key == "c":

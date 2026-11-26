@@ -29,6 +29,9 @@ GRIP_MIN_S, GRIP_STILL_S, GRIP_STILL_PCT, GRIP_MAX_S = 0.4, 0.3, 0.6, 2.5   # gr
 # Beige slots, tray-local mm: one set for demonstrations and programmed placing (configs/real_slots.json).
 SLOTS_MM = json.loads((ROOT / "configs/real_slots.json").read_text(encoding="utf-8"))["beige"]
 DEFAULT_CORR = "21,-1.3,20"
+# A tilted gripper's open fingers reach below the grasp centre on the low side (11/26: far blocks touched the table):
+# grasp / place heights rise by TILT_RAISE_M * sin(tilt). 30 mm ~ half the open finger span plus the jaw edge.
+TILT_RAISE_M = 0.030
 
 
 def make_corr(spec=DEFAULT_CORR):
@@ -71,12 +74,29 @@ class Placer:
         self.driver, self.model, self.corr_at, self.on_move = driver, model, corr_at, on_move
 
     def pose_for(self, xyz, yaw, seed, phase, grip):
-        reading = None
-        for tilt in (TILT[phase], FAR_TILT):   # far blocks (r > ~0.30 m) need the gripper tilted more
-            reading, _ = self.model.hover(np.asarray(xyz, float) + self.corr_at(xyz), yaw, seed, tilt)
-            if reading is not None:
-                break
+        """Joint target for the grasp centre at xyz (corrected for sag). The IK tilts only as much as the reach
+        needs; for the low phases (grasp, place) the height then rises by TILT_RAISE_M * sin(tilt) so the low
+        finger clears the table. self.last_tilt / self.last_raise report what was used."""
+        xyz = np.asarray(xyz, float)
+        self.last_tilt, self.last_raise = 0.0, 0.0
+        reading, info = self._solve(xyz, yaw, seed, phase)
+        if reading is not None and phase in ("grasp", "place"):
+            tilt = float(info.get("tilt_deg", 0.0))
+            if tilt > 3.0:
+                raise_m = TILT_RAISE_M * math.sin(math.radians(tilt))
+                lifted, info2 = self._solve(xyz + [0, 0, raise_m], yaw, reading, phase)
+                if lifted is not None:
+                    reading, info = lifted, info2
+                    self.last_raise = raise_m
+            self.last_tilt = float(info.get("tilt_deg", 0.0))
         return None if reading is None else reading | {"gripper": float(grip)}
+
+    def _solve(self, xyz, yaw, seed, phase):
+        for tilt in (TILT[phase], FAR_TILT):   # far blocks (r > ~0.30 m) need the gripper tilted more
+            reading, info = self.model.hover(xyz + self.corr_at(xyz), yaw, seed, tilt)
+            if reading is not None:
+                return reading, info
+        return None, {}
 
     def path_ok(self, a, b, min_z=SAFE_Z):
         for s in np.linspace(0, 1, 15):
