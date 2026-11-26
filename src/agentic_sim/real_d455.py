@@ -24,14 +24,16 @@ EDGE_M = 0.0295
 TOP_MIN = 0.026              # above the beige rim (~23 mm), below a block lying on the table (29.5 mm)
 TOP_MAX = 0.075
 TOP_BAND = 0.008
+SPLIT_M = 0.048             # a same-colour part longer than this is two or more touching blocks
 SIDE_M = (0.016, 0.042)      # accepted rectangle sides  # 16: far, dark (blue) tops lose ~8 mm to depth edge smoothing
 MIN_PX = 40
 # OpenCV HSV (H 0-180) of the block tops seen by the D455; red / blue / yellow from the 11/25 lab frames, the
 # others first guesses from the palette (tools/finals_reach.py preview prints the measured values to refine them)
-COLOR_REF = {
-    "red": (176, 200, 170), "orange": (10, 210, 220), "yellow": (25, 200, 220), "light_green": (38, 170, 190),
-    "dark_green": (62, 170, 90), "cyan": (88, 170, 170), "blue": (102, 240, 170), "purple": (135, 140, 120),
+COLOR_REF = {   # D455 median HSV, 11/26 night light: mean of the pink- and beige-tray snapshots (1a)
+    "red": (177, 220, 190), "orange": (10, 181, 213), "yellow": (21, 175, 206), "light_green": (36, 132, 155),
+    "dark_green": (52, 143, 113), "cyan": (89, 196, 150), "blue": (100, 255, 160), "purple": (136, 78, 148),
 }
+MIN_SAT = 40
 COLOR_TOL = 1.0
 LABEL = {"red": (40, 40, 230), "orange": (20, 130, 255), "yellow": (30, 210, 230), "light_green": (60, 220, 160),
          "dark_green": (40, 120, 30), "cyan": (200, 200, 40), "blue": (230, 120, 30), "purple": (180, 60, 140),
@@ -47,6 +49,8 @@ def classify(hsv):
         d = math.sqrt((dh * min(1.0, s / 90.0)) ** 2 + ((s - rs) / 90.0) ** 2 + ((v - rv) / 110.0) ** 2)
         if d < best[1]:
             best = (name, d)
+    if s < MIN_SAT:                 # grey / white (rims, the arm): the palette's least saturated, purple, is S 65+
+        return ("unknown", best[1])
     return best if best[1] <= COLOR_TOL else ("unknown", best[1])
 
 
@@ -191,10 +195,12 @@ def detect(bgr, depth_m, cam: Camera, quads=None):
                 if sel.sum() >= 6:
                     add(us[sel], vs[sel], top, name, dist, med, split=False)
             return
-        if not (SIDE_M[0] <= short and long_ <= SIDE_M[1]):
+        smeared = SIDE_M[0] <= short <= SIDE_M[1] < long_ <= SPLIT_M   # one block whose side face joins the top
+        if not (SIDE_M[0] <= short and long_ <= SIDE_M[1]) and not smeared:
             if short < 0.012:          # rim slivers and edges: not worth listing
                 return
-            if split and _split_kmeans(xy, lambda sel: add(us[sel], vs[sel], top, name, dist, med, split=False)):
+            if split and long_ > SPLIT_M and \
+                    _split_kmeans(xy, lambda sel: add(us[sel], vs[sel], top, name, dist, med, split=False)):
                 return                 # blocks touching at an offset / corner: one cluster per block
             rejected.append({"color": name, "pixel": [float(np.mean(us)), float(np.mean(vs))],
                              "why": f"size {w * 1000:.0f}x{h * 1000:.0f} mm"})
