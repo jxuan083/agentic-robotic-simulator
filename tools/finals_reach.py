@@ -49,7 +49,7 @@ PLACE_Z = 0.026      # grasp centre (= block centre) height when releasing in th
 # Beige slots, tray-local mm (x from the near inner wall, y towards +Y): the 2 x 2 corner nearest the base and the pink
 # tray, 55 mm apart, nearest first (11/26: the old row's first slot sat 35 mm from the far right rim, r 311 mm, and the
 # block hit the rim). Mount ~ (210,-65) (210,-120) (265,-65) (265,-120) mm with the 11/25 trays.
-SLOTS_MM = [[50, 190], [50, 132], [108, 190], [108, 132]]
+SLOTS_MM = json.loads((ROOT / "configs/real_slots.json").read_text(encoding="utf-8"))["beige"]   # same as the demos
 CARRY_Z = 0.11       # grasp-centre height while carrying a block between trays (block bottom ~6 cm over the rims)
 NUDGE_M = 0.005
 

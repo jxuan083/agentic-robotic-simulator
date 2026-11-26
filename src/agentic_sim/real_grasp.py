@@ -252,8 +252,8 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         target = choose_target(driver.term, blocks, color) if opening is not None else None
     if target is None:
         driver.term.say(f"D455 開場畫面沒找到{color}方塊；仍可錄，讀回時再確認。")
-    driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]}第 {slot['index']} 個位置"
-                          "（照固定順序接在上一顆旁邊，貼近盤面再張爪）→ 抬起退回起姿附近，停穩按 c。"
+    driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]} P{slot['index']}"
+                          "（overlay 圖上的格位：米盤靠基座、靠粉盤的角落，P1 最近；貼近盤面再張爪）→ 抬起退回起姿附近，停穩按 c。"
                           "Esc 暫停；腕部只在 ±30° 內對齊方塊。")
     driver.arm_at(park)
     if not driver.align_leader(leader, driver.read()):

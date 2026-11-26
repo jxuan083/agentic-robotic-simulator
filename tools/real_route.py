@@ -260,7 +260,7 @@ def grasp_session(driver, hand, data, args, refs, hz):
         number = 1 + len(list(episodes.glob("P*")))
         if rounds:
             if placed >= size:
-                key = term.choose(f"新一輪：方塊全部放回{TRAY_NAME[source]}重擺（{set_text}；近端 x ≲ 100 mm，位置與轉角隨機，"
+                key = term.choose(f"新一輪：方塊全部放回{TRAY_NAME[source]}重擺（{set_text}；擺在 overlay 橘色弧線內（安全夾取區），位置與轉角隨機，"
                                   f"偶爾讓同色貼近），{TRAY_NAME[destination]}格位清空，手離開後按 a；q 結束",
                                   {"a": "開始", "q": "結束"})
                 if key == "q":
