@@ -31,6 +31,8 @@
 #     recover      follower left holding with torque on: follow the route home and release
 #     d455         finals: live D455 blocks (colour, mount-frame mm, yaw, wrist turn); s saves, q quits
 #     reach        finals: d455 + arm over a chosen block (park -> start -> hover, nudge, k logs the aim)
+#     d455-restore re-mounted D455: live height / tilt vs the target pose from the table plane, reference edges for
+#                  the in-plane position (--once: report only); then d455-capture / d455-fit
 #     d455-capture finals: torque off, follower moved by hand to ~8 poses -> D455 depth + readings (camera pose)
 #     d455-fit     fit the D455 pose from the capture (uv / MuJoCo) -> outputs/d455/pose_<date>.json; use POSE=...
 #     joints       read-only live joint readout; Enter + label saves a sample
@@ -226,6 +228,10 @@ PYEOF
     TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
     "$PY" tools/finals_reach.py reach --serial "$D455" --route "$ROUTE" --config "$CONFIG" "${TRAY_ARG[@]}" \
         ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} ${SPEED:+--speed "$SPEED"} "$@" ;;
+  d455-restore)
+    # Target = the fitted pose (POSE=..., else 11/25); TARGET=outputs/d455/restore-target-*.json for a pose saved with t.
+    "$CAMPY" tools/d455_restore.py --serial "$D455" --target "${TARGET:-${POSE:-outputs/d455/pose_261125.json}}" \
+        --reference "$REFERENCE" "$@" ;;
   d455-capture)
     "$PY" tools/finals_calib.py capture --serial "$D455" --config "$CONFIG" --out "outputs/d455/capture-$DATE-$(date +%H%M)" "$@" ;;
   d455-fit)
