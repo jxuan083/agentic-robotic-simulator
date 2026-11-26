@@ -36,7 +36,8 @@
 #     status       route summaries and collection progress
 #     pack         ZIP the round into AllenHZL/ and archive the handoff dir (NOTES="path ..." optional)
 #
-# Finals: POSE (D455 pose file, default outputs/d455/pose_261125.json), CORR (reach sag correction: radial mm, rotation deg, z mm).
+# Finals: POSE (D455 pose file, default outputs/d455/pose_261125.json), CORR (reach sag correction: radial mm, rotation deg, z mm),
+# SPEED (reach joint cap deg/s, default 60).
 # Settings (environment): LAB_DATE (default today, YYMMDD; session folders), RIG_DATE (day whose routes and tray
 # corners to reuse, default LAB_DATE), SUPPORT (park support description, for `route`),
 # PY (default the conda lerobot python), FOLLOWER_PORT + FOLLOWER_ID (joints / torque with the follower only), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
@@ -212,7 +213,7 @@ PYEOF
     need "$ROUTE"
     TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
     "$PY" tools/finals_reach.py reach --serial "$D455" --route "$ROUTE" --config "$CONFIG" "${TRAY_ARG[@]}" \
-        ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} "$@" ;;
+        ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} ${SPEED:+--speed "$SPEED"} "$@" ;;
   d455-capture)
     "$PY" tools/finals_calib.py capture --serial "$D455" --config "$CONFIG" --out "outputs/d455/capture-$DATE-$(date +%H%M)" "$@" ;;
   d455-fit)

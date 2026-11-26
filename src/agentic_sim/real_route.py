@@ -170,6 +170,7 @@ class Driver:
         self.term = term
         self.hz = hz
         self.rate = rate
+        self.play_speed, self.gripper_speed = PLAY_SPEED, GRIPPER_PLAY_SPEED   # caps for play(); reach raises them
         self.relative = relative  # fallback when leader/follower calibration zeros disagree
         self.drive_leader = drive_leader  # hand-over: drive the leader to the follower pose, then release it
         self.clutch = None        # leader pose at a driven hand-over: teleop maps displacement from here
@@ -337,8 +338,8 @@ class Driver:
         durations = []
         for i, recorded in enumerate(work.seconds):
             a, b = work.points[i], work.points[i + 1]
-            durations.append(max(recorded / self.rate, body_gap(a, b) / PLAY_SPEED,
-                                 abs(a["gripper"] - b["gripper"]) / GRIPPER_PLAY_SPEED, 1 / self.hz))
+            durations.append(max(recorded / self.rate, body_gap(a, b) / self.play_speed,
+                                 abs(a["gripper"] - b["gripper"]) / self.gripper_speed, 1 / self.hz))
         total = sum(durations)
         done = 0.0
         segment, tau = 0, 0.0

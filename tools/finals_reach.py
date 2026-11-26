@@ -388,7 +388,9 @@ def reach(args):
                 return 0
             with real_devices(args.config, "right", leader=False) as (_, follower, refs, hz):
                 check_calibration(data, refs, leader=False)
-                driver = Driver(follower, term, run_dir(Path(args.route), "reach"), hz=hz, drive_leader=False)
+                driver = Driver(follower, term, run_dir(Path(args.route), "reach"), hz=hz, drive_leader=False,
+                                rate=2.0)   # the taught park -> start route at twice its recorded pace (capped below)
+                driver.play_speed, driver.gripper_speed = args.speed, 2 * args.speed
                 driver.on_send = refresh
                 driver.arm_at(park)
                 follow(driver, track, ("停放位", "起姿"))
@@ -530,6 +532,7 @@ def main(argv=None):
     ap.add_argument("--corr", default="21,-1.3,20",
                     help="command minus target: radial mm, rotation about the base deg (+ towards +y), z mm "
                          "(11/26 aim checks: radial 17-25, rotation -0.6..-2.6)")
+    ap.add_argument("--speed", type=float, default=60.0, help="reach: body joint cap deg/s (collection playback: 45)")
     ap.add_argument("--out", default=str(ROOT / "outputs/d455"))
     a = ap.parse_args(argv)
     if a.mode == "reach" and not a.route:
