@@ -64,6 +64,7 @@ class Live:
         self.quads, self.model = quads, arm_model
         self.blocks, self.rejected, self.image, self.info, self.raw = [], [], None, {}, None
         self.selected, self.arm_xyz, self.lines = None, None, []
+        self.slots, self.next_slot = [], 0      # beige placement squares drawn on the preview
         self.lock, self.running = threading.Lock(), True
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
@@ -81,7 +82,7 @@ class Live:
                     b["turn"] = self.model.wrist_turn((b["x"], b["y"]), b["yaw"])
             lines = self.lines + (["! something over the trays: hidden / shifted blocks"] if info.get("occluded") else [])
             img = draw(bgr, self.cam, blocks, selected=self.selected, quads=self.quads, rejected=rejected,
-                       arm=self.arm_xyz, lines=lines)
+                       arm=self.arm_xyz, lines=lines, slots=self.slots, next_slot=self.next_slot)
             with self.lock:
                 self.blocks, self.rejected, self.image, self.raw = blocks, rejected, img, (bgr, depth)
 
@@ -155,6 +156,8 @@ def preview(args):
     profile_quads = json.loads(Path(args.trays).read_text())["quads"] if args.trays and Path(args.trays).exists() else None
     live = Live(args.serial, load_pose(args.pose), profile_quads,
                 ArmModel.from_file(find_calibration(args.follower_id), ROOT))
+    if profile_quads and "beige" in profile_quads:
+        live.slots = beige_slots(live.cam, profile_quads)
     win = Window("D455 finals locate")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -218,6 +221,7 @@ def reach(args):
     log_path.parent.mkdir(parents=True, exist_ok=True)
     state = {"block": None, "nudge": np.zeros(3), "at": "park", "aim": None, "grip": start["gripper"], "slot": 0}
     slots = beige_slots(live.cam, quads) if quads and "beige" in quads else []
+    live.slots = slots
 
     def refresh(*_):
         with live.lock:
@@ -293,7 +297,11 @@ def reach(args):
         path, seed = [], driver.target
         for k, s_ in enumerate(np.linspace(0, 1, 6)):
             p_xy = here[:2] + (xy - here[:2]) * s_
-            p = pose_for(np.array([p_xy[0], p_xy[1], CARRY_Z]), tray_yaw if k == 5 else held_yaw, seed, "above")
+            p = None
+            for z in (CARRY_Z, 0.095, 0.08, max(0.065, here[2])):   # far blocks: start lower, rise as the path comes in
+                p = pose_for(np.array([p_xy[0], p_xy[1], z]), tray_yaw if k == 5 else held_yaw, seed, "above")
+                if p is not None:
+                    break
             if p is None:
                 return f"搬運路徑第 {k + 1} 點 IK 無解，不移動。"
             path.append(p)
@@ -306,6 +314,7 @@ def reach(args):
         set_grip(OPEN_PCT, "張開")
         move([over | {"gripper": OPEN_PCT}], ("格位", "格位上方"))
         state["slot"] += 1
+        live.next_slot = state["slot"] if state["slot"] < len(slots) else None
         state["at"] = "slot"
         return None
 

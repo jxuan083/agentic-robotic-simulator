@@ -288,10 +288,25 @@ def corners(block):
                      for a, b in ((h, h), (-h, h), (-h, -h), (h, -h))])
 
 
-def draw(bgr, cam: Camera, blocks, *, selected=None, quads=None, rejected=(), arm=None, lines=()):
+def slot_square(xy, yaw, z=EDGE_M):
+    """Corners of a block footprint centred at xy (mount m) turned by yaw, at height z (default: a block's top)."""
+    return corners({"x": float(xy[0]), "y": float(xy[1]), "yaw": float(yaw), "z_top": z})
+
+
+def draw(bgr, cam: Camera, blocks, *, selected=None, quads=None, rejected=(), arm=None, lines=(), slots=(),
+         next_slot=None):
+    """slots: [(xy, yaw)] placement squares (beige); next_slot: index of the next one (highlighted), None = all done."""
     img = bgr.copy()
     for quad in (quads or {}).values():
         cv2.polylines(img, [np.asarray(quad, np.int32)], True, (90, 200, 90), 1)
+    for k, (xy, yaw) in enumerate(slots):
+        poly = cam.project(slot_square(xy, yaw)).astype(np.int32)
+        nxt = k == next_slot
+        done = next_slot is not None and k < next_slot or next_slot is None
+        col = (255, 255, 255) if nxt else (80, 80, 80) if done else (190, 190, 190)   # white = next, grey = later / done
+        cv2.polylines(img, [poly], True, col, 2 if nxt else 1, cv2.LINE_AA)
+        c = poly.mean(0).astype(int)
+        cv2.putText(img, f"P{k + 1}", (int(c[0]) - 8, int(c[1]) + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.38, col, 1, cv2.LINE_AA)
     o = cam.project([[0, 0, 0], [0.1, 0, 0], [0, 0.1, 0]])
     cv2.arrowedLine(img, tuple(o[0].astype(int)), tuple(o[1].astype(int)), (0, 0, 255), 2, tipLength=0.15)
     cv2.arrowedLine(img, tuple(o[0].astype(int)), tuple(o[2].astype(int)), (0, 255, 0), 2, tipLength=0.15)
