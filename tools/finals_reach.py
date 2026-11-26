@@ -57,7 +57,7 @@ class Live:
         self.read, intr, self.stop_cam = open_aligned(serial)
         self.cam = Camera(intr, R, t)
         self.quads, self.model = quads, arm_model
-        self.blocks, self.rejected, self.image, self.info = [], [], None, {}
+        self.blocks, self.rejected, self.image, self.info, self.raw = [], [], None, {}, None
         self.selected, self.arm_xyz, self.lines = None, None, []
         self.lock, self.running = threading.Lock(), True
         self.thread = threading.Thread(target=self._loop, daemon=True)
@@ -77,7 +77,7 @@ class Live:
             img = draw(bgr, self.cam, blocks, selected=self.selected, quads=self.quads, rejected=rejected,
                        arm=self.arm_xyz, lines=self.lines)
             with self.lock:
-                self.blocks, self.rejected, self.image = blocks, rejected, img
+                self.blocks, self.rejected, self.image, self.raw = blocks, rejected, img, (bgr, depth)
 
     def snapshot(self, frames=5):
         """Median of the next frames' detections of each block (by nearest position)."""
@@ -168,8 +168,13 @@ def preview(args):
                     stamp = time.strftime("%H%M%S")
                     import cv2
                     cv2.imwrite(str(out / f"locate-{stamp}.png"), img)
+                    with live.lock:
+                        raw, rejected = live.raw, list(live.rejected)
+                    if raw is not None:   # raw aligned frame: re-run detection offline when tuning
+                        np.savez_compressed(out / f"locate-{stamp}.npz", bgr=raw[0], depth=raw[1].astype(np.float32))
                     (out / f"locate-{stamp}.json").write_text(json.dumps(
-                        {"blocks": blocks, "pose": args.pose, "frame": "mount, m"}, indent=1, ensure_ascii=False))
+                        {"blocks": blocks, "rejected": rejected, "table_z_mm": live.info.get("table_z_mm"),
+                         "pose": args.pose, "frame": "mount, m"}, indent=1, ensure_ascii=False))
                     for k, b in enumerate(blocks, 1):
                         term.say(f"{k} {b['color']:11s} x {b['x'] * 1000:6.1f}  y {b['y'] * 1000:6.1f}  高 "
                                  f"{b['height_mm']:4.1f} mm  yaw {math.degrees(b['yaw']):4.1f}°  "

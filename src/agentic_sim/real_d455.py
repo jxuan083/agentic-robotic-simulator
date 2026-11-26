@@ -127,6 +127,33 @@ def _regions(shape, quads):
     return out
 
 
+def _split_kmeans(xy, emit, max_k=4):
+    """Touching same-colour blocks not in a row (offset, L, corner to corner): k-means the top-face points into
+    k = 2..max_k clusters and accept the smallest k whose clusters are all block-sized. Returns True if split."""
+    pts = np.ascontiguousarray(xy, np.float32)
+    crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 1e-5)
+    for k in range(2, max_k + 1):
+        if len(pts) < 8 * k:
+            break
+        _, lab, _ = cv2.kmeans(pts, k, None, crit, 5, cv2.KMEANS_PP_CENTERS)
+        lab = lab.ravel()
+        ok = True
+        for j in range(k):
+            sel = pts[lab == j]
+            if len(sel) < 6:
+                ok = False
+                break
+            (_, _), (w, h), _ = cv2.minAreaRect(sel)
+            if not (SIDE_M[0] - 0.004 <= min(w, h) and max(w, h) <= SIDE_M[1]):
+                ok = False
+                break
+        if ok:
+            for j in range(k):
+                emit(lab == j)
+            return True
+    return False
+
+
 def detect(bgr, depth_m, cam: Camera, quads=None):
     """Blocks in one aligned colour / depth frame (depth_m: metres per colour pixel, 0 = none).
     Returns (blocks, rejected, info); block x / y / z_top in metres (mount frame), yaw in rad mod 90 deg."""
@@ -148,7 +175,7 @@ def detect(bgr, depth_m, cam: Camera, quads=None):
     refs = np.array([COLOR_REF[c] for c in names], float)
     blocks, rejected = [], []
 
-    def add(us, vs, top, name, dist, med):
+    def add(us, vs, top, name, dist, med, split=True):
         uv = np.stack([us, vs], 1)
         xy = cam.on_plane(uv, top + table_z)[:, :2].astype(np.float32)
         (cx, cy), (w, h), ang = cv2.minAreaRect(xy)
@@ -162,11 +189,13 @@ def detect(bgr, depth_m, cam: Camera, quads=None):
             for j in range(k):
                 sel = (proj >= edges[j]) & (proj < edges[j + 1])
                 if sel.sum() >= 6:
-                    add(us[sel], vs[sel], top, name, dist, med)
+                    add(us[sel], vs[sel], top, name, dist, med, split=False)
             return
         if not (SIDE_M[0] <= short and long_ <= SIDE_M[1]):
             if short < 0.012:          # rim slivers and edges: not worth listing
                 return
+            if split and _split_kmeans(xy, lambda sel: add(us[sel], vs[sel], top, name, dist, med, split=False)):
+                return                 # blocks touching at an offset / corner: one cluster per block
             rejected.append({"color": name, "pixel": [float(np.mean(us)), float(np.mean(vs))],
                              "why": f"size {w * 1000:.0f}x{h * 1000:.0f} mm"})
             return
