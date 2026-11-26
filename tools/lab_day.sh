@@ -18,7 +18,8 @@
 #     drop-beige   teach channel -> drop pose over the beige tray
 #     drop-pink    teach channel -> drop pose over the pink tray
 #     drop-test-beige / drop-test-pink   replay park -> channel -> drop pose -> release -> back (no leader)
-#     grasp        park-start pick-and-place rounds (random target, slots fill up), session outputs/<date>-park
+#     grasp        park-start rounds (random target): demo park -> grasp -> lift, c, program places in P1-P4
+#                  (HAND_PLACE=1: demonstrate the placing too), session outputs/<date>-park
 #     wristcam     fix the wrist camera's white balance (WB, default 4600 K) and frame rate; once per day
 #     datacheck    every 5 rounds: training selection and desk issues of the newest LAST (20) episodes
 #     try          park -> channel, then t = leader test grasps from the channel (reach check for the cards)
@@ -149,8 +150,11 @@ case "$step" in
     # Park-start pick-and-place rounds: finals set in pink, D455 picks a random block each episode, beige slots fill
     # up (4 -> 1 blocks left), re-lay when full. PICK=manual for the colour-key flow.
     need "$ROUTE" "$DROP_BEIGE" "$DROP_PINK" "$TRAYS"
+    # Default (11/26): the demonstration ends at the stable lift (c) and the program places the block in P1-P4 with
+    # IK; HAND_PLACE=1 records the hand placement as before.
+    PLACE_ARG=(--program-place ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"}); [[ -n "${HAND_PLACE:-}" ]] && PLACE_ARG=()
     "$PY" tools/real_route.py grasp "${MOTION[@]}" --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" \
-      --trays "$TRAYS" --session "outputs/$DATE-park" --pick "${PICK:-random}" ;;
+      --trays "$TRAYS" --session "outputs/$DATE-park" --pick "${PICK:-random}" "${PLACE_ARG[@]}" ;;
   wristcam)
     # Fixed white balance and frame rate for the wrist camera: auto white balance turns the white desk cyan when
     # the pink tray fills the view, and dynamic frame rate drops frames in dim light. Lost on replug: run each day.

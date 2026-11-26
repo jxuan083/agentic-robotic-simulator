@@ -38,20 +38,9 @@ import numpy as np  # noqa: E402
 from agentic_sim.real_d455 import EDGE_M, Camera, detect, draw, open_aligned  # noqa: E402
 from agentic_sim.real_kinematics import ArmModel, find_calibration  # noqa: E402
 
-HOVER_M = 0.045      # grasp centre above the block centre while hovering (fingertips ~3 cm over the top)
-TILT = {"above": 30.0, "hover": 15.0, "grasp": 8.0, "place": 25.0}   # releasing may tilt: far slots need ~20 deg   # max gripper tilt from vertical (deg) per phase
-GRIP_MIN_S, GRIP_STILL_S, GRIP_STILL_PCT, GRIP_MAX_S = 0.4, 0.3, 0.6, 2.5   # gripper wait: stopped = < 0.6 % in 0.3 s
-FAR_TILT = 30        # fallback tilt when the phase limit has no IK solution
-GRASP_M = 0.015      # grasp centre above the block centre when lowered (11/26 aims: command top + 20..30 mm grasps)
-SAFE_Z = 0.05        # lowest grasp-centre height along a move between start pose and hover
-OPEN_PCT, CLOSED_PCT = 40.0, 8.0
-HELD_PCT = 12.0      # gripper reading above this after closing: a block is between the jaws (held ~16.5 %)
-PLACE_Z = 0.026      # grasp centre (= block centre) height when releasing in the beige tray (bottom ~6 mm above floor)
-# Beige slots, tray-local mm (x from the near inner wall, y towards +Y): the 2 x 2 corner nearest the base and the pink
-# tray, 55 mm apart, nearest first (11/26: the old row's first slot sat 35 mm from the far right rim, r 311 mm, and the
-# block hit the rim). Mount ~ (210,-65) (210,-120) (265,-65) (265,-120) mm with the 11/25 trays.
-SLOTS_MM = json.loads((ROOT / "configs/real_slots.json").read_text(encoding="utf-8"))["beige"]   # same as the demos
-CARRY_Z = 0.11       # grasp-centre height while carrying a block between trays (block bottom ~6 cm over the rims)
+from agentic_sim.real_place import (  # noqa: E402  (shared with the park collection)
+    CLOSED_PCT, FAR_TILT, GRASP_M, HELD_PCT, HOVER_M, OPEN_PCT, Placer, beige_slots, make_corr,
+)
 NUDGE_M = 0.005
 
 
@@ -138,19 +127,6 @@ class Window:
         self.root.update()
 
 
-def make_corr(spec):
-    """--corr "radial mm, rotation deg, z mm" -> corr_at(xyz): command minus target (gravity sag), mount m."""
-    radial_c, tangent_c, z_c = (float(c) for c in spec.split(","))
-
-    def corr_at(xyz):
-        x, y = float(xyz[0]), float(xyz[1])
-        r = math.hypot(x, y) or 1.0
-        u, v = np.array([x, y]) / r, np.array([-y, x]) / r
-        xy = u * radial_c / 1000 + v * r * math.radians(tangent_c)
-        return np.array([xy[0], xy[1], z_c / 1000])
-    return corr_at
-
-
 ZONE_PHI = list(range(-90, 91, 10))   # directions from the base (deg, 0 = +X, + = towards +Y)
 ZONE_MARGIN = 0.015                    # inside the IK limit
 ZONE_MIN_R = 0.12                      # nearer than this the vertical grasp folds into the base
@@ -198,19 +174,6 @@ def in_zone(zone, x, y):
         return True
     r, phi = math.hypot(x, y), math.degrees(math.atan2(y, x))
     return zone["r_min_m"] <= r <= float(np.interp(phi, zone["phi_deg"], zone["r_safe_m"]))
-
-
-def beige_slots(cam, quads):
-    """Beige slots in the mount frame and the tray's x axis direction (rad), from the tray corners."""
-    import cv2
-    from agentic_sim.real_locate import tray_homography
-    quad = np.asarray(quads["beige"], np.float32)
-    Hinv = np.linalg.inv(tray_homography(quad, "beige"))
-    pts = cv2.perspectiveTransform(np.asarray(SLOTS_MM, np.float32).reshape(-1, 1, 2), Hinv).reshape(-1, 2)
-    xy = cam.on_plane(pts, 0.023)[:, :2]
-    c = cam.on_plane(quad, 0.023)[:, :2]
-    yaw = math.atan2(c[1, 1] - c[0, 1], c[1, 0] - c[0, 0])
-    return [(p, yaw) for p in xy]
 
 
 def load_pose(path):
@@ -266,7 +229,7 @@ def preview(args):
 
 
 def reach(args):
-    from agentic_sim.real_route import Paused, Track, follow, park_and_release, load_route  # noqa: F401
+    from agentic_sim.real_route import follow, park_and_release, load_route  # noqa: F401
     from agentic_sim.real_route import Driver
     from real_route import Terminal, real_devices, run_dir, check_calibration
 
@@ -291,25 +254,16 @@ def reach(args):
             img = live.image
         win.show(img)
 
+    placer = Placer(None, model, corr_at, on_move=lambda: setattr(live, "arm_xyz", model.ee(placer.driver.target)))
+
     def pose_for(xyz, block_yaw, seed, phase="hover"):
-        for tilt in (TILT[phase], FAR_TILT):   # far blocks (r > ~0.30 m) need the gripper tilted more
-            reading, info = model.hover(xyz + corr_at(xyz), block_yaw, seed, tilt)
-            if reading is not None:
-                break
-        if reading is None:
-            return None
-        return reading | {"gripper": state["grip"]}
+        return placer.pose_for(xyz, block_yaw, seed, phase, state["grip"])
 
     def path_ok(a, b):
-        for s in np.linspace(0, 1, 15):
-            mid = {j: a[j] + (b[j] - a[j]) * s for j in a}
-            if model.ee(mid)[2] < SAFE_Z - 1e-3:
-                return False
-        return True
+        return placer.path_ok(a, b)
 
     def move(points, label):
-        follow(driver, Track([dict(driver.target), *points], [0.0] * len(points)), (label[0], label[1]))
-        live.arm_xyz = model.ee(driver.target)
+        placer.move(points, label)
 
     def block_z(h):
         b = state["aim"]
@@ -339,26 +293,8 @@ def reach(args):
         return None
 
     def set_grip(pct, label):
-        """Move the gripper and hold until it has stopped (closed on the block or fully open). Driver.settle only
-        watches the body joints: 11/26 the arm lifted while the gripper still read ~30 % and dropped blocks."""
         state["grip"] = pct
-        move([dict(driver.target) | {"gripper": pct}], ("夾爪", label))
-        began = driver.clock()
-        seen = []
-        while True:
-            t = driver.clock()
-            if driver.stop_requested():          # Esc holds here like every other move
-                driver.hold("operator stop")
-                raise Paused("操作者暫停")
-            _, actual, _ = driver.send(driver.target)
-            g = float(actual["gripper"])
-            seen.append((t, g))
-            seen = [(ts, v) for ts, v in seen if t - ts <= GRIP_STILL_S * 1e9]
-            settled = t - began >= GRIP_MIN_S * 1e9 and t - seen[0][0] >= GRIP_STILL_S * 0.9e9 and \
-                max(v for _, v in seen) - min(v for _, v in seen) < GRIP_STILL_PCT
-            if settled or t - began >= GRIP_MAX_S * 1e9:
-                return g
-            driver.tick(t)
+        return placer.set_grip(pct, label)
 
     def place():
         """Holding a block at hover: carry it into the next free beige slot, release, rise over the slot."""
@@ -367,31 +303,11 @@ def reach(args):
         if state["slot"] >= len(slots):
             return "米盤 4 格都放過了；清空後重開 reach。"
         xy, tray_yaw = slots[state["slot"]]
-        top = np.array([xy[0], xy[1], PLACE_Z + HOVER_M])
-        # Straight up to the carry height, across at that height (Cartesian waypoints: a joint-space move between
-        # the trays dips and the block's bottom caught the beige rim), then down into the slot.
-        here = model.ee(driver.target)
-        here = here - corr_at(here)
         held_yaw = state["aim"]["yaw"] if state["aim"] is not None else tray_yaw
-        path, seed = [], driver.target
-        for k, s_ in enumerate(np.linspace(0, 1, 6)):
-            p_xy = here[:2] + (xy - here[:2]) * s_
-            p = None
-            for z in (CARRY_Z, 0.095, 0.08, max(0.065, here[2])):   # far blocks: start lower, rise as the path comes in
-                p = pose_for(np.array([p_xy[0], p_xy[1], z]), tray_yaw if k == 5 else held_yaw, seed, "above")
-                if p is not None:
-                    break
-            if p is None:
-                return f"搬運路徑第 {k + 1} 點 IK 無解，不移動。"
-            path.append(p)
-            seed = p
-        over = pose_for(top, tray_yaw, seed, "place")
-        low = pose_for(np.array([xy[0], xy[1], PLACE_Z]), tray_yaw, over or seed, "place")
-        if over is None or low is None:
-            return "格位 IK 無解，不移動。"
-        move(path + [over, low], ("方塊上方", f"米盤第 {state['slot'] + 1} 格"))
-        set_grip(OPEN_PCT, "張開")
-        move([over | {"gripper": OPEN_PCT}], ("格位", "格位上方"))
+        err = placer.carry_and_place(xy, tray_yaw, held_yaw, f"米盤第 {state['slot'] + 1} 格", state["grip"])
+        if err:
+            return err
+        state["grip"] = OPEN_PCT
         state["slot"] += 1
         live.next_slot = state["slot"] if state["slot"] < len(slots) else None
         state["at"] = "slot"
@@ -408,6 +324,7 @@ def reach(args):
                 driver = Driver(follower, term, run_dir(Path(args.route), "reach"), hz=hz, drive_leader=False,
                                 rate=2.0)   # the taught park -> start route at twice its recorded pace (capped below)
                 driver.play_speed, driver.gripper_speed = args.speed, 2 * args.speed
+                placer.driver = driver
                 driver.on_send = refresh
                 driver.arm_at(park)
                 follow(driver, track, ("停放位", "起姿"))

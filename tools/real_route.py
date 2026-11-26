@@ -237,6 +237,17 @@ def grasp_session(driver, hand, data, args, refs, hz):
     episodes.mkdir(parents=True, exist_ok=True)
     index = args.session / "index.jsonl"
     rounds = args.pick == "random" and not args.auto_place
+    placer, slot_mounts = None, []
+    if getattr(args, "program_place", False):
+        # The demonstration ends at the stable lift; the program places into the same beige slots (P1-P4) as the
+        # finals reach tool, at the D455-measured positions of this tray layout.
+        from agentic_sim.real_kinematics import ArmModel, find_calibration
+        from agentic_sim.real_place import Placer, beige_slots, camera_from_pose, make_corr
+        if (args.destination or "beige") != "beige":
+            raise ValueError("--program-place places into the beige tray only")
+        model = ArmModel.from_file(find_calibration(data["calibrations"]["follower"]["id"]), ROOT)
+        placer = Placer(driver, model, make_corr(args.corr))
+        slot_mounts = beige_slots(camera_from_pose(args.pose), quads)
     used = {}
     if index.exists():
         for line in index.read_text(encoding="utf-8").splitlines():
@@ -294,7 +305,8 @@ def grasp_session(driver, hand, data, args, refs, hz):
                 result = grasp_round(driver, hand, data, drops, writer, check, color)
             else:
                 result = pick_place_round(driver, hand, data, writer, check, color=color, destination=destination,
-                                          slot=slot, quads=quads, choose=random_pick(rng, source) if rounds else None)
+                                          slot=slot, quads=quads, choose=random_pick(rng, source) if rounds else None,
+                                          placer=placer, slot_mount=slot_mounts[k] if placer else None)
         if result.get("demo_frames") is None:
             if root.exists():
                 set_aside(root, args.session, "cancelled before the demonstration")
@@ -461,6 +473,12 @@ def main(argv=None):
                                 "manual: colour key per episode")
             p.add_argument("--auto-place", action="store_true",
                            help="old flow: record to the lift only, then place with the taught drop route")
+            p.add_argument("--program-place", action="store_true",
+                           help="record park -> grasp -> stable lift only; c, then the program places the block in the "
+                                "slot with IK (beige rounds; agentic_sim.real_place)")
+            p.add_argument("--pose", type=Path, default=ROOT / "outputs/d455/pose_261125.json",
+                           help="D455 pose (mount_from_color) for the slot positions of --program-place")
+            p.add_argument("--corr", default="21,-1.3,20", help="--program-place sag correction (as finals_reach)")
         if name == "record-drop":
             p.add_argument("--tray", required=True, choices=("pink", "beige"))
             p.add_argument("--out", type=Path, required=True, help="drop route JSON to write")

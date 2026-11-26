@@ -257,9 +257,28 @@ def choose_target(term, blocks, color):
     return keys[term.choose(f"有 {len(same)} 顆{color}方塊，要夾哪一顆？{lines}", {k: k for k in keys})]
 
 
-def pick_place_round(driver, leader, data, writer, check_cameras, *, color, destination, slot, quads, choose=None):
+def program_place(driver, placer, slot_mount, label):
+    """After a demonstration that ended at a stable lift: carry the held block into the slot with IK
+    (agentic_sim.real_place). Returns a dict for the episode result (not recorded as demonstration rows)."""
+    from agentic_sim.real_place import HELD_PCT
+    grip = float(driver.read()["gripper"])
+    if grip < HELD_PCT:
+        driver.term.say(f"夾爪讀數 {grip:.1f}%：像是空爪，不放置，直接回起姿。")
+        return {"held": False, "gripper_pct": round(grip, 1)}
+    xy, yaw = slot_mount
+    err = placer.carry_and_place(xy, yaw, yaw, label, driver.target["gripper"])
+    if err:
+        driver.term.say(f"程式放置沒有執行：{err}")
+    return {"held": True, "gripper_pct": round(grip, 1), "slot_mount_m": [round(float(v), 4) for v in xy],
+            "error": err}
+
+
+def pick_place_round(driver, leader, data, writer, check_cameras, *, color, destination, slot, quads, choose=None,
+                     placer=None, slot_mount=None):
     """Park -> demonstrated pick and place (ending near the start pose) -> park. Returns the operator result.
-    With choose (see random_pick) the target block, and so its colour, is picked from the opening D455 frame."""
+    With choose (see random_pick) the target block, and so its colour, is picked from the opening D455 frame.
+    With placer (agentic_sim.real_place.Placer) and slot_mount ((x, y) m, tray yaw): the demonstration ends at the
+    stable lift (c) and the program places the block (the place height and release varied too much by hand)."""
     from agentic_sim.real_locate import locate
 
     park, channel, support = data["park"]["pose"], data["channel"]["command"], data["park_support"]
@@ -279,16 +298,23 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         target = choose_target(driver.term, blocks, color) if opening is not None else None
     if target is None:
         driver.term.say(f"D455 開場畫面沒找到{color}方塊；仍可錄，讀回時再確認。")
-    driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]} P{slot['index']}"
-                          "（overlay 圖上的格位：米盤靠基座、靠粉盤的角落，P1 最近；貼近盤面再張爪）→ 抬起退回起姿附近，停穩按 c。"
-                          "Esc 暫停；腕部只在 ±30° 內對齊方塊。")
+    if placer is not None:
+        driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊 → 抬起約 5 cm 停穩，按 c（不用放）。"
+                              f"之後放下 leader，程式會把方塊放進{TRAY_NAME[destination]} P{slot['index']}、回停放位。"
+                              "Esc 暫停；腕部只在 ±30° 內對齊方塊。")
+    else:
+        driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]} P{slot['index']}"
+                              "（overlay 圖上的格位：米盤靠基座、靠粉盤的角落，P1 最近；貼近盤面再張爪）→ 抬起退回起姿附近，停穩按 c。"
+                              "Esc 暫停；腕部只在 ±30° 內對齊方塊。")
     driver.arm_at(park)
     if not driver.align_leader(leader, driver.read()):
         park_and_release(driver, Track([driver.target, park], [0.0]), park, support)
         return {"cancelled": True, "demo_frames": None}
-    back = None
+    back, programmed = None, None
     while True:
         samples, kept = record_demo(driver, leader, writer, check_cameras)
+        if kept and placer is not None:
+            break
         if not kept or reach_gap(driver.read(), channel) <= END_NEAR_START:
             break
         back = lift_and_return(driver.target, channel, data["calibrations"]["follower"]["id"])
@@ -300,6 +326,11 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         if choice == "r" or not driver.align_leader(leader, driver.read()):
             break
     demo_frames = writer.count
+    if kept and placer is not None:
+        programmed = program_place(driver, placer, slot_mount, f"{TRAY_NAME[destination]} P{slot['index']}")
+        back = lift_and_return(driver.target, channel, data["calibrations"]["follower"]["id"])
+        if back is None:
+            driver.term.say("從這裡回起姿的路徑算不出來，改沿示範路徑退回。")
     if back is not None:
         follow(driver, back, ("結束位", "起姿"))
     elif reach_gap(driver.read(), channel) <= END_NEAR_START:
@@ -307,7 +338,7 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
                ("結束位", "起姿"))
     else:
         follow(driver, retrace_to(samples + [(driver.clock(), dict(driver.target))], channel), ("結束位", "起姿"))
-    if not kept:
+    if not kept or (programmed and programmed.get("held") and programmed.get("error")):
         driver.menu("在起姿保持。若夾爪裡還有方塊請取下，回程淨空後按 r 回停放位", {"r": "回停放位"})
     driver.target = driver.target | {"gripper": channel["gripper"]}
     park_and_release(driver, route.reverse(), park, support)
@@ -321,5 +352,5 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
             if landed else "D455 沒在目的盤看到新放的方塊。")
     outcome = driver.menu(seen + "結果：s 成功（收進資料）／f 失敗（移出、重錄這一格）", {"s": "成功", "f": "失敗"})
     return {"color": color, "destination": destination, "slot": slot, "target_choice": target, "scene": scene,
-            "landed": landed, "placed": landed is not None and outcome == "s", "success": outcome == "s" and kept,
+            "landed": landed, "program_place": programmed, "placed": landed is not None and outcome == "s", "success": outcome == "s" and kept,
             "demo_frames": demo_frames, "cancelled": not kept}
