@@ -38,7 +38,7 @@
 # Finals: POSE (D455 pose file, default outputs/d455/pose_261125.json), CORR (reach sag correction mm x,y,z).
 # Settings (environment): LAB_DATE (default today, YYMMDD; session folders), RIG_DATE (day whose routes and tray
 # corners to reuse, default LAB_DATE), SUPPORT (park support description, for `route`),
-# PY (default the conda lerobot python), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
+# PY (default the conda lerobot python), FOLLOWER_PORT + FOLLOWER_ID (joints / torque with the follower only), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
 # with simulated arms), MANUAL_ALIGN=1 (align the leader by hand), GRIP (route-tune gripper %), RATE (route playback speed factor, default 1.0), RELEASE (drop gripper %, default 35).
 set -euo pipefail
 
@@ -179,9 +179,14 @@ case "$step" in
 import sys
 sys.path.insert(0, "src")
 from agentic_sim.real_hardware import check_devices, load_profile, open_follower
-profile = load_profile(sys.argv[1])
-check_devices(profile)
-(arm, pair), = profile["arms"].items()
+import os
+if os.environ.get("FOLLOWER_PORT"):  # follower only (station bring-up: no leader / global camera in the profile)
+    arm, pair = "right", {"follower": {"id": os.environ.get("FOLLOWER_ID", "wowrobo_follower"),
+                                       "port": os.environ["FOLLOWER_PORT"]}}
+else:
+    profile = load_profile(sys.argv[1])
+    check_devices(profile)
+    (arm, pair), = profile["arms"].items()
 # managed + resume: connect even if torque is on, write nothing, never release.
 with open_follower(arm, pair["follower"], managed=True, resume=True) as follower:
     states = follower.torque_states()
@@ -219,9 +224,14 @@ from agentic_sim.kinematics import So101Chain
 from agentic_sim.real_hardware import check_devices, load_profile, open_follower
 from agentic_sim.real_joints import lerobot_to_shared
 from agentic_sim.real_kinematics import ArmModel, find_calibration
-profile = load_profile(sys.argv[1])
-check_devices(profile)
-(arm, pair), = profile["arms"].items()
+import os
+if os.environ.get("FOLLOWER_PORT"):  # follower only (station bring-up: no leader / global camera in the profile)
+    arm, pair = "right", {"follower": {"id": os.environ.get("FOLLOWER_ID", "wowrobo_follower"),
+                                       "port": os.environ["FOLLOWER_PORT"]}}
+else:
+    profile = load_profile(sys.argv[1])
+    check_devices(profile)
+    (arm, pair), = profile["arms"].items()
 model = ArmModel.from_file(find_calibration(pair["follower"]["id"]), ".")  # calibration-file joint map (finals)
 print("calibration offsets (deg):", " ".join(f"{v:+.2f}" for v in model.offsets_deg))
 chain = So101Chain.from_dict(load("configs/so101_chain.yaml"))

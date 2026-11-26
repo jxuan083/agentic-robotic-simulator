@@ -48,23 +48,17 @@ python -c "import torch,time; x=torch.randn(4096,4096,device='cuda'); torch.cuda
 
 **設定 `PY`**：之後的 `tools/lab_day.sh` 都要設 `PY=<這個環境的 python>`。
 
-## 3. 裝置設定
+## 3. 裝置路徑
+
+這輪只有 follower（和腕相機），不建 `outputs/single.local.yaml`。`joints`／`torque` 改用環境變數指定 follower：
 
 ```bash
-cp configs/real_teleop.single.example.yaml outputs/single.local.yaml
+export PY=<這個環境的 python>
+export FOLLOWER_PORT=/dev/serial/by-id/<比賽手臂>   # ls -l /dev/serial/by-id/
+export FOLLOWER_ID=wowrobo_follower
 ```
 
-編輯 `outputs/single.local.yaml`：
-
-| 欄位 | 填什麼 |
-|---|---|
-| `arms.right.follower.port` | 比賽手臂的 `/dev/serial/by-id/...` |
-| `arms.right.follower.id` | `wowrobo_follower` |
-| leader | 有帶 leader 才填，`id` 用 `wowrobo_leader` |
-| `cameras.global` | 刪掉 |
-| `cameras.wrist` | 用 `/dev/v4l/by-path/...` |
-
-用 `v4l2-ctl --list-devices`、`v4l2-ctl -d <dev> --list-formats-ext` 查腕相機的型號、解析度和幀率，記下來。
+用 `v4l2-ctl --list-devices`、`v4l2-ctl -d <dev> --list-formats-ext` 查腕相機的型號、解析度和幀率，並記下 `/dev/v4l/by-path/...`。
 
 ## 4. 馬達（唯讀，扭力關）
 
@@ -104,8 +98,7 @@ $PY -c "import sys,json; sys.path.insert(0,'src'); from agentic_sim.real_kinemat
 ## 6. 關節映射驗證：用尺量（扭力關，這輪最重要）
 
 ```bash
-PY=<python> tools/lab_day.sh check
-PY=<python> tools/lab_day.sh joints
+tools/lab_day.sh joints      # 用第 3 節的 PY / FOLLOWER_PORT / FOLLOWER_ID
 ```
 
 `joints` 是唯讀即時讀數。每一行會印出：
@@ -160,7 +153,7 @@ PY=<python> tools/lab_day.sh joints
 - 指令與實際的差；
 - 夾爪開到 40% 和閉到 8% 時的讀數。
 
-收尾一定要跑 `PY=<python> tools/lab_day.sh torque`，確認每軸扭力都是 0。
+收尾一定要跑 `tools/lab_day.sh torque`，確認每軸扭力都是 0。
 
 ## 9. 帶回
 
