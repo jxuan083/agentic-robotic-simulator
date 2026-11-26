@@ -20,6 +20,7 @@
 #     drop-test-beige / drop-test-pink   replay park -> channel -> drop pose -> release -> back (no leader)
 #     grasp        park-start rounds (random target): demo park -> grasp -> lift, c, program places in P1-P4
 #                  (HAND_PLACE=1: demonstrate the placing too), session outputs/<date>-park
+#     auto         scripted rounds: program grasp recorded (start -> lift), program place, automatic tray reset
 #     wristcam     fix the wrist camera's white balance (WB, default 4600 K) and frame rate; once per day
 #     datacheck    every 5 rounds: training selection and desk issues of the newest LAST (20) episodes
 #     try          park -> channel, then t = leader test grasps from the channel (reach check for the cards)
@@ -155,6 +156,13 @@ case "$step" in
     PLACE_ARG=(--program-place ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"}); [[ -n "${HAND_PLACE:-}" ]] && PLACE_ARG=()
     "$PY" tools/real_route.py grasp "${MOTION[@]}" --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" \
       --trays "$TRAYS" --session "outputs/$DATE-park" --pick "${PICK:-random}" "${PLACE_ARG[@]}" ;;
+  auto)
+    # Scripted park rounds: program grasp recorded start -> lift (mode "script"), program place, automatic reset of
+    # the pink tray. ROUNDS (default 5), SEED; session outputs/<date>-auto. Torque on: confirm the start like reach.
+    need "$ROUTE" "$TRAYS"
+    "$PY" tools/auto_collect.py --config "$CONFIG" --route "$ROUTE" --trays "$TRAYS" --serial "$D455" \
+        --session "outputs/$DATE-auto" --rounds "${ROUNDS:-5}" ${SEED:+--seed "$SEED"} ${POSE:+--pose "$POSE"} \
+        ${CORR:+--corr "$CORR"} "$@" ;;
   wristcam)
     # Fixed white balance and frame rate for the wrist camera: auto white balance turns the white desk cyan when
     # the pink tray fills the view, and dynamic frame rate drops frames in dim light. Lost on replug: run each day.

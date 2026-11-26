@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""Scripted park rounds: the program grasps, records the same episode format as the human demonstrations, places,
+and resets the trays itself (docs/real-dagger.md stages 2 and 5; the leader takeover is not wired yet: a failure stops
+the loop for the operator).
+
+  tools/lab_day.sh auto            # lerobot env; ROUNDS=<n> (default 5), SEED=<n>
+
+Per episode (the follower parks in between, like the human rounds):
+  1. D455 at park (aligned depth, agentic_sim.real_d455.detect, median of 6 frames): blocks in the pink tray inside the
+     safe grasp zone; one picked at random.
+  2. The episode recording opens; the fixed route takes the follower to the start pose (not recorded, as for people).
+  3. Recorded, command_source "script": start pose -> over the block (half of the episodes first over a point
+     offset by up to 10 mm / 10 deg, then corrected: recovery data) -> grasp height -> close (until the gripper stops)
+     -> lift 5 cm and hold 0.5 s. That is the part ACT learns (start -> lift).
+  4. Not recorded: carry into the next beige slot (P1-P4), release, straight up, start pose, park.
+  5. review.json as for the human rounds (start "start", D455 target from the opening frame, training range up to the
+     lift); success = the gripper held after the lift and the D455 sees the block in the beige tray at park.
+     Failures move to <session>-rejected/ and the loop waits for the operator.
+When the pink tray is empty the program moves the beige blocks back into the pink tray at random free positions and
+yaws inside the safe zone (not recorded; logged in <session>/reset.jsonl) and starts the next round.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import random
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "tools"))
+
+import numpy as np  # noqa: E402
+
+from agentic_sim.real_place import (  # noqa: E402
+    CARRY_Z, CLOSED_PCT, EDGE_M, GRASP_M, HELD_PCT, HOVER_M, OPEN_PCT, Placer, beige_slots, camera_from_pose,
+    make_corr,
+)
+
+LIFT_M = 0.05            # recorded lift above the grasp height (the human prompt: about 5 cm)
+LIFT_HOLD_S = 0.5        # still at the lift before the recording stops (the review's lift frame)
+PERTURB_P = 0.5          # share of episodes approaching an offset point first
+PERTURB_MM, PERTURB_DEG = 10.0, 10.0
+RESET_MARGIN_M = 0.040   # reset positions this far inside the pink rim (wall + half a block + clearance)
+RESET_GAP_M = 0.050      # centre distance between reset blocks (room for the open fingers)
+RECORD_SPEED = 45.0      # deg/s while recording (the collection playback cap; close to the human pace)
+MOVE_SPEED = 75.0        # deg/s for the unrecorded moves
+
+
+def snapshot(read, cam, quads, frames=6):
+    """Median D455 detection over a few aligned frames (positions; yaw by the 4-fold circular mean)."""
+    from agentic_sim.real_d455 import detect
+    seen = []
+    for _ in range(frames + 3):
+        bgr, depth = read()
+        seen.append(detect(bgr, depth, cam, quads)[0])
+    seen = seen[3:]
+    out = []
+    for b in seen[-1]:
+        same = [min(s, key=lambda c: math.hypot(c["x"] - b["x"], c["y"] - b["y"])) for s in seen if s]
+        same = [c for c in same if c["color"] == b["color"] and math.hypot(c["x"] - b["x"], c["y"] - b["y"]) < 0.01]
+        m = dict(b)
+        for k in ("x", "y", "z_top"):
+            m[k] = float(np.median([c[k] for c in same]))
+        m["yaw"] = float(np.angle(np.exp(4j * np.array([c["yaw"] for c in same])).mean()) / 4) % (math.pi / 2)
+        out.append(m)
+    return out
+
+
+def look(serial, cam, quads):
+    from agentic_sim.real_d455 import open_aligned
+    read, _, stop = open_aligned(serial)
+    try:
+        return snapshot(read, cam, quads)
+    finally:
+        stop()
+
+
+def tray_polygon(cam, quad, margin):
+    """Tray rim corners (image quad) on the table plane in the mount frame, shrunk towards the centre by margin."""
+    c = cam.on_plane(np.asarray(quad, float), 0.023)[:, :2]
+    centre = c.mean(0)
+    return np.array([p + (centre - p) / np.linalg.norm(centre - p) * margin * math.sqrt(2) for p in c])
+
+
+def inside(poly, xy):
+    x, y = xy
+    hit = False
+    for (x1, y1), (x2, y2) in zip(poly, np.roll(poly, -1, 0)):
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            hit = not hit
+    return hit
+
+
+def sample_free(rng, poly, zone, taken, feasible, tries=400):
+    """A random (x, y, yaw) inside poly and the safe zone, RESET_GAP_M from every taken centre, that feasible() accepts."""
+    from finals_reach import in_zone
+    lo, hi = poly.min(0), poly.max(0)
+    for _ in range(tries):
+        xy = rng.uniform(lo, hi)
+        if not inside(poly, xy) or not in_zone(zone, *xy):
+            continue
+        if any(math.hypot(*(xy - t)) < RESET_GAP_M for t in taken):
+            continue
+        yaw = rng.uniform(0, math.pi / 2)
+        if feasible(xy, yaw):
+            return xy, yaw
+    return None
+
+
+class Episodes:
+    """Motion pieces of one scripted round on a Driver + Placer (no cameras: testable with the fake follower)."""
+
+    def __init__(self, driver, placer, rng):
+        self.driver, self.placer, self.rng = driver, placer, rng
+
+    def _pose(self, xyz, yaw, phase, grip):
+        return self.placer.pose_for(np.asarray(xyz, float), yaw, self.driver.target, phase, grip)
+
+    def grasp(self, block, perturb=None):
+        """Start pose (or anywhere above the trays) -> over the block [-> via an offset point] -> grasp -> close ->
+        lift and hold. Returns (gripper reading after the lift, info) or (None, reason) when an IK fails before
+        anything moved."""
+        c = np.array([block["x"], block["y"], block["z_top"] - EDGE_M / 2])
+        yaw = block["yaw"]
+        hover = self._pose(c + [0, 0, HOVER_M], yaw, "hover", OPEN_PCT)
+        low = self._pose(c + [0, 0, GRASP_M], yaw, "grasp", OPEN_PCT)
+        if hover is None or low is None:
+            return None, "IK 無解"
+        # In from above (CARRY_Z over the block): a joint-space move from the start pose or from the other tray
+        # must not dip into a rim or a neighbour; then straight down to the hover.
+        above = self._pose([c[0], c[1], max(CARRY_Z, c[2] + HOVER_M + 0.03)], yaw, "above", OPEN_PCT)
+        via = [above] if above is not None else []
+        if perturb is not None:
+            off = np.array([perturb[0], perturb[1], 0.0]) / 1000
+            p = self._pose(c + off + [0, 0, HOVER_M], yaw + math.radians(perturb[2]), "hover", OPEN_PCT)
+            if p is not None:
+                via.append(p)
+        self.placer.move(via + [hover], ("起姿", "方塊上方"))
+        self.placer.move([low], ("方塊上方", "夾取高度"))
+        self.placer.set_grip(CLOSED_PCT, "閉合")
+        up = self._pose(c + [0, 0, GRASP_M + LIFT_M], yaw, "hover", CLOSED_PCT)
+        if up is None:
+            return float(self.driver.read()["gripper"]), "抬起 IK 無解"
+        self.placer.move([up], ("夾取高度", "抬起"))
+        held = self.hold(LIFT_HOLD_S)
+        return held, None
+
+    def hold(self, seconds):
+        d = self.driver
+        end = d.clock() + seconds * 1e9
+        g = float(d.read()["gripper"])
+        while d.clock() < end:
+            began = d.clock()
+            _, actual, _ = d.send(d.target)
+            g = float(actual["gripper"])
+            d.tick(began)
+        return g
+
+    def place(self, xy, yaw, label):
+        return self.placer.carry_and_place(xy, yaw, yaw, label, CLOSED_PCT)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--config", default=str(ROOT / "outputs/single.local.yaml"))
+    ap.add_argument("--route", required=True)
+    ap.add_argument("--trays", required=True)
+    ap.add_argument("--serial", required=True)
+    ap.add_argument("--pose", default=str(ROOT / "outputs/d455/pose_261125.json"))
+    ap.add_argument("--corr", default="21,-1.3,20")
+    ap.add_argument("--session", required=True, help="episodes go to <session>/episodes/S<nnnn>")
+    ap.add_argument("--rounds", type=int, default=5, help="rounds of 4 (each followed by a reset)")
+    ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--follower-id", default="my_awesome_follower_arm")
+    args = ap.parse_args(argv)
+    return run(args)
+
+
+def run(args):
+    from agentic_sim.real_grasp import control_row, finalize, latest_global, lift_and_return, placed_block
+    from agentic_sim.real_kinematics import ArmModel, find_calibration
+    from agentic_sim.real_locate import locate, tray_homography
+    from agentic_sim.real_route import Driver, Track, follow, load_route, park_and_release
+    from finals_reach import safe_zone
+    from real_route import Terminal, check_calibration, episode_capture, real_devices, run_dir, set_aside
+    import cv2
+
+    rng = np.random.default_rng(args.seed)
+    pyrng = random.Random(args.seed)
+    data, route = load_route(Path(args.route))
+    park, channel, support = data["park"]["pose"], data["channel"]["command"], data["park_support"]
+    quads = json.loads(Path(args.trays).read_text())["quads"]
+    cam = camera_from_pose(args.pose)
+    model = ArmModel.from_file(find_calibration(args.follower_id), ROOT)
+    corr_at = make_corr(args.corr)
+    zone = safe_zone(model, corr_at, args.follower_id, args.corr, ROOT / "outputs/d455")
+    slots = beige_slots(cam, quads)
+    pink = tray_polygon(cam, quads["pink"], RESET_MARGIN_M)
+    H_pink = tray_homography(np.asarray(quads["pink"], np.float32), "pink")
+    session = Path(args.session)
+    (session / "episodes").mkdir(parents=True, exist_ok=True)
+    index, reset_log = session / "index.jsonl", session / "reset.jsonl"
+    from finals_reach import in_zone
+
+    with Terminal() as term:
+        term.say("自動收資料：程式夾取並錄製（起姿 → 抬起），放進米盤 P1-P4，粉盤空了自動把方塊放回粉盤。\n"
+                 "開始前確認：follower 在停放位、扭力關；粉盤內 1-4 顆方塊都在橘色弧線內；米盤清空；工作區淨空。"
+                 "Esc 隨時原地暫停。")
+        if term.choose("y 開始（開扭力）／n 離開", {"y": "開始", "n": "離開"}) != "y":
+            return 0
+        with real_devices(args.config, "right", leader=False) as (_, follower, refs, hz):
+            check_calibration(data, refs, leader=False)
+            driver = Driver(follower, term, run_dir(Path(args.route), "auto"), hz=hz, drive_leader=False)
+            driver.play_speed, driver.gripper_speed = MOVE_SPEED, 2 * MOVE_SPEED
+            placer = Placer(driver, model, corr_at)
+            eps = Episodes(driver, placer, rng)
+            driver.arm_at(park)
+            slot_k, done_rounds = 0, 0
+
+            def to_start():
+                follow(driver, route, ("停放位", "起姿"))
+
+            def home():
+                back = lift_and_return(driver.target, channel, args.follower_id)
+                if back is not None:
+                    follow(driver, back, ("目前位置", "起姿"))
+                driver.target = driver.target | {"gripper": channel["gripper"]}
+                follow(driver, route.reverse(), ("起姿", "停放位"))
+
+            def feasible(xy, yaw):
+                c = np.array([xy[0], xy[1], EDGE_M / 2])
+                return all(placer.pose_for(c + [0, 0, h], yaw, channel, ph, OPEN_PCT) is not None
+                           for h, ph in ((HOVER_M, "hover"), (GRASP_M, "grasp")))
+
+            def reset(beige_blocks, occupied=()):
+                """Beige blocks back into the pink tray at random free spots (not recorded); occupied: pink blocks
+                already there."""
+                nonlocal slot_k
+                taken = [np.array([b["x"], b["y"]]) for b in occupied]
+                to_start()
+                for b in beige_blocks:
+                    spot = sample_free(rng, pink, zone, taken, feasible)
+                    if spot is None:
+                        term.say("粉盤找不到可放的位置；停在起姿。")
+                        return False
+                    xy, yaw = spot
+                    driver.play_speed = MOVE_SPEED
+                    held, err = eps.grasp(b)
+                    if err or held < HELD_PCT:
+                        term.say(f"還原：{b['color']} 沒夾起（{err or f'{held:.1f}%'}）。")
+                        placer.set_grip(OPEN_PCT, "張開")
+                        return False
+                    err = placer.carry_and_place(xy, yaw, b["yaw"], "粉盤", CLOSED_PCT)
+                    if err:
+                        term.say(f"還原：{err}")
+                        return False
+                    taken.append(np.asarray(xy))
+                    with reset_log.open("a", encoding="utf-8") as fh:
+                        fh.write(json.dumps({"t": time.time(), "color": b["color"], "from": [b["x"], b["y"]],
+                                             "to": [float(xy[0]), float(xy[1])], "yaw_deg": math.degrees(yaw)}) + "\n")
+                home()
+                slot_k = 0
+                return True
+
+            while done_rounds < args.rounds:
+                blocks = look(args.serial, cam, quads)
+                source = [b for b in blocks if b["tray"] == "pink" and in_zone(zone, b["x"], b["y"])]
+                if not source:
+                    beige = [b for b in blocks if b["tray"] == "beige"]
+                    done_rounds += 1 if slot_k else 0
+                    if not beige or done_rounds >= args.rounds:
+                        break
+                    term.say(f"粉盤空了：把米盤 {len(beige)} 顆放回粉盤（不錄）。")
+                    if not reset(beige):
+                        if term.choose("還原失敗。手動整理好方塊後 c 繼續／q 結束", {"c": "繼續", "q": "結束"}) == "q":
+                            break
+                    continue
+                if slot_k >= len(slots):
+                    term.say("米盤 4 格已滿，但粉盤還有方塊：先還原。")
+                    reset([b for b in blocks if b["tray"] == "beige"], [b for b in blocks if b["tray"] == "pink"])
+                    continue
+                target = pyrng.choice(source)
+                perturb = None
+                if rng.random() < PERTURB_P:
+                    perturb = (rng.uniform(-PERTURB_MM, PERTURB_MM), rng.uniform(-PERTURB_MM, PERTURB_MM),
+                               rng.uniform(-PERTURB_DEG, PERTURB_DEG))
+                number = 1 + len(list((session / "episodes").glob("S*")))
+                root = session / "episodes" / f"S{number:04}"
+                u, v = target["pixel"]
+                local = cv2.perspectiveTransform(np.array([[[u, v]]], np.float32), H_pink)[0, 0]
+                term.say(f"S{number:04}：{target['color']} x {target['x'] * 1000:.0f} y {target['y'] * 1000:.0f} mm "
+                         f"yaw {math.degrees(target['yaw']):.0f}°" + (f"，擾動 {np.round(perturb, 1).tolist()}" if perturb else ""))
+                with episode_capture(root, args.config, "right", refs, hz, data["layout_id"],
+                                     tool="tools/auto_collect.py", start_pose="start", mapping="script") as (writer, check):
+                    opening = latest_global(writer)
+                    before = locate(opening, quads)["blocks"] if opening is not None else []
+                    to_start()
+                    rows = [0]
+
+                    def on_send(sent, actual):
+                        rows[0] += 1
+                        if rows[0] % 15 == 0:
+                            check()
+                        writer.add_control(control_row(writer, sent, actual) | {"command_source": "script",
+                                                                                 "task_is_policy": 1})
+                    driver.play_speed = RECORD_SPEED
+                    driver.on_send = on_send
+                    try:
+                        held, err = eps.grasp(target, perturb)
+                    finally:
+                        driver.on_send = None
+                        driver.play_speed = MOVE_SPEED
+                    demo_frames = writer.count
+                    ok_hold = held is not None and held >= HELD_PCT
+                    place_err = None
+                    if ok_hold:
+                        xy, yaw = slots[slot_k]
+                        place_err = eps.place(xy, yaw, f"米盤 P{slot_k + 1}")
+                        if place_err:   # still holding: never open on the way home
+                            term.choose(f"程式放置沒有執行（{place_err}）。扶住夾爪裡的方塊後按 o 張爪",
+                                        {"o": "張爪"})
+                            placer.set_grip(OPEN_PCT, "張開")
+                    else:
+                        placer.set_grip(OPEN_PCT, "張開")
+                    home()
+                    final = latest_global(writer)
+                    landed = placed_block(before, locate(final, quads)["blocks"], target["color"], "beige",
+                                          {"index": slot_k + 1, "xy": [0, 0]}) if final is not None else None
+                success = bool(ok_hold and not place_err and landed is not None)
+                slot = {"index": slot_k + 1, "xy": json.loads((ROOT / "configs/real_slots.json").read_text())["beige"][slot_k]}
+                extra = {"script": {"perturb_mm_deg": perturb, "gripper_after_lift": held, "error": err or place_err,
+                                    "target_mount_m": [target["x"], target["y"], target["z_top"]],
+                                    "target_yaw_deg": math.degrees(target["yaw"]), "corr": args.corr,
+                                    "seed": args.seed}}
+                report, review = finalize(root, color=target["color"], destination="beige", success=success,
+                                          quads=quads, target_pose=(float(local[0]), float(local[1])), slot=slot,
+                                          landed=landed, extra=extra, start="start", mode="script")
+                line = {"episode": root.name, "color": target["color"], "success": success, "ok": report["ok"],
+                        "demo_frames": demo_frames, "training_ranges": review.get("training_ranges"),
+                        "perturb": perturb, "reasons": report["review_reasons"]}
+                if not success:
+                    moved = set_aside(root, session, "failed", line)
+                    term.say(f"失敗（{err or place_err or ('沒夾到' if not ok_hold else 'D455 沒看到落點')}），"
+                             f"原檔 {moved.name}。")
+                    if term.choose("把掉落的方塊放回粉盤弧線內、米盤該格清空後 c 繼續／q 結束",
+                                   {"c": "繼續", "q": "結束"}) == "q":
+                        break
+                    continue
+                with index.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+                slot_k += 1
+                term.say(f"{root.name} 成功：{demo_frames} 幀，訓練段 {review.get('training_ranges')}。")
+            park_and_release(driver, Track([dict(driver.target), park], [0.0]), park, support)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

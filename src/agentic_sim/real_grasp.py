@@ -160,7 +160,7 @@ def grasp_round(driver, leader, data, drops, writer, check_cameras, color):
 
 
 def finalize(root, *, color, destination, success, quads, target_pose=None, slot=None, landed=None, extra=None,
-             start="park"):
+             start="park", mode="demonstration"):
     """Readback, D455 target from the opening frame (fixed trays) and review.json.
 
     Frames: start (first motion), close, lift (first still moment after lifting), and for demonstrated placement
@@ -209,6 +209,7 @@ def finalize(root, *, color, destination, success, quads, target_pose=None, slot
                              "slot": slot and slot["index"], "slot_xy": slot and slot["xy"],
                              "start": start, "layout_group": None}
     manifest["operator_result"] = review["outcome"]
+    manifest["mode"] = mode    # "demonstration" (leader) or "script" (tools/auto_collect.py); real_to_lerobot --modes
     write_json(root / "manifest.json", manifest)
     write_json(root / "review.json", review | {"review_reasons": report["review_reasons"], "d455_blocks": located})
     return report, review
