@@ -218,9 +218,12 @@ from agentic_sim.config import load
 from agentic_sim.kinematics import So101Chain
 from agentic_sim.real_hardware import check_devices, load_profile, open_follower
 from agentic_sim.real_joints import lerobot_to_shared
+from agentic_sim.real_kinematics import ArmModel, find_calibration
 profile = load_profile(sys.argv[1])
 check_devices(profile)
 (arm, pair), = profile["arms"].items()
+model = ArmModel.from_file(find_calibration(pair["follower"]["id"]), ".")  # calibration-file joint map (finals)
+print("calibration offsets (deg):", " ".join(f"{v:+.2f}" for v in model.offsets_deg))
 chain = So101Chain.from_dict(load("configs/so101_chain.yaml"))
 chain.ee_offset = np.array(load("configs/teleop.yaml")["ee_offset_in_gripper_link"]["value"], float)
 chain.base_pos = np.array([0.0, 0.0, -0.0301])
@@ -234,13 +237,16 @@ with open_follower(arm, pair["follower"], managed=True, resume=True) as follower
         vals = [float(r[n]) for n in names]
         q, _ = lerobot_to_shared(vals)
         ee = chain.ee_pose_mount(np.clip(q, chain.lower, chain.upper))[:3, 3] * 1000
-        print("LeRobot " + " ".join(f"{v:7.1f}" for v in vals) + "   EE(map) mm " + " ".join(f"{v:6.0f}" for v in ee))
+        cal = model.ee(r) * 1000
+        print("LeRobot " + " ".join(f"{v:7.1f}" for v in vals) + "   EE(map) mm " + " ".join(f"{v:6.0f}" for v in ee)
+              + "   EE(calib) mm " + " ".join(f"{v:6.0f}" for v in cal))
         label = input("label (Enter = next reading, text = save, q = quit): ").strip()
         if label == "q":
             break
         if label:
             out.write(json.dumps({"t": time.time(), "label": label, "lerobot": dict(zip(names, vals)),
-                                  "ee_map_mm": [round(float(v), 1) for v in ee]}, ensure_ascii=False) + "\n")
+                                  "ee_map_mm": [round(float(v), 1) for v in ee],
+                                  "ee_calib_mm": [round(float(v), 1) for v in cal], "follower_id": pair["follower"]["id"]}, ensure_ascii=False) + "\n")
             out.flush()
             print("saved:", label)
 PYEOF
