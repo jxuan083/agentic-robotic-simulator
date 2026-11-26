@@ -9,9 +9,11 @@ One skill runs at a time; it only proposes EE targets and gripper goals to the s
 - "total" is the new complete order, "add" adds to it. Each change is a new ledger revision; the running skill is
   re-checked against it at once: kept (and re-tagged with the new revision) if it still serves the order, otherwise
   cancelled by phase (agentic_sim.task.skills). Every frame's command carries the revision it was issued for.
-- Holding a block the new order does not need: stop, keep it, ask the user (return / place_at / deliver). No release
+- Holding a block the new order does not need: stop, keep it, ask the user (return / place_at / deliver; with
+  no_return: deliver / hold until removed on site). No release
   and no return home before the answer.
-- Delivered beyond the order (released before the change): reported, then retrieved to the storage tray.
+- Delivered beyond the order (released before the change): reported, then retrieved to the storage tray (with
+  no_return: reported only, left for the user to decide or have removed on site).
 - Shortage: do what can be done first, then ask (substitute colour / reduce / wait). Never substitute on its own.
 - A delivery counts only after the placed block is observed at rest in the tray with the gripper open and clear.
 - Standby (finals): ex.standby() sends the empty arm to the standby (home) point; once it has arrived and settled
@@ -38,6 +40,7 @@ ASSOCIATE_M = 0.025   # bookkeeping / scoring only: an observed block is the sim
 
 HELD_OPTIONS = ("return", "place_at", "deliver")
 SHORTAGE_OPTIONS = ("substitute", "reduce", "wait")
+NO_RETURN_HELD = ("deliver", "hold")          # no_return: the real arm only picks from storage into placement
 
 
 class TaskExecutor:
@@ -80,6 +83,9 @@ class TaskExecutor:
         self.pick_frame = {**DEFAULT_FRAME, **{k: v for k, v in (cfg.get("pick_ref") or {}).items()
                                                if k in DEFAULT_FRAME}}
         self.prefer_reachable = bool((cfg.get("pick_ref") or {}).get("prefer_reachable", False))
+        # no_return (task.yaml, default false): delivered blocks are never taken back and a held block the order does
+        # not need is delivered anyway or held until someone on site takes it; the chat reports, the user decides
+        self.no_return = bool(cfg.get("no_return", False))
         self._reach_cache: dict = {}
         self._event_log = None
         if event_log:
@@ -320,7 +326,7 @@ class TaskExecutor:
                 self.observe_at = self.t + float(self.cfg["shortage"]["recheck_s"])   # look again
                 return
         overs = led.overs()
-        if overs:
+        if overs and not self.no_return:
             c = next(iter(overs))
             b = [x for x, col in self.delivered_blocks.items() if col == c][-1]   # the last one delivered
             self.purpose = "retrieve"
@@ -437,15 +443,25 @@ class TaskExecutor:
     def _ask_held(self, b: int):
         c = self.color(b)
         self._start(Hold, block=b)
+        if self.no_return:
+            return self._ask("held_item", f"Holding 1 {c}, which the new order does not need. Deliver it anyway "
+                             f"(deliver) or hold it here until it is taken off the gripper (hold)?",
+                             NO_RETURN_HELD, block=b, color=c)
         self._ask("held_item", f"Holding 1 {c}, which the new order does not need. Return it to its place "
                   f"(return), put it somewhere else (place_at x y), or deliver it anyway (deliver)?",
                   HELD_OPTIONS, block=b, color=c)
 
     def _ask_full(self, b: int):
         self._start(Hold, block=b)
+        if self.no_return:
+            return self._ask_removal(b)
         self._ask("held_item", f"No free slot in the placement tray for the {self.color(b)} block in the gripper. "
                   f"Return it (return) or put it somewhere else (place_at x y)?", ("return", "place_at"),
                   block=b, color=self.color(b))
+
+    def _ask_removal(self, b: int):
+        self._ask("removal", f"Holding the {self.color(b)} block until it is taken off the gripper. "
+                  f"Say when it is gone (removed).", ("removed",), block=b, color=self.color(b))
 
     def _ask_shortage(self, needed: dict):
         led = self.ledger
@@ -509,7 +525,7 @@ class TaskExecutor:
         if q is not None and q["kind"] == "shortage":
             self.emit("question_dropped", id=q["id"], reason="order_changed")
             self.question = None
-        if q is not None and q["kind"] == "held_item" and self.ledger.need(q["color"]) > 0:
+        if q is not None and q["kind"] in ("held_item", "removal") and self.ledger.need(q["color"]) > 0:
             self.emit("question_dropped", id=q["id"], reason="order_changed")
             self.question = None
             self.purpose = "deliver"
@@ -558,7 +574,19 @@ class TaskExecutor:
             return
         self.emit("answer", id=qid, choice=choice, **kw)
         led = self.ledger
+        if q["kind"] == "removal":     # taken off the gripper on site: open, it is no longer ours to place
+            b = q["block"]
+            self.question, self.holding, self.purpose = None, None, None
+            self.skipped.add(b)
+            self.emit("block_removed", block=b, color=q["color"])
+            if self.skill is not None and self.skill.name == "hold":
+                self.skill.cancel("answered", led.revision)
+            self.standby_requested = True   # Home opens the gripper (in simulation the block drops off the trays)
+            return
         if q["kind"] == "held_item":
+            if choice == "hold":
+                self.question = None
+                return self._ask_removal(q["block"])
             if choice == "place_at":
                 xy = kw.get("xy")
                 if not xy or len(xy) != 2:
@@ -670,7 +698,9 @@ class TaskExecutor:
             if (over > 0 or (extra > 0 and led.delivered.get(c, 0) > led.target.get(c, 0))) and key not in self._reported_over:
                 self._reported_over.add(key)
                 self.emit("over_delivery", color=c, over=over, accepted=extra, delivered=led.delivered.get(c, 0),
-                          target=led.target.get(c, 0), action="retrieve" if over > 0 else "kept (user approved)")
+                          target=led.target.get(c, 0),
+                          action=("left_for_operator" if self.no_return else "retrieve") if over > 0
+                          else "kept (user approved)")
 
     def _track_cancel(self):
         pc = self._pending_cancel
