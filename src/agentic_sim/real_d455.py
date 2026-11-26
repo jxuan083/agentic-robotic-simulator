@@ -88,6 +88,36 @@ class Camera:
         return np.where(depth_m > 0.15, Z, np.nan)
 
 
+def edge_yaw(bgr_f, cam, centre_xyz, ref_hsv, radius_px=16):
+    """Block yaw (rad, mod 90 deg) from the colour edges around the block: gradients of the distance to the block's
+    own colour, angles folded by four (a square repeats every 90 deg), weighted by gradient strength, then turned
+    from image angle to the mount frame on the top plane. None when the edges are too weak."""
+    u0, v0 = cam.project([centre_xyz])[0]
+    h, w = bgr_f.shape[:2]
+    x0, x1 = int(max(u0 - radius_px, 1)), int(min(u0 + radius_px, w - 2))
+    y0, y1 = int(max(v0 - radius_px, 1)), int(min(v0 + radius_px, h - 2))
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return None
+    patch = bgr_f[y0 - 1:y1 + 1, x0 - 1:x1 + 1]
+    hsv = cv2.cvtColor(patch.astype(np.uint8), cv2.COLOR_BGR2HSV).astype(np.float32)
+    dh = np.abs(hsv[..., 0] - ref_hsv[0])
+    dh = np.minimum(dh, 180 - dh) / 12.0
+    dist = np.sqrt(dh ** 2 + ((hsv[..., 1] - ref_hsv[1]) / 90.0) ** 2 + ((hsv[..., 2] - ref_hsv[2]) / 110.0) ** 2)
+    dist = cv2.GaussianBlur(np.minimum(dist, 3.0).astype(np.float32), (3, 3), 0)
+    gx = cv2.Sobel(dist, cv2.CV_32F, 1, 0, ksize=3)[1:-1, 1:-1]
+    gy = cv2.Sobel(dist, cv2.CV_32F, 0, 1, ksize=3)[1:-1, 1:-1]
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    wgt = (gx ** 2 + gy ** 2) * (np.hypot(xx - u0, yy - v0) <= radius_px)
+    if wgt.sum() < 1e-3:
+        return None
+    z = (wgt * np.exp(4j * np.arctan2(gy, gx))).sum()
+    if abs(z) / wgt.sum() < 0.15:      # no dominant edge direction
+        return None
+    a = np.angle(z) / 4                 # image angle of an edge normal (mod 90 deg)
+    p = cam.on_plane([[u0, v0], [u0 + 5 * math.cos(a), v0 + 5 * math.sin(a)]], centre_xyz[2])
+    return math.atan2(p[1, 1] - p[0, 1], p[1, 0] - p[0, 0]) % (math.pi / 2)
+
+
 def _regions(shape, quads):
     out = {}
     for tray, quad in (quads or {}).items():
@@ -112,6 +142,7 @@ def detect(bgr, depth_m, cam: Camera, quads=None):
     cand = ((cand > TOP_MIN) & (cand < TOP_MAX)).astype(np.uint8)
     cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    bgr_f = bgr.astype(np.float32)
     n, labels, stats, cents = cv2.connectedComponentsWithStats(cand)
     names = list(COLOR_REF)
     refs = np.array([COLOR_REF[c] for c in names], float)
@@ -140,11 +171,13 @@ def detect(bgr, depth_m, cam: Camera, quads=None):
                              "why": f"size {w * 1000:.0f}x{h * 1000:.0f} mm"})
             return
         u0, v0 = cam.project([[cx, cy, top + table_z]])[0]
+        yaw_e = edge_yaw(bgr_f, cam, [cx, cy, top + table_z], med)
+        yaw = yaw_e if yaw_e is not None else math.radians(ang) % (math.pi / 2)
         tray = next((t for t, r in regions.items() if r[min(max(int(v0), 0), r.shape[0] - 1),
                                                         min(max(int(u0), 0), r.shape[1] - 1)]), None)
         blocks.append({"color": name, "color_distance": round(dist, 2), "hsv": [int(x) for x in med],
                        "x": float(cx), "y": float(cy), "z_top": top + table_z, "height_mm": round(top * 1000, 1),
-                       "yaw": math.radians(ang) % (math.pi / 2), "size_mm": [round(w * 1000, 1), round(h * 1000, 1)],
+                       "yaw": yaw, "yaw_source": "edges" if yaw_e is not None else "rectangle", "size_mm": [round(w * 1000, 1), round(h * 1000, 1)],
                        "pixel": [float(u0), float(v0)], "tray": tray, "source": "depth"})
 
     for i in range(1, n):

@@ -89,6 +89,8 @@ class Live:
             m = dict(b)
             for k in ("x", "y", "z_top"):
                 m[k] = float(np.median([c[k] for c in same]))
+            z = np.exp(4j * np.array([c["yaw"] for c in same])).mean()   # yaw repeats every 90 deg
+            m["yaw"] = float(np.angle(z) / 4 % (math.pi / 2))
             out.append(m)
         return out
 
