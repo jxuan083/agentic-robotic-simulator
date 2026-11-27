@@ -27,7 +27,7 @@ flowchart LR
 - **共用任務核心，分開後端**：Isaac Sim 與 MuJoCo 共用場景設定；實機錄製在獨立整合分支，完整 `real` 與 `mock` 後端仍在規劃中。
 - **ACT 為主線**：政策經 adapter 接入，預留 Diffusion Policy、π0.5 等替代政策。
 - **操作輸入共用一個介面**：模擬端先用 keyboard／mouse 操作末端（EE），再接實體 SO-101 leader，controller 最後。
-- **場地與任務分開**：已提供 `lab_current_minimal` 與 `lab_20261120`；`competition_draft` 待場地量測。
+- **場地與任務分開**：已提供 `lab_current_minimal`、`lab_20261120` 與 `lab_20261125`（決賽配置：11/25 盤位、停放位起始、徑向夾爪）；`competition_draft` 待場地量測。
 - **DAgger 規劃**：人工接管 → 修正資料保存 → 檢查 → 明確納入再訓練 → 同條件比較新舊政策。
 - **依賴環境分開**：同一 repo，模擬端、訓練端、實機執行端可使用各自的 Python 環境。
 

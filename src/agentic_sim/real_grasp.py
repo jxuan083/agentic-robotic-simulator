@@ -1,8 +1,11 @@
 """One pick-and-place demonstration from the park pose, driven from a terminal (no task cards).
 
   park (torque on, small reseat) -> leader handed over at park ->
-  [record: unfold, approach, close, lift, carry, place in the chosen slot, open, retreat near the start pose] c ->
-  start pose -> park -> torque off
+  [record: unfold, approach, close, lift, carry, place in the chosen slot, open, lift] c ->
+  (straight up to 12 cm when c is pressed away from the start pose) start pose -> park -> torque off
+With --program-place (lab_day grasp default since 11/26): the follower takes the route to the start pose, hand-over
+there, [record "manual": start -> grasp -> stable lift] c [record "script": programmed carry into the slot, open,
+rise over the slot] -> start pose -> park; the leader holds at c and is driven home.
 
 The demonstration covers the whole pick and place (no scripted detour back to the start pose before placing).
 Cameras run for the whole round: the opening global frame shows the untouched layout and gives the target
@@ -16,6 +19,8 @@ from agentic_sim.real_route import (
 )
 
 END_NEAR_START = 30.0   # body deg: after c the arm goes straight to the start pose only from this close
+RETURN_LIFT_Z = 0.12    # m, grasp centre: after c farther away, first straight up to this height (clears rims, blocks)
+RETURN_MIN_Z = 0.05     # m: lowest grasp-centre height allowed on the straight move from there to the start pose
 WRIST_FREE = "wrist_roll"   # turned to square up with the block during the demo; the straight move back restores it
 
 
@@ -50,6 +55,34 @@ def placed_block(before, after, color, tray, slot):
     reference = {"x_mm": slot["xy"][0], "y_mm": slot["xy"][1]}
     return landed | {"slot_offset_mm": round(dist(landed, reference), 1),
                      "neighbour_mm": round(min(dist(landed, b) for b in others), 1) if others else None}
+
+
+def lift_and_return(reading, channel, follower_id):
+    """After c away from the start pose (placed in the beige tray and lifted): straight up to RETURN_LIFT_Z over
+    the same spot (IK on the follower's calibration-file joint map), then to the start pose. Returns a Track, or None
+    when the lift has no IK or the move would pass below RETURN_MIN_Z (the caller falls back to the menu)."""
+    import numpy as np
+    from pathlib import Path
+    from agentic_sim.real_kinematics import ArmModel, find_calibration
+
+    try:
+        model = ArmModel.from_file(find_calibration(follower_id), Path(__file__).resolve().parents[2])
+    except FileNotFoundError:     # no calibration file (rehearsal): the caller falls back to the old way back
+        return None
+    now = dict(reading)
+    ee = model.ee(now)
+    points = [now]
+    if ee[2] < RETURN_LIFT_Z:
+        up, _ = model.hover(np.array([ee[0], ee[1], RETURN_LIFT_Z]), model.radial(ee[:2]), now, 30.0)
+        if up is None:
+            return None
+        points.append(up | {"gripper": now["gripper"]})
+    end = pose(channel) | {"gripper": now["gripper"]}
+    for a, b in zip(points[-1:], [end]):
+        for t in np.linspace(0, 1, 15):
+            if model.ee({j: a[j] + (b[j] - a[j]) * t for j in a})[2] < RETURN_MIN_Z - 1e-3:
+                return None
+    return retimed(points + [end])
 
 
 def retrace_to(samples, channel):
@@ -129,7 +162,8 @@ def grasp_round(driver, leader, data, drops, writer, check_cameras, color):
             "success": outcome == "s" and kept, "demo_frames": demo_frames, "cancelled": not kept}
 
 
-def finalize(root, *, color, destination, success, quads, target_pose=None, slot=None, landed=None, extra=None):
+def finalize(root, *, color, destination, success, quads, target_pose=None, slot=None, landed=None, extra=None,
+             start="park", mode="demonstration"):
     """Readback, D455 target from the opening frame (fixed trays) and review.json.
 
     Frames: start (first motion), close, lift (first still moment after lifting), and for demonstrated placement
@@ -155,7 +189,7 @@ def finalize(root, *, color, destination, success, quads, target_pose=None, slot
                          "card_pose": None, "actual_pose": None, "d455": target},
               "place_target": slot and {"tray": destination, "slot": slot["index"], "xy_mm": slot["xy"],
                                         "landed_d455": landed},
-              "start_pose": "park"} | (extra or {})
+              "start_pose": start} | (extra or {})
     if {"start", "close", "lift"} <= marks.keys():
         frames = confirmed_frames(episode, {k: marks[k] for k in ("start", "close", "lift")})
         for extra in ("release", "end"):
@@ -176,8 +210,9 @@ def finalize(root, *, color, destination, success, quads, target_pose=None, slot
     manifest["task_card"] = {"color": color, "source_tray": target and target["tray"], "destination": destination,
                              "pose": target and [target["x_mm"], target["y_mm"], target["yaw_deg"]],
                              "slot": slot and slot["index"], "slot_xy": slot and slot["xy"],
-                             "start": "park", "layout_group": None}
+                             "start": start, "layout_group": None}
     manifest["operator_result"] = review["outcome"]
+    manifest["mode"] = mode    # "demonstration" (leader) or "script" (tools/auto_collect.py); real_to_lerobot --modes
     write_json(root / "manifest.json", manifest)
     write_json(root / "review.json", review | {"review_reasons": report["review_reasons"], "d455_blocks": located})
     return report, review
@@ -230,9 +265,58 @@ def choose_target(term, blocks, color):
     return keys[term.choose(f"有 {len(same)} 顆{color}方塊，要夾哪一顆？{lines}", {k: k for k in keys})]
 
 
-def pick_place_round(driver, leader, data, writer, check_cameras, *, color, destination, slot, quads, choose=None):
+def leader_home_goals(now, channel, route, rest, follower_id):
+    """Driven leader from where the demonstration ended back to its folded rest: straight up and to the start pose
+    (the follower's way back, lift_and_return), then the taught route reversed, ending at the rest pose read before
+    the hand-over (or the route's park pose)."""
+    grip = float(now["gripper"])
+    back = lift_and_return(now, channel, follower_id)
+    goals = list(back.points[1:]) if back is not None else [pose(channel) | {"gripper": grip}]
+    rev = route.reverse()
+    goals += [pose(p) | {"gripper": grip} for p in rev.points[1:-1]]
+    goals.append(pose(rest) if rest is not None else pose(rev.points[-1]))
+    return goals
+
+
+def script_recorder(writer, check_cameras):
+    """driver.on_send hook for programmed motion inside an episode: rows tagged command_source "script"."""
+    rows = [0]
+
+    def on_send(sent, actual):
+        rows[0] += 1
+        if rows[0] % 15 == 0:
+            check_cameras()
+        writer.add_control(control_row(writer, sent, actual) | {"command_source": "script", "task_is_policy": 1})
+    return on_send
+
+
+def program_place(driver, placer, slot_mount, label):
+    """After a demonstration that ended at a stable lift: carry the held block into the slot with IK
+    (agentic_sim.real_place), open, rise over the slot. With a recorder on driver.on_send these are the episode's
+    "script" rows (the IK is planned while the follower keeps sending, so the rows have no gap)."""
+    from agentic_sim.real_place import HELD_PCT, hold_while
+    grip = float(driver.read()["gripper"])
+    if grip < HELD_PCT:
+        driver.term.say(f"夾爪讀數 {grip:.1f}%：像是空爪，不放置，直接回起姿。")
+        return {"held": False, "gripper_pct": round(grip, 1)}
+    xy, yaw = slot_mount
+    current = dict(driver.target)
+    plan = hold_while(driver, lambda: placer.plan_place(xy, yaw, yaw, current["gripper"], current))
+    err = plan if isinstance(plan, str) else None
+    if err:
+        driver.term.say(f"程式放置沒有執行：{err}")
+    else:
+        placer.execute_place(plan, label)
+    return {"held": True, "gripper_pct": round(grip, 1), "slot_mount_m": [round(float(v), 4) for v in xy],
+            "error": err}
+
+
+def pick_place_round(driver, leader, data, writer, check_cameras, *, color, destination, slot, quads, choose=None,
+                     placer=None, slot_mount=None):
     """Park -> demonstrated pick and place (ending near the start pose) -> park. Returns the operator result.
-    With choose (see random_pick) the target block, and so its colour, is picked from the opening D455 frame."""
+    With choose (see random_pick) the target block, and so its colour, is picked from the opening D455 frame.
+    With placer (agentic_sim.real_place.Placer) and slot_mount ((x, y) m, tray yaw): the demonstration ends at the
+    stable lift (c) and the program places the block (the place height and release varied too much by hand)."""
     from agentic_sim.real_locate import locate
 
     park, channel, support = data["park"]["pose"], data["channel"]["command"], data["park_support"]
@@ -252,31 +336,70 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         target = choose_target(driver.term, blocks, color) if opening is not None else None
     if target is None:
         driver.term.say(f"D455 開場畫面沒找到{color}方塊；仍可錄，讀回時再確認。")
-    driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]}第 {slot['index']} 個位置"
-                          "（照固定順序接在上一顆旁邊，貼近盤面再張爪）→ 抬起退回起姿附近，停穩按 c。"
-                          "Esc 暫停；腕部只在 ±30° 內對齊方塊。")
+    if placer is not None:
+        driver.demo_prompt = (f"錄製中：從起姿 → 夾起{color}方塊 → 抬起約 5 cm 停穩，按 c（不用放）。"
+                              f"按 c 後 leader 會上扭力定住，手放開；程式把方塊放進{TRAY_NAME[destination]} P{slot['index']}，"
+                              "follower 回停放位後 leader 自動收回。Esc 暫停；腕部只在 ±30° 內對齊方塊。")
+    else:
+        driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]} P{slot['index']}"
+                              "（overlay 圖上的格位：米盤靠基座、靠粉盤的角落，P1 最近；貼近盤面再張爪）→ 抬起退回起姿附近，停穩按 c。"
+                              "Esc 暫停；腕部只在 ±30° 內對齊方塊。")
     driver.arm_at(park)
+    if placer is not None:
+        # The demonstration starts at the start pose (ACT learns start -> lift); the fixed route gets there.
+        follow(driver, route, ("停放位", "起姿"))
     if not driver.align_leader(leader, driver.read()):
-        park_and_release(driver, Track([driver.target, park], [0.0]), park, support)
+        park_and_release(driver, route.reverse() if placer is not None else Track([driver.target, park], [0.0]),
+                         park, support)
         return {"cancelled": True, "demo_frames": None}
+    back, programmed = None, None
     while True:
         samples, kept = record_demo(driver, leader, writer, check_cameras)
+        if kept and placer is not None:
+            break
         if not kept or reach_gap(driver.read(), channel) <= END_NEAR_START:
+            break
+        back = lift_and_return(driver.target, channel, data["calibrations"]["follower"]["id"])
+        if back is not None:      # c after placing and lifting: straight up, then to the start pose (not recorded)
+            driver.term.say("錄製結束。夾爪先垂直抬高，再回起姿與停放位。")
             break
         choice = driver.menu(f"離起姿還有 {reach_gap(driver.last, channel):.0f}°。t 重新交接繼續錄、把手臂帶回起姿附近"
                              "／r 沿剛才的路徑退回起姿（這段不錄）", {"t": "繼續錄", "r": "退回"})
         if choice == "r" or not driver.align_leader(leader, driver.read()):
             break
     demo_frames = writer.count
-    if reach_gap(driver.read(), channel) <= END_NEAR_START:
+    leader_end = None
+    if kept and placer is not None:
+        # The recording goes on through the programmed placing (rows "script") up to the rise over the slot.
+        from agentic_sim.real_place import hold_while
+
+        def hold():                      # c: the leader holds where the operator left it
+            driver.hold_leader(leader)
+            return pose(leader.read())
+        driver.on_send = script_recorder(writer, check_cameras)
+        try:
+            leader_end = hold_while(driver, hold)
+            driver.term.say("leader 已上扭力定住，手可以放開。")
+            programmed = program_place(driver, placer, slot_mount, f"{TRAY_NAME[destination]} P{slot['index']}")
+        finally:
+            driver.on_send = None
+        back = lift_and_return(driver.target, channel, data["calibrations"]["follower"]["id"])
+        if back is None:
+            driver.term.say("從這裡回起姿的路徑算不出來，改沿示範路徑退回。")
+    if back is not None:
+        follow(driver, back, ("結束位", "起姿"))
+    elif reach_gap(driver.read(), channel) <= END_NEAR_START:
         follow(driver, retimed([dict(driver.target), pose(channel) | {"gripper": driver.target["gripper"]}]),
                ("結束位", "起姿"))
     else:
         follow(driver, retrace_to(samples + [(driver.clock(), dict(driver.target))], channel), ("結束位", "起姿"))
-    if not kept:
+    if not kept or (programmed and programmed.get("held") and programmed.get("error")):
         driver.menu("在起姿保持。若夾爪裡還有方塊請取下，回程淨空後按 r 回停放位", {"r": "回停放位"})
     driver.target = driver.target | {"gripper": channel["gripper"]}
     park_and_release(driver, route.reverse(), park, support)
+    if leader_end is not None:
+        driver.park_leader(leader, leader_home_goals(leader_end, channel, route, driver.leader_rest,
+                                                     data["calibrations"]["follower"]["id"]))
     # Landing is read only now: with the arm folded at park it neither hides the trays nor shades the colour masks.
     final = latest_global(writer) if kept else None
     landed = placed_block(blocks, locate(final, quads)["blocks"], color, destination, slot) if final is not None else None
@@ -285,7 +408,7 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
                 f"，離旁邊方塊只有 {landed['neighbour_mm']:.0f} mm（太擠，下一顆可能撞到）" if
                 landed["neighbour_mm"] is not None and landed["neighbour_mm"] < CROWDED_MM else "") + "。"
             if landed else "D455 沒在目的盤看到新放的方塊。")
-    outcome = driver.menu(seen + "結果：s 成功／f 失敗", {"s": "成功", "f": "失敗"})
+    outcome = driver.menu(seen + "結果：s 成功（收進資料）／f 失敗（移出、重錄這一格）", {"s": "成功", "f": "失敗"})
     return {"color": color, "destination": destination, "slot": slot, "target_choice": target, "scene": scene,
-            "landed": landed, "placed": landed is not None and outcome == "s", "success": outcome == "s" and kept,
+            "landed": landed, "program_place": programmed, "placed": landed is not None and outcome == "s", "success": outcome == "s" and kept,
             "demo_frames": demo_frames, "cancelled": not kept}

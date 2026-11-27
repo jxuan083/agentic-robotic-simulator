@@ -224,3 +224,20 @@ def test_cards_place_distractor_blocks():
     same = sum(d["color"] == card["color"] for card in cards for d in card["distractors"] if d["relation"] == "near")
     assert 10 <= same <= len(near) - 10
     assert make_cards(layout)[0] == cards  # deterministic for the session
+
+
+def test_programmed_rows_after_the_operator_validate(session):
+    """Park rounds since 11/26: the operator's rows (manual) are followed by the programmed place (script, policy flag
+    1). 11/27 the reader rejected "script" and the first two real episodes lost their review marks."""
+    import json
+
+    root = session.root / session.dagger(FakeOperator(dagger=True), fake_policy)["episode"]
+    path = root / "control.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    for row in rows[-2:]:
+        row["command_source"], row["task_is_policy"] = "script", 1
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    assert Episode(root).validate()["ok"]
+    rows[-1]["task_is_policy"] = 0
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    assert not Episode(root).validate()["ok"]

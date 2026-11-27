@@ -31,11 +31,16 @@ TELEOP_SPEED = dict.fromkeys(BODY, 90.0) | {"gripper": 200.0}  # command slew, u
 ENGAGE_SPEED = 20.0          # slew right after torque-on, ramps to TELEOP_SPEED
 ENGAGE_SECONDS = 1.5
 ENGAGE_GAP = dict.fromkeys(BODY, 12.0) | {"gripper": 40.0}  # leader-follower gap to engage
-PLAY_SPEED = 30.0            # body joint cap during playback, deg/s
+PLAY_SPEED = 45.0            # body joint cap during playback, deg/s (11/26: 30 felt slow)
 GRIPPER_PLAY_SPEED = 60.0    # percent/s
 PUSH_LAG = 8.0               # between GATE_LAG and this, playback creeps on at PUSH_RATE (gravity sag) ...
 PUSH_RATE = 0.3              # ... beyond it the clock stops and a lasting lag pauses as an obstruction
 GATE_LAG = 4.0               # playback clock pauses while body lag exceeds this
+# Program moves (Placer: reach, programmed place, auto): a servo trails a moving command by about speed x 0.1 s, so
+# GATE_LAG / PUSH_LAG widen by this many degrees per deg/s of the follower's measured speed. 11/27: the place sat at
+# a 4 deg lag and played at 13.6 deg/s median under a 45 cap. A blocked arm stops moving, the widening falls back to 0
+# and the stall pause works as before. Routes (fold area) keep 0.
+LAG_PER_SPEED = 0.10
 STALL_LAG = 15.0             # teleop: lag treated as obstruction ...
 STALL_SECONDS = 0.8          # ... when it persists this long (playback: gated time)
 ENDPOINT = 3.0               # follower must be this near park/channel to start a route
@@ -170,10 +175,13 @@ class Driver:
         self.term = term
         self.hz = hz
         self.rate = rate
+        self.play_speed, self.gripper_speed = PLAY_SPEED, GRIPPER_PLAY_SPEED   # caps for play(); reach raises them
+        self.lag_per_speed = 0.0   # LAG_PER_SPEED during program moves (Placer.move)
         self.relative = relative  # fallback when leader/follower calibration zeros disagree
         self.drive_leader = drive_leader  # hand-over: drive the leader to the follower pose, then release it
         self.clutch = None        # leader pose at a driven hand-over: teleop maps displacement from here
         self.leader_route = None  # park -> start Track: a folded leader is driven along it, not straight
+        self.leader_rest = None   # the leader's own folded pose, read before it is driven out (its way home ends here)
         self.on_send = None       # episode recorder hook: (command, readback) after each follower command
         self.clock = clock
         self.wait = wait
@@ -337,14 +345,15 @@ class Driver:
         durations = []
         for i, recorded in enumerate(work.seconds):
             a, b = work.points[i], work.points[i + 1]
-            durations.append(max(recorded / self.rate, body_gap(a, b) / PLAY_SPEED,
-                                 abs(a["gripper"] - b["gripper"]) / GRIPPER_PLAY_SPEED, 1 / self.hz))
+            durations.append(max(recorded / self.rate, body_gap(a, b) / self.play_speed,
+                                 abs(a["gripper"] - b["gripper"]) / self.gripper_speed, 1 / self.hz))
         total = sum(durations)
         done = 0.0
         segment, tau = 0, 0.0
         stalled = 0.0
         sent = dict(self.target)
         next_status = 0
+        previous, speed = None, 0.0    # follower speed (fastest body joint, deg/s, smoothed) for the lag allowance
         while True:
             began = self.clock()
             if self.stop_requested():
@@ -352,10 +361,14 @@ class Driver:
                 raise Paused("操作者暫停", work, segment)
             actual = self.last if self.last is not None else self.read()
             lag = body_gap(sent, actual)
-            if lag <= GATE_LAG:
+            if previous is not None:
+                speed = 0.7 * speed + 0.3 * body_gap(previous, actual) * self.hz
+            previous = actual
+            allow = self.lag_per_speed * speed
+            if lag <= GATE_LAG + allow:
                 tau += 1 / self.hz
                 stalled = 0.0
-            elif lag <= PUSH_LAG:
+            elif lag <= PUSH_LAG + allow:
                 # Heavy, stretched poses sag a steady few degrees under gravity: keep advancing slowly, the
                 # growing command error adds servo torque. An obstacle drives the lag past PUSH_LAG instead.
                 tau += PUSH_RATE / self.hz
@@ -461,6 +474,10 @@ class Driver:
             if choice == "m":
                 return self._manual_align(leader, reference)
             self._leader = leader
+            start = pose(leader.read())
+            route = self.leader_route
+            if route is not None and body_gap(start, route.points[0]) <= LEADER_ROUTE_NEAR:
+                self.leader_rest = start
             leader.drive_on()
             self.event("leader_torque_on", leader=pose(leader.read()), follower=reference)
             try:
@@ -502,9 +519,28 @@ class Driver:
         goals.append(pose(reference))
         return goals
 
-    def _drive_leader(self, leader, reference):
+    def hold_leader(self, leader):
+        """Torque the leader on where it is (end of a demonstration): the operator lets go and it does not drop."""
+        self._leader = leader
+        leader.drive_on()
+        self.event("leader_hold", leader=pose(leader.read()))
+
+    def park_leader(self, leader, goals):
+        """Drive a held leader along goals (the last one: its folded rest pose) and release it there. Returns
+        True when it arrived; otherwise it holds until the operator supports it, then releases."""
+        self._leader = leader
+        outcome = self._drive_leader(leader, goals[-1], goals=[dict(g) for g in goals])
+        if outcome == "arrived":
+            self._release_leader("rest")
+            return True
+        notes = {"esc": "已暫停", "stall": "leader 被擋住或卡住", "short": "leader 沒回到收折位"}
+        self.term.say(f"{notes.get(outcome, outcome)}，leader 原地保持中。")
+        self._release_leader_supported()
+        return False
+
+    def _drive_leader(self, leader, reference, goals=None):
         goal = pose(leader.read())
-        goals = self._leader_goals(goal, reference)
+        goals = goals or self._leader_goals(goal, reference)
         self.event("leader_drive_plan", waypoints=len(goals), via_route=len(goals) > 2)
         stall_since = reached_at = None
         next_status = 0

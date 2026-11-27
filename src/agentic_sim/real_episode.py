@@ -242,7 +242,8 @@ class Episode:
                 if row["frame"] != i or not _timestamp(stamp, minimum=previous + 1):
                     raise ValueError("control frame gap or non-increasing timestamp")
                 source = row["command_source"]
-                if source not in ("manual", "policy") or row["task_is_policy"] != int(source == "policy"):
+                # manual: leader; policy: ACT / VLA; script: programmed moves (place after c, tools/auto_collect.py)
+                if source not in ("manual", "policy", "script") or row["task_is_policy"] != int(source != "manual"):
                     raise ValueError("inconsistent command source")
                 if set(row["arms"]) != set(m["arms"]):
                     raise ValueError("control row arm names differ from manifest")

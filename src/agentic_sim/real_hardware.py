@@ -133,7 +133,13 @@ class Leader(PositionBus):
         return Follower._torque_states(self)
 
     def drive_on(self):
-        """Hold the current pose with torque on: the goal is written and verified before torque enable."""
+        """Hold the current pose with torque on: the goal is written and verified before torque enable.
+        Already driven: only re-hold the current pose (a second Torque_Limit read would store the halved limit
+        and release would then restore half torque)."""
+        if self.driven:
+            raw = self.bus.sync_read("Present_Position", normalize=False, num_retry=2)
+            self.bus.sync_write("Goal_Position", raw, normalize=False, num_retry=2)
+            return
         if set(self.bus.sync_read("Operating_Mode", normalize=False, num_retry=2).values()) != {0}:
             raise RuntimeError("leader must be in position mode to be driven")
         raw = self.bus.sync_read("Present_Position", normalize=False, num_retry=2)

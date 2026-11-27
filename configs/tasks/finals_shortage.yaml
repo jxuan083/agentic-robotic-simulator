@@ -7,8 +7,8 @@
 #   uv run tools/finals.py batch                                                       # the 12-run acceptance
 name: finals_shortage
 finals:
-  roles: {shortage: red, priority: blue, substitute: yellow}
-  layout: {config: configs/random_blocks_finals.yaml, seed: 1}
+  roles: {shortage: blue, priority: red, substitute: yellow}   # the finals set: 2 blue, 1 red, 1 yellow
+  layout: {config: configs/random_blocks_finals_20261125.yaml, seed: 1}   # near part of the 11/25 pink tray
   standby_after: 2              # verified deliveries before the standby step
   answer: substitute            # substitute | wait: injected (bound to the question ID) once the question exists;
                                 # leave empty to answer from the chat

@@ -135,7 +135,8 @@ def fake_devices(*, leader, resume=False):
 
 
 @contextmanager
-def episode_capture(root, config, arm, refs, hz, layout):
+def episode_capture(root, config, arm, refs, hz, layout, *, tool="tools/real_route.py grasp", start_pose="park",
+                    mapping="driven hand-over, relative"):
     """Cameras + episode writer for one park-start grasp demonstration (same files as the collection desk)."""
     from threading import Event
 
@@ -158,8 +159,7 @@ def episode_capture(root, config, arm, refs, hz, layout):
                     time.sleep(1)
             cameras[name] = {k: v for k, v in spec.items() if k not in ("device", "depth")} | info
         writer = EpisodeWriter(root, source="real", arms={arm: refs}, cameras=cameras,
-                               provenance=provenance("tools/real_route.py grasp") | {"start_pose": "park",
-                                                                                     "leader_mapping": "driven hand-over, relative"},
+                               provenance=provenance(tool) | {"start_pose": start_pose, "leader_mapping": mapping},
                                hz=hz, layout=layout)
         stopped = Event()
         workers = [CameraWorker(name, profile["cameras"][name], streams[name], writer, stopped) for name in cameras]
@@ -187,6 +187,19 @@ def episode_capture(root, config, arm, refs, hz, layout):
             for worker in started:
                 worker.thread.join()
             writer.close(error=error)
+
+
+def set_aside(root, session, why, line=None):
+    """Move a cancelled or failed episode out of the session into <session>-rejected/ (raw files kept, as the lab
+    rules ask, but never seen by training or the session counters) and log it there. Returns the new path."""
+    rejected = session.parent / f"{session.name}-rejected"
+    rejected.mkdir(parents=True, exist_ok=True)
+    target = rejected / f"{root.name}-{time.strftime('%H%M%S')}"
+    root.rename(target)
+    with (rejected / "index.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps((line or {}) | {"episode": root.name, "moved_to": target.name, "why": why},
+                            ensure_ascii=False) + "\n")
+    return target
 
 
 def round_state(index):
@@ -224,6 +237,17 @@ def grasp_session(driver, hand, data, args, refs, hz):
     episodes.mkdir(parents=True, exist_ok=True)
     index = args.session / "index.jsonl"
     rounds = args.pick == "random" and not args.auto_place
+    placer, slot_mounts = None, []
+    if getattr(args, "program_place", False):
+        # The demonstration ends at the stable lift; the program places into the same beige slots (P1-P4) as the
+        # finals reach tool, at the D455-measured positions of this tray layout.
+        from agentic_sim.real_kinematics import ArmModel, find_calibration
+        from agentic_sim.real_place import PROGRAM_SPEED, Placer, beige_slots, camera_from_pose, make_corr
+        if (args.destination or "beige") != "beige":
+            raise ValueError("--program-place places into the beige tray only")
+        model = ArmModel.from_file(find_calibration(data["calibrations"]["follower"]["id"]), ROOT)
+        placer = Placer(driver, model, make_corr(args.corr), speed=PROGRAM_SPEED)   # route stays at PLAY_SPEED
+        slot_mounts = beige_slots(camera_from_pose(args.pose), quads)
     used = {}
     if index.exists():
         for line in index.read_text(encoding="utf-8").splitlines():
@@ -247,7 +271,7 @@ def grasp_session(driver, hand, data, args, refs, hz):
         number = 1 + len(list(episodes.glob("P*")))
         if rounds:
             if placed >= size:
-                key = term.choose(f"新一輪：方塊全部放回{TRAY_NAME[source]}重擺（{set_text}；近端 x ≲ 100 mm，位置與轉角隨機，"
+                key = term.choose(f"新一輪：方塊全部放回{TRAY_NAME[source]}重擺（{set_text}；擺在 overlay 橘色弧線內（安全夾取區），位置與轉角隨機，"
                                   f"偶爾讓同色貼近），{TRAY_NAME[destination]}格位清空，手離開後按 a；q 結束",
                                   {"a": "開始", "q": "結束"})
                 if key == "q":
@@ -276,13 +300,17 @@ def grasp_session(driver, hand, data, args, refs, hz):
             term.say(f"放置：{TRAY_NAME[destination]}第 {slot['index']} 個位置，照固定順序接在上一顆旁邊"
                      f"（參考 x {slot['xy'][0]}, y {slot['xy'][1]} mm；落點由 D455 在停放位量）。")
         root = episodes / f"P{number:04}"
-        with episode_capture(root, args.config, args.arm, refs, hz, data["layout_id"]) as (writer, check):
+        with episode_capture(root, args.config, args.arm, refs, hz, data["layout_id"],
+                             start_pose="start" if placer else "park") as (writer, check):
             if args.auto_place:
                 result = grasp_round(driver, hand, data, drops, writer, check, color)
             else:
                 result = pick_place_round(driver, hand, data, writer, check, color=color, destination=destination,
-                                          slot=slot, quads=quads, choose=random_pick(rng, source) if rounds else None)
+                                          slot=slot, quads=quads, choose=random_pick(rng, source) if rounds else None,
+                                          placer=placer, slot_mount=slot_mounts[k] if placer else None)
         if result.get("demo_frames") is None:
+            if root.exists():
+                set_aside(root, args.session, "cancelled before the demonstration")
             term.say("這筆取消，未錄到示範。")
             if rounds and result.get("scene", {}).get("candidates") == 0:
                 placed = size
@@ -303,14 +331,22 @@ def grasp_session(driver, hand, data, args, refs, hz):
                                   success=result.get("success"), quads=quads,
                                   target_pose=choice and (choice["x_mm"], choice["y_mm"]),
                                   slot=None if args.auto_place else slot, landed=result.get("landed"),
-                                  extra=round_info and {"round": round_info, "scene": result["scene"]})
-        used[destination] = used.get(destination, 0) + 1
+                                  extra=round_info and {"round": round_info, "scene": result["scene"]},
+                                  start="start" if placer else "park")   # program place: hand-over at the start pose
         target = review["target"]["d455"]
         line = {"episode": root.name, "color": color, "result": result, "ok": report["ok"],
                 "target": target and {k: target[k] for k in ("tray", "x_mm", "y_mm", "yaw_deg")},
                 "training_ranges": review.get("training_ranges"), "reasons": report["review_reasons"]}
         if round_info:
             line["round"] = round_info
+        if not result.get("success"):
+            # Failed or discarded: set aside and record the same step again, so the session holds successes only.
+            moved = set_aside(root, args.session, "failed" if not result.get("cancelled") else "discarded", line)
+            term.say(f"這筆不收（原檔移到 {moved.parent.name}/{moved.name}）。"
+                     + ("掉落或夾走的方塊放回粉盤（可以換新位置）、這一格若有方塊請拿走，按 a 重錄這一格。" if rounds
+                        else "重擺後再錄。"))
+            continue
+        used[destination] = used.get(destination, 0) + 1
         with index.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
         where = f"{target['tray']} x {target['x_mm']:.0f} y {target['y_mm']:.0f} mm" if target else "D455 未找到目標"
@@ -319,8 +355,6 @@ def grasp_session(driver, hand, data, args, refs, hz):
                  + ("" if not report["review_reasons"] else f"；待確認：{'；'.join(report['review_reasons'])}"))
         if round_info:
             placed = round_info["placed_after"]
-            if not result.get("success"):
-                term.say("這筆失敗：掉落的方塊放回粉盤任一新位置、格位上若有方塊請拿走，同一格重錄。")
             if round_info["left_after"] <= 0:
                 placed = size
 
@@ -441,6 +475,12 @@ def main(argv=None):
                                 "manual: colour key per episode")
             p.add_argument("--auto-place", action="store_true",
                            help="old flow: record to the lift only, then place with the taught drop route")
+            p.add_argument("--program-place", action="store_true",
+                           help="record park -> grasp -> stable lift only; c, then the program places the block in the "
+                                "slot with IK (beige rounds; agentic_sim.real_place)")
+            p.add_argument("--pose", type=Path, default=ROOT / "outputs/d455/pose_261125.json",
+                           help="D455 pose (mount_from_color) for the slot positions of --program-place")
+            p.add_argument("--corr", default="21,-1.3,20", help="--program-place sag correction (as finals_reach)")
         if name == "record-drop":
             p.add_argument("--tray", required=True, choices=("pink", "beige"))
             p.add_argument("--out", type=Path, required=True, help="drop route JSON to write")

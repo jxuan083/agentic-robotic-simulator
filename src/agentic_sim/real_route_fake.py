@@ -140,10 +140,11 @@ class FakeDrivenLeader:
     def _advance(self):
         dt = (self.clock() - self.t) / 1e9
         self.t = self.clock()
-        if self.driven and dt > 0:
-            k = 1 - exp(-dt / self.tau)
-            for j in JOINTS:
-                self.state[j] += (self.goal[j] - self.state[j]) * k
+        if self.driven:            # driven again after a release: servo (a zero-dt read must not fall back to the sag)
+            if dt > 0:
+                k = 1 - exp(-dt / self.tau)
+                for j in JOINTS:
+                    self.state[j] += (self.goal[j] - self.state[j]) * k
         elif self.released_at is not None:
             s = (self.clock() - self.released_at) / 1e9
             delta = self._delta(s)

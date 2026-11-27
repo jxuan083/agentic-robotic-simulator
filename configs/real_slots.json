@@ -1,5 +1,35 @@
 {
-  "_note": "Placement slots, tray-local mm (origin: inner tray corner nearest the arm base on its right; +x forward, +y left). Kept in the near part of each tray, inside the reach measured on 2026-11-25 (pink x <= ~100 mm). Beige has 4 slots in a row, 65 mm apart (inner width ~255 mm), one per block of a finals round (2 blue, 1 red, 1 yellow); the spacing is an estimate, check with tools/lab_day.sh guide before collecting. Rounds fill the slots in order; manual mode takes the next slot of its destination tray.",
-  "beige": [[70, 30], [70, 95], [70, 160], [70, 225]],
-  "pink": [[70, 50], [70, 110], [70, 170]]
+  "_note": "Placement slots, tray-local mm (origin: inner tray corner nearest the arm base on its right; +x forward, +y left). Beige (11/26): a 2 x 2 square in the corner nearest the base and the pink tray, 55-60 mm apart, filled nearest first (P1 (50,190), P2 (50,132), P3 (108,190), P4 (108,132); mount ~ (210,-65) (210,-120) (265,-65) (265,-120) mm with the 11/25 trays), all inside the safe grasp zone. The 11/25 row (70,30)...(70,225) put P1 35 mm from the far rim at r 311 mm (outside the zone); programmed placing hit the rim. Same slots for demonstrations (tools/real_route.py grasp) and programmed placing (tools/finals_reach.py). tools/lab_day.sh zone-image draws them (P1-P4) on the overlay reference.",
+  "beige": [
+    [
+      50,
+      190
+    ],
+    [
+      50,
+      132
+    ],
+    [
+      108,
+      190
+    ],
+    [
+      108,
+      132
+    ]
+  ],
+  "pink": [
+    [
+      70,
+      50
+    ],
+    [
+      70,
+      110
+    ],
+    [
+      70,
+      170
+    ]
+  ]
 }

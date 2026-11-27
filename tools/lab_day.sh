@@ -4,7 +4,8 @@
 #   tools/lab_day.sh <step> [args]          steps in order:
 #     env          show the day's settings, commit and control rate
 #     check        read-only device/calibration check (power on, torque off)
-#     overlay      D455 live overlay against the current tray reference (s saves, q quits)
+#     overlay      D455 live overlay against the current tray reference (s saves, q quits); uses overlay-zone.png if made
+#     zone-image   draw the safe grasp zone + beige slots on the tray reference -> <reference dir>/overlay-zone.png
 #     reference    after moving the trays: save a new D455 reference (markers 40/41/42) that overlay then uses
 #     trays        fix the D455 tray corners from the clean reference (once per tray layout)
 #     guide        live D455 placement guide (tray grid + block mm; --target TRAY X Y YAW COLOR or --reach-plan), s saves
@@ -17,7 +18,10 @@
 #     drop-beige   teach channel -> drop pose over the beige tray
 #     drop-pink    teach channel -> drop pose over the pink tray
 #     drop-test-beige / drop-test-pink   replay park -> channel -> drop pose -> release -> back (no leader)
-#     grasp        park-start pick-and-place rounds (random target, slots fill up), session outputs/<date>-park
+#     grasp        park-start rounds (random target): demo park -> grasp -> lift, c, program places in P1-P4
+#                  (HAND_PLACE=1: demonstrate the placing too), session outputs/<date>-park
+#     auto         scripted rounds: program grasp recorded (start -> lift), program place, automatic tray reset
+#     wristcam     fix the wrist camera's white balance (WB, default 4600 K) and frame rate; once per day
 #     datacheck    every 5 rounds: training selection and desk issues of the newest LAST (20) episodes
 #     try          park -> channel, then t = leader test grasps from the channel (reach check for the cards)
 #     cards        create today's card positions from the template (once) and show them
@@ -25,13 +29,22 @@
 #     setup        build today's collection setup from the routes and cards
 #     collect      open the collection desk (empty-desk check first, then cards)
 #     recover      follower left holding with torque on: follow the route home and release
+#     d455         finals: live D455 blocks (colour, mount-frame mm, yaw, wrist turn); s saves, q quits
+#     reach        finals: d455 + arm over a chosen block (park -> start -> hover, nudge, k logs the aim)
+#     d455-restore re-mounted D455: live height / tilt vs the target pose from the table plane, reference edges for
+#                  the in-plane position (--once: report only); then d455-capture / d455-fit
+#     d455-capture finals: torque off, follower moved by hand to ~8 poses -> D455 depth + readings (camera pose)
+#     d455-fit     fit the D455 pose from the capture (uv / MuJoCo) -> outputs/d455/pose_<date>.json; use POSE=...
+#     joints       read-only live joint readout; Enter + label saves a sample
 #     torque       read-only per-joint torque readback of the follower (end of day: all must be 0)
 #     status       route summaries and collection progress
 #     pack         ZIP the round into AllenHZL/ and archive the handoff dir (NOTES="path ..." optional)
 #
+# Finals: POSE (D455 pose file, default outputs/d455/pose_261125.json), CORR (reach sag correction: radial mm, rotation deg, z mm),
+# SPEED (reach joint cap deg/s, default 75).
 # Settings (environment): LAB_DATE (default today, YYMMDD; session folders), RIG_DATE (day whose routes and tray
 # corners to reuse, default LAB_DATE), SUPPORT (park support description, for `route`),
-# PY (default the conda lerobot python), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
+# PY (default the conda lerobot python), FOLLOWER_PORT + FOLLOWER_ID (joints / torque with the follower only), REPLACE=1 (re-teach an existing route), FAKE=1 (rehearse route steps
 # with simulated arms), MANUAL_ALIGN=1 (align the leader by hand), GRIP (route-tune gripper %), RATE (route playback speed factor, default 1.0), RELEASE (drop gripper %, default 35).
 set -euo pipefail
 
@@ -76,8 +89,16 @@ case "$step" in
     "$PY" tools/real_teleop.py check --config "$CONFIG" && echo "check OK" ;;
   overlay)
     need "$REFERENCE"
-    say "move the trays until their rims overlap the reference; s saves, q quits"
-    "$CAMPY" tools/tray_overlay.py "$REFERENCE" --serial "$D455" --output "outputs/$DATE-camera/tray-overlay.png" ;;
+    # The zone-annotated reference (step zone-image: safe grasp zone + placement squares) when it exists.
+    ZONE_REF="$(dirname "$REFERENCE")/overlay-zone.png"; OVER_REF="$REFERENCE"; [[ -e "$ZONE_REF" ]] && OVER_REF="$ZONE_REF"
+    say "move the trays until their rims overlap the reference ($OVER_REF); lay blocks inside the orange arc; s saves, q quits"
+    "$CAMPY" tools/tray_overlay.py "$OVER_REF" --serial "$D455" --output "outputs/$DATE-camera/tray-overlay.png" ;;
+  zone-image)
+    # Reference frame + tray outlines + safe grasp zone (orange) + beige slots P1-P4 -> <reference dir>/overlay-zone.png
+    need "$REFERENCE"
+    TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
+    "$PY" tools/finals_reach.py zone-image --reference "$REFERENCE" --image-out "$(dirname "$REFERENCE")/overlay-zone.png" \
+        "${TRAY_ARG[@]}" ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} "$@" ;;
   reference)
     # After moving the trays: new D455 RGB-D reference with markers 40/41/42, compared with the previous one.
     name="${1:-trays-$(date +%H%M)}"; root="outputs/$DATE-camera"; mkdir -p "$root"
@@ -132,8 +153,25 @@ case "$step" in
     # Park-start pick-and-place rounds: finals set in pink, D455 picks a random block each episode, beige slots fill
     # up (4 -> 1 blocks left), re-lay when full. PICK=manual for the colour-key flow.
     need "$ROUTE" "$DROP_BEIGE" "$DROP_PINK" "$TRAYS"
+    # Default (11/26): the demonstration ends at the stable lift (c) and the program places the block in P1-P4 with
+    # IK; HAND_PLACE=1 records the hand placement as before.
+    PLACE_ARG=(--program-place ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"}); [[ -n "${HAND_PLACE:-}" ]] && PLACE_ARG=()
     "$PY" tools/real_route.py grasp "${MOTION[@]}" --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" \
-      --trays "$TRAYS" --session "outputs/$DATE-park" --pick "${PICK:-random}" ;;
+      --trays "$TRAYS" --session "outputs/$DATE-park" --pick "${PICK:-random}" "${PLACE_ARG[@]}" ;;
+  auto)
+    # Scripted park rounds: program grasp recorded start -> lift (mode "script"), program place, automatic reset of
+    # the pink tray. ROUNDS (default 5), SEED; session outputs/<date>-auto. Torque on: confirm the start like reach.
+    need "$ROUTE" "$TRAYS"
+    "$PY" tools/auto_collect.py --config "$CONFIG" --route "$ROUTE" --trays "$TRAYS" --serial "$D455" \
+        --session "outputs/$DATE-auto" --rounds "${ROUNDS:-5}" ${SEED:+--seed "$SEED"} ${POSE:+--pose "$POSE"} \
+        ${CORR:+--corr "$CORR"} "$@" ;;
+  wristcam)
+    # Fixed white balance and frame rate for the wrist camera: auto white balance turns the white desk cyan when
+    # the pink tray fills the view, and dynamic frame rate drops frames in dim light. Lost on replug: run each day.
+    dev="${WRIST_DEV:-/dev/v4l/by-path/pci-0000:09:00.0-usb-0:1:1.0-video-index0}"
+    v4l2-ctl -d "$dev" -c white_balance_automatic=0
+    v4l2-ctl -d "$dev" -c white_balance_temperature="${WB:-4600}" -c exposure_dynamic_framerate=0
+    v4l2-ctl -d "$dev" --list-ctrls | grep -E "white_balance|exposure_dynamic|auto_exposure" ;;
   datacheck)
     # Between collection blocks: would training take the newest episodes, and what to fix at the desk (read-only).
     train="${TRAIN_TREE:-../agentic-robotic-simulator-real-training}"
@@ -165,9 +203,14 @@ case "$step" in
 import sys
 sys.path.insert(0, "src")
 from agentic_sim.real_hardware import check_devices, load_profile, open_follower
-profile = load_profile(sys.argv[1])
-check_devices(profile)
-(arm, pair), = profile["arms"].items()
+import os
+if os.environ.get("FOLLOWER_PORT"):  # follower only (station bring-up: no leader / global camera in the profile)
+    arm, pair = "right", {"follower": {"id": os.environ.get("FOLLOWER_ID", "wowrobo_follower"),
+                                       "port": os.environ["FOLLOWER_PORT"]}}
+else:
+    profile = load_profile(sys.argv[1])
+    check_devices(profile)
+    (arm, pair), = profile["arms"].items()
 # managed + resume: connect even if torque is on, write nothing, never release.
 with open_follower(arm, pair["follower"], managed=True, resume=True) as follower:
     states = follower.torque_states()
@@ -175,6 +218,75 @@ print(arm, "follower torque:", states)
 off = all(v == 0 for v in states.values())
 print("torque OFF on all joints" if off else "TORQUE STILL ON OR UNREADABLE — support the arm, then tools/lab_day.sh recover")
 sys.exit(0 if off else 1)
+PYEOF
+    ;;
+  d455)
+    TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
+    "$PY" tools/finals_reach.py preview --serial "$D455" "${TRAY_ARG[@]}" ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} "$@" ;;
+  reach)
+    need "$ROUTE"
+    TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
+    "$PY" tools/finals_reach.py reach --serial "$D455" --route "$ROUTE" --config "$CONFIG" "${TRAY_ARG[@]}" \
+        ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} ${SPEED:+--speed "$SPEED"} "$@" ;;
+  d455-restore)
+    # Target = the fitted pose (POSE=..., else 11/25); TARGET=outputs/d455/restore-target-*.json for a pose saved with t.
+    "$CAMPY" tools/d455_restore.py --serial "$D455" --target "${TARGET:-${POSE:-outputs/d455/pose_261125.json}}" \
+        --reference "$REFERENCE" "$@" ;;
+  d455-capture)
+    "$PY" tools/finals_calib.py capture --serial "$D455" --config "$CONFIG" --out "outputs/d455/capture-$DATE-$(date +%H%M)" "$@" ;;
+  d455-fit)
+    cap="${CAPTURE:-$(ls -d outputs/d455/capture-* | tail -1)}"
+    MENAGERIE_DIR="${MENAGERIE_DIR:-$ROOT/outputs/mujoco_menagerie}" uv run -q --with opencv-python-headless \
+        tools/finals_calib.py fit --capture "$cap" ${POSE:+--init "$POSE"} --out "outputs/d455/pose_$DATE.json" "$@"
+    echo "use it: export POSE=outputs/d455/pose_$DATE.json" ;;
+  joints)
+    # Read-only joint readout for the joint-map check and touch points (writes nothing to the arm, torque stays off).
+    # Each Enter saves the current reading with a typed label to outputs/<date>-joints/samples.jsonl; q quits.
+    mkdir -p "outputs/$DATE-joints"
+    "$PY" - "$CONFIG" "outputs/$DATE-joints/samples.jsonl" <<'PYEOF'
+import json, sys, time
+sys.path.insert(0, "src")
+import numpy as np
+from agentic_sim.config import load
+from agentic_sim.kinematics import So101Chain
+from agentic_sim.real_hardware import check_devices, load_profile, open_follower
+from agentic_sim.real_joints import lerobot_to_shared
+from agentic_sim.real_kinematics import ArmModel, find_calibration
+import os
+if os.environ.get("FOLLOWER_PORT"):  # follower only (station bring-up: no leader / global camera in the profile)
+    arm, pair = "right", {"follower": {"id": os.environ.get("FOLLOWER_ID", "wowrobo_follower"),
+                                       "port": os.environ["FOLLOWER_PORT"]}}
+else:
+    profile = load_profile(sys.argv[1])
+    check_devices(profile)
+    (arm, pair), = profile["arms"].items()
+model = ArmModel.from_file(find_calibration(pair["follower"]["id"]), ".")  # calibration-file joint map (finals)
+print("calibration offsets (deg):", " ".join(f"{v:+.2f}" for v in model.offsets_deg))
+chain = So101Chain.from_dict(load("configs/so101_chain.yaml"))
+chain.ee_offset = np.array(load("configs/teleop.yaml")["ee_offset_in_gripper_link"]["value"], float)
+chain.base_pos = np.array([0.0, 0.0, -0.0301])
+names = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
+with open_follower(arm, pair["follower"], managed=True, resume=True) as follower, open(sys.argv[2], "a") as out:
+    if any(follower.torque_states().values()):
+        sys.exit("torque is on: support the arm and run tools/lab_day.sh recover first")
+    print("torque off. Move the arm by hand. Enter = save with a label, q + Enter = quit.")
+    while True:
+        r = follower.read()
+        vals = [float(r[n]) for n in names]
+        q, _ = lerobot_to_shared(vals)
+        ee = chain.ee_pose_mount(np.clip(q, chain.lower, chain.upper))[:3, 3] * 1000
+        cal = model.ee(r) * 1000
+        print("LeRobot " + " ".join(f"{v:7.1f}" for v in vals) + "   EE(map) mm " + " ".join(f"{v:6.0f}" for v in ee)
+              + "   EE(calib) mm " + " ".join(f"{v:6.0f}" for v in cal))
+        label = input("label (Enter = next reading, text = save, q = quit): ").strip()
+        if label == "q":
+            break
+        if label:
+            out.write(json.dumps({"t": time.time(), "label": label, "lerobot": dict(zip(names, vals)),
+                                  "ee_map_mm": [round(float(v), 1) for v in ee],
+                                  "ee_calib_mm": [round(float(v), 1) for v in cal], "follower_id": pair["follower"]["id"]}, ensure_ascii=False) + "\n")
+            out.flush()
+            print("saved:", label)
 PYEOF
     ;;
   status)
@@ -185,7 +297,7 @@ PYEOF
     fi ;;
   pack)
     items=()
-    for f in "$SESSION" "outputs/$DATE-park" "$ROUTES" "$SETUP" "$CARDS" "$(dirname "$TRAYS")" "outputs/$DATE-camera"; do [[ -e "$f" ]] && items+=("$f"); done
+    for f in "$SESSION" "outputs/$DATE-park" "outputs/$DATE-park-rejected" "$ROUTES" "$SETUP" "$CARDS" "$(dirname "$TRAYS")" "outputs/$DATE-camera"; do [[ -e "$f" ]] && items+=("$f"); done
     read -r -a notes <<< "${NOTES:-}"
     "$PY" tools/pack_handoff.py --date "$DATE" --include "${items[@]}" --notes "${notes[@]}" ;;
   *)

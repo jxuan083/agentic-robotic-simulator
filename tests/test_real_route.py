@@ -510,6 +510,61 @@ class PickPlaceRoundCase(RouteCase):
         at_start = next(i for i in range(turned, len(sent)) if body_gap(sent[i], CHANNEL) < 1.0)
         self.assertLess(turned, at_start)                     # the wrist is back before the route to park starts
 
+    def test_program_place_round_hands_over_at_the_start_pose_and_parks_the_leader(self):
+        from agentic_sim.real_grasp import pick_place_round
+        from agentic_sim.real_route import follow
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        lift = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 15, "elbow_flex": CHANNEL["elbow_flex"] - 8,
+                                "gripper": 17.0}
+        d = lambda pose_: {j: pose_[j] - CHANNEL[j] for j in CHANNEL}  # noqa: E731  (after the hand-over at the start)
+        moves = [(0.5, dict.fromkeys(CHANNEL, 0.0)), (4.0, d(lift))]
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        rest = dict(PARK) | {"shoulder_pan": PARK["shoulder_pan"] + 2.0, "gripper": 1.0}   # the leader's own fold
+        leader = FakeDrivenLeader(clock, rest, moves)
+        term = ScriptedTerminal(clock, [(30.0, "c")], ("a", "y", "s"))
+        driver = self.driver(follower, term, clock, "program-place")
+        placed = []
+
+        class StubPlacer:
+            def plan_place(self, xy, yaw, held, grip, current):
+                import time as _time
+                _time.sleep(0.05)                    # IK wall time: the follower keeps sending meanwhile
+                return [dict(current) | {"shoulder_pan": 30.0}], dict(current) | {"shoulder_pan": 30.0}, \
+                    dict(current) | {"shoulder_pan": 30.0, "gripper": grip}
+
+            def execute_place(self, plan, label):
+                placed.append(label)
+                path, over, low = plan
+                follow(driver, Track([dict(driver.target), *path, low, low | {"gripper": 40.0}, over | {"gripper": 40.0}],
+                                     [0.0] * 4), ("方塊上方", label))
+
+        writer = FakeWriter(clock)
+        result = pick_place_round(driver, leader, data, writer, lambda: None, color="red", destination="beige",
+                                  slot={"index": 2, "xy": [50, 132]}, quads=None,
+                                  placer=StubPlacer(), slot_mount=((0.21, -0.12), 0.0))
+        driver.close_logs()
+        self.assert_released_at_park(follower)
+        self.assertTrue(result["success"])
+        self.assertEqual(len(placed), 1)                                   # the program placed the held block
+        self.assertTrue(result["program_place"]["held"])
+        first = writer.rows[0]["arms"]["right"]["readback"]
+        self.assertLess(body_gap(first, CHANNEL), 5.0)                     # the demo starts at the start pose
+        sources = [r["command_source"] for r in writer.rows]
+        k = sources.index("script")
+        self.assertEqual(result["demo_frames"], k)                         # people up to c ...
+        self.assertTrue(all(src == "manual" for src in sources[:k]) and all(src == "script" for src in sources[k:]))
+        self.assertLess(body_gap(writer.rows[k - 1]["arms"]["right"]["readback"], lift), 6.0)   # ... c at the lift
+        stamps = [r["timestamp_ns"] for r in writer.rows]
+        self.assertLess(max(b - a for a, b in zip(stamps, stamps[1:])), 1.5e9 / 60)          # no gap at the switch
+        self.assertEqual(writer.rows[-1]["arms"]["right"]["command"]["gripper"], 40.0)       # ... through the release
+        kinds = [k for k, _ in leader.log]
+        self.assertEqual(kinds, ["on", "off", "on", "off"])                # hand-over, then held at c and parked
+        self.assertLess(body_gap(leader.goal, rest), 1e-6)                 # driven home to its own fold
+
     def test_round_chooser_sets_the_colour_and_cancels_on_an_empty_tray(self):
         from agentic_sim.real_grasp import pick_place_round
         from agentic_sim.real_route_fake import FakeDrivenLeader
@@ -583,3 +638,49 @@ def test_placed_block_is_the_new_one_and_reports_crowding():
     assert (landed["x_mm"], landed["y_mm"]) == (75, 130)          # not the blue already there
     assert landed["slot_offset_mm"] == 30.4 and landed["neighbour_mm"] == 35.4
     assert placed_block(before, after, "yellow", "beige", {"index": 3, "xy": [70, 160]}) is None
+
+
+def test_set_aside_moves_the_episode_out_of_the_session(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("real_route_tool2", Path(__file__).resolve().parents[1] / "tools/real_route.py")
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    session = tmp_path / "261126-park"
+    ep = session / "episodes" / "P0003"
+    ep.mkdir(parents=True)
+    (ep / "manifest.json").write_text("{}")
+    moved = tool.set_aside(ep, session, "failed", {"round": {"n": 1}})
+    assert not ep.exists() and (moved / "manifest.json").exists()
+    assert moved.parent == tmp_path / "261126-park-rejected" and moved.name.startswith("P0003-")
+    row = json.loads((moved.parent / "index.jsonl").read_text())
+    assert row["why"] == "failed" and row["moved_to"] == moved.name and row["round"] == {"n": 1}
+    assert not list((session / "episodes").glob("P*"))         # the next episode reuses the number
+
+
+def test_program_moves_widen_the_lag_gate_with_speed_but_still_stop_on_an_obstacle(tmp_path):
+    """11/27: the programmed place trailed its command by ~4 deg (servo lag + sag) and played at 13.6 deg/s under a
+    45 cap. With the speed-proportional allowance a lagging servo runs near the cap; a blocked one still pauses."""
+    import pytest
+
+    from agentic_sim.real_route import LAG_PER_SPEED, Driver, Paused, Track
+    from agentic_sim.real_route_fake import CHANNEL, FakeClock, FakeFollower, ScriptedTerminal
+
+    def run(allowance, block=None):
+        clock = FakeClock()
+        follower = FakeFollower(clock, start=CHANNEL, torque=True, tau=0.1, block=block,
+                                sag=dict.fromkeys(CHANNEL, 0.0) | {"shoulder_lift": -2.5, "elbow_flex": 2.5})
+        driver = Driver(follower, ScriptedTerminal(clock), tmp_path / f"r{allowance}{block is None}", hz=60,
+                        clock=clock, wait=clock.sleep, drive_leader=False)
+        driver.target = dict(CHANNEL)
+        driver.play_speed, driver.lag_per_speed = 75.0, allowance
+        goal = dict(CHANNEL) | {"shoulder_pan": CHANNEL["shoulder_pan"] + 60, "elbow_flex": CHANNEL["elbow_flex"] - 40}
+        began = clock()
+        driver.play(Track([dict(CHANNEL), goal], [0.0]), "test")
+        return (clock() - began) / 1e9
+
+    slow, fast = run(0.0), run(LAG_PER_SPEED)
+    assert fast < 1.3 < slow                         # 60 deg at 75 deg/s = 0.8 s
+    wall = lambda state, now: state | {"shoulder_pan": min(state["shoulder_pan"], CHANNEL["shoulder_pan"] + 15)}
+    with pytest.raises(Paused):
+        run(LAG_PER_SPEED, block=wall)
