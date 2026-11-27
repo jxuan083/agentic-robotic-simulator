@@ -22,8 +22,10 @@ Per episode (the follower parks in between, like the human rounds):
   5. review.json as for the human rounds (start "start", D455 target from the opening frame, training range up to the
      lift); success = the gripper held after the lift and the D455 sees the block in the beige tray at park.
      Failures move to <session>-rejected/ and the loop waits for the operator.
-When the pink tray is empty the program moves the beige blocks back into the pink tray at random free positions and
-yaws inside the safe zone (not recorded; logged in <session>/reset.jsonl) and starts the next round.
+When the pink tray is empty the operator lays out the next round (the four blocks back into the pink tray, inside the
+orange arc, random positions and yaws) and presses c (11/27). --auto-reset: the program does it instead (not
+recorded; <session>/reset.jsonl). Every scripted miss is logged in outputs/d455/auto_failures.jsonl
+(tools/failure_map.py).
 """
 
 from __future__ import annotations
@@ -380,6 +382,9 @@ def main(argv=None):
     ap.add_argument("--rounds", type=int, default=5, help="rounds of 4 (each followed by a reset)")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--follower-id", default="my_awesome_follower_arm")
+    ap.add_argument("--auto-reset", action="store_true",
+                    help="put the beige blocks back into the pink tray by program (default: the operator lays out "
+                         "each round)")
     ap.add_argument("--no-takeover", action="store_true",
                     help="do not open the leader (no manual demonstration after a scripted miss)")
     args = ap.parse_args(argv)
@@ -589,8 +594,20 @@ def run(args):
                     if not source:
                         beige = [b for b in blocks if b["tray"] == "beige"]
                         done_rounds += 1 if slot_k else 0
-                        if not beige or done_rounds >= args.rounds:
-                            term.say(f"結束：完成 {done_rounds} 輪（ROUNDS={args.rounds}）" if beige else "結束：兩個托盤都沒有方塊。")
+                        if done_rounds >= args.rounds:
+                            term.say(f"結束：完成 {done_rounds} 輪（ROUNDS={args.rounds}）。")
+                            break
+                        if not args.auto_reset:
+                            # 11/27 (user): no automatic reset (it grasped from the beige tray while a block was still in the pink one);
+                            # the operator lays out the next round
+                            home()
+                            if term.choose(f"第 {done_rounds} 輪完成。把米盤的 {len(beige)} 顆放回粉盤的橘色弧線內（位置、轉角隨機，"
+                                           "偶爾讓同色貼近），米盤清空，手離開後 c 繼續／q 結束", {"c": "繼續", "q": "結束"}) == "q":
+                                break
+                            slot_k = 0
+                            continue
+                        if not beige:
+                            term.say("結束：兩個托盤都沒有方塊。")
                             break
                         term.say(f"粉盤空了：把米盤 {len(beige)} 顆放回粉盤（不錄）。")
                         if not reset(beige):
@@ -599,6 +616,13 @@ def run(args):
                                 break
                         continue
                     if slot_k >= len(slots):
+                        if not args.auto_reset:
+                            home()
+                            if term.choose("米盤 4 格已滿，但粉盤還有方塊：把米盤的方塊放回粉盤弧線內、米盤清空後 c 繼續／q 結束",
+                                           {"c": "繼續", "q": "結束"}) == "q":
+                                break
+                            slot_k = 0
+                            continue
                         term.say("米盤 4 格已滿，但粉盤還有方塊：先還原。")
                         reset([b for b in blocks if b["tray"] == "beige"], [b for b in blocks if b["tray"] == "pink"])
                         continue
