@@ -69,7 +69,7 @@ STYLE_APPROACH_S = (2.0, 3.4)
 STYLE_PEAK_DEG_S = 85.0
 STYLE_CLOSE_S = (0.35, 0.6)
 STYLE_LIFT_MM = (55.0, 85.0)
-STYLE_LIFT_S = (0.8, 1.3)
+STYLE_LIFT_S = (0.7, 1.1)     # close -> lift of the operator: 1.2-2.2 s including the close
 STYLE_HOLD_S = (0.3, 0.6)
 STYLE_STEP_S = 1 / 15         # min-jerk samples (the driver interpolates at the control rate)
 
@@ -233,7 +233,7 @@ class Episodes:
         finally:
             d.play_speed, d.lag_per_speed = saved
 
-    def _grip_still(self, min_s=0.2, still_s=0.2, max_s=1.5):
+    def _grip_still(self, min_s=0.15, still_s=0.15, max_s=1.0):
         """Hold until the gripper reading stops (closed on the block, or at the command when empty)."""
         d = self.driver
         began, seen = d.clock(), []
