@@ -63,6 +63,11 @@ def main(argv=None) -> int:
             travel = max(rolls) - min(rolls)
             if travel > WRIST_TURN_DEG:
                 notes.append(f"夾取段 wrist_roll 轉了 {travel:.0f}°")
+            if plan.get("regrasp"):
+                notes.append("補夾（閉爪→張開→再閉）")
+            cut = plan["stats"].get("trimmed_rows", 0)
+            if cut:
+                notes.append(f"停頓截掉 {cut / 30:.1f}s")
             late = sum(plan["stats"].get("late_camera_rows", {}).values())
             if late:
                 notes.append(f"相機延遲 {late} 列")

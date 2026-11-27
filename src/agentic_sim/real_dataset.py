@@ -146,11 +146,56 @@ def _pair(frames: list, stamps: list, at_ns: int, before_ns: int):
     return min(cands, key=lambda j: abs(stamps[j] - at_ns))
 
 
+MAX_STILL_S = 0.3        # still stretches inside a training segment keep this much (s)
+STILL_DEG_S = 3.0        # commanded body joints slower than this (fastest joint, deg/s) ...
+STILL_GRIP_PCT_S = 5.0   # ... and the gripper command slower than this (%/s): standing still
+CLOSE_DROP_PCT = 6.0     # a gripper close: the command drops this far below its running max (and an open: rises)
+
+
+def trim_still(samples, max_still_s: float, dt: float):
+    """Drop the samples of a still stretch beyond its first max_still_s. Returns (samples, dropped count)."""
+    if not max_still_s or len(samples) < 3:
+        return samples, 0
+    keep_n = max(1, int(round(max_still_s / dt)))
+    out, run, dropped = [samples[0]], 0, 0
+    for a, b in zip(samples, samples[1:]):
+        body = max(abs(x - y) for x, y in zip(a["action"][:5], b["action"][:5])) / dt
+        grip = abs(a["action"][5] - b["action"][5]) / dt
+        run = run + 1 if body < STILL_DEG_S and grip < STILL_GRIP_PCT_S else 0
+        if run > keep_n:
+            dropped += 1
+            continue
+        out.append(b)
+    return out, dropped
+
+
+def count_closes(gripper) -> int:
+    """Gripper closes in a command series: a drop of CLOSE_DROP_PCT below the running max, re-armed by a rise of the
+    same size above the running min (close, reopen, close = 2)."""
+    closes, mode, hi, lo = 0, "open", None, None
+    for x in gripper:
+        if mode == "open":
+            hi = x if hi is None else max(hi, x)
+            if x < hi - CLOSE_DROP_PCT:
+                closes, mode, lo = closes + 1, "closed", x
+        else:
+            lo = min(lo, x)
+            if x > lo + CLOSE_DROP_PCT:
+                mode, hi = "open", x
+    return closes
+
+
 def plan_episode(root, *, arm: str = "right", segment: str = "task", max_offset_ms: float = 25.0,
                  allow_fake: bool = False, max_gap_periods: float = 1.5, handoff_jitter: int = 0,
                  modes=("demonstration",), condition_kind: str = "none", include_failed: bool = False,
-                 late_ms: float = 70.0, late_run: int = 2) -> dict:
-    """What one episode contributes: included / reason, the instruction, and the samples of each segment copy."""
+                 late_ms: float = 70.0, late_run: int = 2, max_still_s: float = MAX_STILL_S,
+                 regrasp: str = "keep") -> dict:
+    """What one episode contributes: included / reason, the instruction, and the samples of each segment copy.
+
+    max_still_s: a stretch where the commanded arm and gripper stand still keeps only its first max_still_s (0: keep
+    all). 11/27: the scripted grasps waited ~0.7 s for the gripper; pauses in the operator's grasps reached 1 s; an
+    ACT trained on long still stretches tends to stall. regrasp: "keep" / "skip" episodes whose segment closes the
+    gripper, reopens and closes again (11/27: 4 of 42 demonstrations, a missed grasp corrected)."""
     root = Path(root)
     out = {"episode": str(root), "included": False, "reason": "", "segments": [], "stats": {}}
     if segment not in SEGMENTS:
@@ -238,12 +283,21 @@ def plan_episode(root, *, arm: str = "right", segment: str = "task", max_offset_
                             "task_is_policy": int(rows[i]["task_is_policy"]),
                             "command_source": rows[i]["command_source"],
                             "is_handoff": int(i == start), "timestamp_ns": int(rows[i]["timestamp_ns"])})
-        out["segments"].append({"start": s, "end": end, "start_offset": s - start, "samples": samples})
+        samples, cut = trim_still(samples, max_still_s, period / 1e9)
+        out["segments"].append({"start": s, "end": end, "start_offset": s - start, "samples": samples,
+                                "trimmed_rows": cut})
+    regrasps = count_closes([r["arms"][arm]["command"]["gripper"] for r in rows[start:end + 1]]) > 1
+    if regrasps and regrasp == "skip":
+        out["reason"] = "regrasp in the segment (--regrasp skip)"
+        out["segments"] = []
+        return out
+    out["regrasp"] = regrasps
     out.update(included=True, reason="ok", instruction=instruction(m.get("task_card")),
                condition=vector, markers=markers(review),
                round=(review or {}).get("round"), scene=(review or {}).get("scene"),
                handoff=start, review_frames={k: v["frame"] for k, v in ((review or {}).get("frames") or {}).items()},
                stats={"rows": end - start + 1, "copies": len(starts),
+                      "trimmed_rows": out["segments"][0]["trimmed_rows"] if out["segments"] else 0,
                       "camera_offset_ms": {c: {"min": round(min(v), 3), "max": round(max(v), 3)}
                                            for c, v in offsets_all.items() if v},
                       "late_camera_rows": late_rows,

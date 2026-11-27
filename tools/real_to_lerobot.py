@@ -63,6 +63,10 @@ def main(argv=None) -> int:
     ap.add_argument("--late-ms", type=float, default=70.0, help="hard limit for a late frame after a dropped one")
     ap.add_argument("--late-run", type=int, default=2, help="consecutive rows allowed beyond --max-offset-ms")
     ap.add_argument("--modes", default="demonstration", help="recording modes to include, comma-separated")
+    ap.add_argument("--max-still-s", type=float, default=0.3,
+                    help="still stretches (arm and gripper command) keep only their first N s (0 = keep all)")
+    ap.add_argument("--regrasp", choices=("keep", "skip"), default="keep",
+                    help="episodes that close, reopen and close the gripper again (a corrected miss)")
     ap.add_argument("--language", choices=("en", "zh"), default="en", help="instruction written as LeRobot 'task'")
     ap.add_argument("--allow-fake", action="store_true", help="include source=fake episodes (pipeline tests only)")
     ap.add_argument("--video", action=argparse.BooleanOptionalAction, default=True,
@@ -80,7 +84,7 @@ def main(argv=None) -> int:
     plans = [plan_episode(p, arm=a.arm, segment=a.segment, max_offset_ms=a.max_offset_ms, allow_fake=a.allow_fake,
                           handoff_jitter=a.handoff_jitter, modes=tuple(a.modes.split(",")),
                           condition_kind=a.condition, include_failed=a.include_failed,
-                          late_ms=a.late_ms, late_run=a.late_run)
+                          late_ms=a.late_ms, late_run=a.late_run, max_still_s=a.max_still_s, regrasp=a.regrasp)
              for p in find_episodes(a.paths)]
     used = [p for p in plans if p["included"]]
     for p in plans:
