@@ -214,6 +214,36 @@ def round_state(index):
 
 
 def grasp_session(driver, hand, data, args, refs, hz):
+    """_grasp_session with a safe end: between rounds the follower holds at the start pose and the leader waits
+    there torque-on, so any stop (q, an error) first takes both home by their fixed ways and releases them there.
+    An error mid-demonstration leaves the follower holding (recover) and releases a held leader only once the
+    operator supports it - never a stiff leader dropped by the program exit."""
+    from agentic_sim.real_grasp import park_all
+    try:
+        _grasp_session(driver, hand, data, args, refs, hz)
+    except BaseException as error:
+        driver.term.say(f"錄製中止（{type(error).__name__}: {error}）。先回停放位再解扭力。")
+        safe_park(driver, hand, data)
+        raise
+    park_all(driver, hand, data)
+
+
+def safe_park(driver, hand, data):
+    from agentic_sim.real_grasp import park_all
+    try:
+        if getattr(driver, "at_start", False):
+            park_all(driver, hand, data)
+    except BaseException as error:  # noqa: BLE001 - the leader below must still be handled
+        driver.term.say(f"回停放位沒有完成（{error}）：follower 原地保持（之後用 recover 沿路線回停放位）。")
+    finally:
+        if hand is not None and getattr(hand, "driven", False):
+            driver._leader = hand
+            driver.term.say("leader 仍有扭力：扶住 leader 後按 Enter 解扭力。")
+            driver._release_leader_supported()
+            driver.leader_waiting = False
+
+
+def _grasp_session(driver, hand, data, args, refs, hz):
     """Terminal loop of park-start pick-and-place demonstrations, until q.
 
     Default (rounds): the source tray holds the finals set (2 blue, 1 red, 1 yellow); each episode the D455
@@ -223,7 +253,7 @@ def grasp_session(driver, hand, data, args, refs, hz):
     import random
 
     from agentic_sim.real_grasp import (
-        COLOR_NAME, COLORS, ROUND_SET, TRAY_NAME, finalize, grasp_round, pick_place_round, random_pick,
+        COLOR_NAME, COLORS, ROUND_SET, TRAY_NAME, finalize, grasp_round, park_all, pick_place_round, random_pick,
     )
 
     term = driver.term
@@ -271,6 +301,7 @@ def grasp_session(driver, hand, data, args, refs, hz):
         number = 1 + len(list(episodes.glob("P*")))
         if rounds:
             if placed >= size:
+                park_all(driver, hand, data)        # hands go into the trays: both arms home first
                 key = term.choose(f"新一輪：方塊全部放回{TRAY_NAME[source]}重擺（{set_text}；擺在 overlay 橘色弧線內（安全夾取區），位置與轉角隨機，"
                                   f"偶爾讓同色貼近），{TRAY_NAME[destination]}格位清空，手離開後按 a；q 結束",
                                   {"a": "開始", "q": "結束"})
@@ -283,6 +314,7 @@ def grasp_session(driver, hand, data, args, refs, hz):
                 if key == "q":
                     return
                 if key == "n":
+                    park_all(driver, hand, data)
                     placed = size
                     continue
             color = None
@@ -307,7 +339,8 @@ def grasp_session(driver, hand, data, args, refs, hz):
             else:
                 result = pick_place_round(driver, hand, data, writer, check, color=color, destination=destination,
                                           slot=slot, quads=quads, choose=random_pick(rng, source) if rounds else None,
-                                          placer=placer, slot_mount=slot_mounts[k] if placer else None)
+                                          placer=placer, slot_mount=slot_mounts[k] if placer else None,
+                                          stay=placer is not None)
         if result.get("demo_frames") is None:
             if root.exists():
                 set_aside(root, args.session, "cancelled before the demonstration")
@@ -341,6 +374,7 @@ def grasp_session(driver, hand, data, args, refs, hz):
             line["round"] = round_info
         if not result.get("success"):
             # Failed or discarded: set aside and record the same step again, so the session holds successes only.
+            park_all(driver, hand, data)            # the operator clears up in the trays: both arms home first
             moved = set_aside(root, args.session, "failed" if not result.get("cancelled") else "discarded", line)
             term.say(f"這筆不收（原檔移到 {moved.parent.name}/{moved.name}）。"
                      + ("掉落或夾走的方塊放回粉盤（可以換新位置）、這一格若有方塊請拿走，按 a 重錄這一格。" if rounds

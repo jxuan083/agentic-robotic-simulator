@@ -596,6 +596,68 @@ class PickPlaceRoundCase(RouteCase):
         self.assertFalse(result["success"])
         self.assertTrue(writer.rows)                                       # rows up to the stall, none after
 
+    def test_stay_rounds_wait_at_the_start_pose_and_park_both_arms_at_the_end(self):
+        """11/27: between rounds the follower holds at the start pose and the leader is driven from c back to the
+        start pose and waits there torque-on; the next round hands over there; park_all takes both home."""
+        from agentic_sim.real_grasp import park_all, pick_place_round
+        from agentic_sim.real_route import follow
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        lift = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 15, "elbow_flex": CHANNEL["elbow_flex"] - 8,
+                                "gripper": 17.0}
+        d = {j: lift[j] - CHANNEL[j] for j in CHANNEL}
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        rest = dict(PARK) | {"shoulder_pan": PARK["shoulder_pan"] + 2.0, "gripper": 1.0}
+        leader = FakeDrivenLeader(clock, rest, [(0.5, dict.fromkeys(CHANNEL, 0.0)), (4.0, d)])
+        term = ScriptedTerminal(clock, [(30.0, "c"), (75.0, "c")], ("a", "s", "a", "s", "y"))
+        driver = self.driver(follower, term, clock, "stay")
+
+        class StubPlacer:
+            def plan_place(self, xy, yaw, held, grip, current):
+                return [dict(current) | {"shoulder_pan": 30.0}], dict(current) | {"shoulder_pan": 30.0}, \
+                    dict(current) | {"shoulder_pan": 30.0, "gripper": grip}
+
+            def execute_place(self, plan, label):
+                path, over, low = plan
+                follow(driver, Track([dict(driver.target), *path, low, low | {"gripper": 40.0}, over | {"gripper": 40.0}],
+                                     [0.0] * 4), ("方塊上方", label))
+
+        def one_round():
+            writer = FakeWriter(clock)
+            return pick_place_round(driver, leader, data, writer, lambda: None, color="red", destination="beige",
+                                    slot={"index": 1, "xy": [50, 190]}, quads=None, placer=StubPlacer(),
+                                    slot_mount=((0.21, -0.07), 0.0), stay=True), writer
+
+        r1, _ = one_round()
+        self.assertTrue(r1["success"])
+        self.assertEqual(follower.torque_states(), ON)                       # holding at the start pose ...
+        self.assertLess(body_gap(follower.state, CHANNEL), 3.0)
+        self.assertTrue(driver.at_start and driver.leader_waiting)           # ... the leader waits there
+        self.assertLess(body_gap(leader.goal, CHANNEL), 1e-6)
+        self.assertTrue(leader.driven)
+        r2, w2 = one_round()                                                   # no arm_at: torque already on
+        self.assertTrue(r2["success"])
+        first = w2.rows[0]["arms"]["right"]["readback"]
+        self.assertLess(body_gap(first, CHANNEL), 5.0)                       # the second demo starts at the start pose
+        if self._testMethodName.endswith("_after_an_error"):
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+            from real_route import safe_park
+            safe_park(driver, leader, data)          # what grasp_session does when anything stops it
+        else:
+            park_all(driver, leader, data)
+        driver.close_logs()
+        self.assert_released_at_park(follower)
+        self.assertFalse(leader.driven)
+        self.assertLess(body_gap(leader.goal, rest), 1e-6)                  # home to its own fold
+        self.assertEqual([k for k, _ in leader.log], ["on", "off", "on", "on", "off", "on", "off"])
+
+    def test_stay_rounds_wait_at_the_start_pose_and_park_both_arms_after_an_error(self):
+        """An error between rounds: both arms go home by their fixed ways before any torque is released."""
+        self.test_stay_rounds_wait_at_the_start_pose_and_park_both_arms_at_the_end()
+
     def test_round_chooser_sets_the_colour_and_cancels_on_an_empty_tray(self):
         from agentic_sim.real_grasp import pick_place_round
         from agentic_sim.real_route_fake import FakeDrivenLeader
