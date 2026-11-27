@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import mujoco
 import numpy as np
 
+from agentic_sim import plush as P
 from agentic_sim.config import load, v
 from agentic_sim.kinematics import ARM_JOINTS, GRIPPER_JOINT
 from agentic_sim.scene_layout import TRAYS, block_layout, global_camera_quat, sensor_cameras, table_box, tray_parts, wrist_camera_mount, yaw_quat
@@ -54,6 +55,12 @@ class MjScene:
     shell_materials: list    # material ids recoloured by colour DR
     edge: float
     trays: dict
+    plush_body: int | None = None    # finals plush (scene `plush:` section); None without it
+    plush_geoms: list = field(default_factory=list)   # its collision geoms
+    plush_qpos: int | None = None    # free-joint qpos address (7: pos + quat wxyz)
+    plush_qvel: int | None = None
+    plush_init_pos: tuple | None = None
+    plush_init_quat: tuple | None = None
 
 
 def _box(parent, name, size, pos, rgba, friction=None, quat=(1, 0, 0, 0), collide=True):
@@ -145,6 +152,8 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
         g = _box(b, f"block_{i}_geom", (lay.edge,) * 3, (0, 0, 0), (*rgb, 1), friction=lay.friction[fr])
         g.mass = lay.mass
 
+    plush = add_plush(wb, scene_cfg["plush"]) if "plush" in scene_cfg else None
+
     m = spec.compile()
     names = al["joints"]
     offsets = {k: v(e) for k, e in (al.get("joint_offset") or {}).items()}
@@ -163,7 +172,74 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
         block_qvel=[int(m.jnt_dofadr[m.joint(f"block_{i}_free").id]) for i in range(len(lay.init_pos))],
         block_init_pos=list(lay.init_pos), block_init_rot=lay.init_rot, block_init_rots=list(lay.init_rots),
         block_colors=list(lay.display_rgb),
-        shell_materials=shell, edge=lay.edge, trays=trays)
+        shell_materials=shell, edge=lay.edge, trays=trays,
+        **(_plush_ids(m, *plush) if plush else {}))
+
+
+PLUSH_BODY = P.ID
+
+
+def add_plush(wb, cfg: dict):
+    """Finals plush as one free body of rigid primitives, bottom face on the table top at cfg pos / yaw_deg.
+    Collision: tram (two crossed boxes + four corner cylinders = a box with rounded vertical edges) and the head
+    ellipsoid; band, windows, underside, muzzle and paws are visual only. Returns (init pos, init quat)."""
+    x, y = v(cfg["pos"])
+    pos, quat = (float(x), float(y), 0.0005), yaw_quat(float(v(cfg.get("yaw_deg", 0.0))))
+    b = wb.add_body()
+    b.name = PLUSH_BODY
+    b.pos, b.quat = list(pos), list(quat)
+    b.add_freejoint().name = f"{PLUSH_BODY}_free"
+    com, diag = P.inertia()
+    b.explicitinertial = True
+    b.mass, b.ipos, b.inertia = P.MASS, list(com), list(diag)
+    L, W, H, r = P.LENGTH, P.WIDTH, P.BODY_HEIGHT, P.CORNER_RADIUS
+    green, dog = (*P.rgb(P.COLOR_BODY), 1), (*P.rgb(P.COLOR_DOG), 1)
+    for name, size in (("body_x", (L, W - 2 * r, H)), ("body_y", (L - 2 * r, W, H))):
+        _box(b, f"{PLUSH_BODY}_{name}", size, (0, 0, H / 2), green, friction=P.FRICTION).mass = 0
+    for i, (sx, sy) in enumerate(((1, 1), (1, -1), (-1, 1), (-1, -1))):
+        g = b.add_geom()
+        g.name, g.type = f"{PLUSH_BODY}_corner_{i}", mujoco.mjtGeom.mjGEOM_CYLINDER
+        g.size, g.pos = [r, H / 2, 0], [sx * (L / 2 - r), sy * (W / 2 - r), H / 2]
+        g.rgba, g.friction, g.mass = list(green), [P.FRICTION, 0.005, 0.0001], 0
+    g = b.add_geom()
+    g.name, g.type = f"{PLUSH_BODY}_head", mujoco.mjtGeom.mjGEOM_ELLIPSOID
+    g.size, g.pos, g.rgba = list(P.HEAD_RADII), list(P.HEAD_POS), list(dog)
+    g.friction, g.mass = [P.FRICTION, 0.005, 0.0001], 0
+
+    def deco(name, size, pos, hex_color):
+        _box(b, f"{PLUSH_BODY}_{name}", size, pos, (*P.rgb(hex_color), 1), collide=False).mass = 0
+
+    e = 0.0006   # decorations stand this far out of the faces they cover
+    for band, (z0, z1), color in (("under", P.UNDER_BAND, P.COLOR_UNDER), ("waist", P.WAIST_BAND, P.COLOR_BAND)):
+        zc, hz = (z0 + z1) / 2, z1 - z0
+        for s in (1, -1):
+            deco(f"{band}_y{s:+d}", (L - 2 * r, 2 * e, hz), (0, s * W / 2, zc), color)
+            deco(f"{band}_x{s:+d}", (2 * e, W - 2 * r, hz), (s * L / 2, 0, zc), color)
+    zc, hz = (P.WINDOW_BAND[0] + P.WINDOW_BAND[1]) / 2, P.WINDOW_BAND[1] - P.WINDOW_BAND[0]
+    for s in (1, -1):
+        for i, wx in enumerate((-0.025, -0.0085, 0.0085, 0.025)):   # four side windows
+            deco(f"window_y{s:+d}_{i}", (0.013, 4 * e, hz), (wx, s * W / 2, zc), P.COLOR_WINDOW)
+        for i, wy in enumerate((-0.011, 0.011)):                    # two front / rear windows
+            deco(f"window_x{s:+d}_{i}", (4 * e, 0.016, hz), (s * L / 2, wy, zc), P.COLOR_WINDOW)
+    hx, hy, hz = P.HEAD_POS
+    m = b.add_geom()
+    m.name, m.type = f"{PLUSH_BODY}_muzzle", mujoco.mjtGeom.mjGEOM_ELLIPSOID
+    m.size, m.pos = list(P.MUZZLE_RADII), [hx, hy + P.HEAD_RADII[1] - 0.004, hz - 0.006]
+    m.rgba, m.contype, m.conaffinity, m.mass = [*P.rgb(P.COLOR_FACE), 1], 0, 0, 0
+    for i, px in enumerate((-0.013, 0.013)):
+        p = b.add_geom()
+        p.name, p.type = f"{PLUSH_BODY}_paw_{i}", mujoco.mjtGeom.mjGEOM_SPHERE
+        p.size, p.pos = [P.PAW_RADIUS, 0, 0], [px, W / 2 - P.PAW_RADIUS, H + 0.3 * P.PAW_RADIUS]
+        p.rgba, p.contype, p.conaffinity, p.mass = list(dog), 0, 0, 0
+    return pos, quat
+
+
+def _plush_ids(m: mujoco.MjModel, pos, quat) -> dict:
+    body, jnt = m.body(PLUSH_BODY).id, m.joint(f"{PLUSH_BODY}_free").id
+    return {"plush_body": body,
+            "plush_geoms": [i for i in range(m.ngeom) if m.geom_bodyid[i] == body and m.geom_contype[i]],
+            "plush_qpos": int(m.jnt_qposadr[jnt]), "plush_qvel": int(m.jnt_dofadr[jnt]),
+            "plush_init_pos": pos, "plush_init_quat": quat}
 
 
 WRIST_CAMERA = "wrist_cam"     # Menagerie camera inside the camera_mount body
