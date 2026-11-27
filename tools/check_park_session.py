@@ -35,13 +35,15 @@ def main(argv=None) -> int:
     ap.add_argument("--last", type=int, default=20, help="newest episodes to check (0 = all)")
     ap.add_argument("--condition", default="target", help="ACT condition the training will use")
     ap.add_argument("--max-skip", type=float, default=0.2, help="excluded share that fails the check")
+    ap.add_argument("--modes", default="demonstration,script", help="recording modes training takes (auto: script)")
     a = ap.parse_args(argv)
     episodes = find_episodes([a.session])
     episodes = episodes[-a.last:] if a.last else episodes
     lines, skipped, success, rounds = [], 0, 0, set()
     for ep in episodes:
-        plan = plan_episode(ep, segment="grasp", condition_kind=a.condition)
-        vla = plan_episode(ep, segment="task", condition_kind="none")
+        modes = tuple(a.modes.split(","))
+        plan = plan_episode(ep, segment="grasp", condition_kind=a.condition, modes=modes)
+        vla = plan_episode(ep, segment="task", condition_kind="none", modes=modes)
         review = json.loads((ep / "review.json").read_text()) if (ep / "review.json").exists() else {}
         result = json.loads((ep / "manifest.json").read_text()).get("operator_result") or {}
         success += bool(result.get("success"))
