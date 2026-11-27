@@ -715,3 +715,27 @@ def test_program_moves_widen_the_lag_gate_with_speed_but_still_stop_on_an_obstac
     wall = lambda state, now: state | {"shoulder_pan": min(state["shoulder_pan"], CHANNEL["shoulder_pan"] + 15)}
     with pytest.raises(Paused):
         run(LAG_PER_SPEED, block=wall)
+
+
+def test_a_program_move_from_a_standing_sag_starts_at_once(tmp_path):
+    """11/27 S0001: standing at the grasp with ~5 deg of sag the lift crept at PUSH_RATE for 1.2 s."""
+    from agentic_sim.real_route import LAG_PER_SPEED, Driver, Track
+    from agentic_sim.real_route_fake import CHANNEL, FakeClock, FakeFollower, ScriptedTerminal
+
+    clock = FakeClock()
+    follower = FakeFollower(clock, start=CHANNEL, torque=True, tau=0.08,
+                            sag=dict.fromkeys(CHANNEL, 0.0) | {"shoulder_lift": -5.5, "elbow_flex": 5.0})
+    driver = Driver(follower, ScriptedTerminal(clock), tmp_path / "sag", hz=60, clock=clock, wait=clock.sleep,
+                    drive_leader=False)
+    driver.target = dict(CHANNEL)
+    driver.hold("settle")
+    for _ in range(60):                                  # stand still: the sag builds up
+        driver.send(driver.target)
+        driver.tick(clock())
+    driver.play_speed, driver.lag_per_speed = 75.0, LAG_PER_SPEED
+    goal = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] - 10}
+    pts = [dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] - 10 * s} for s in (0.02, 0.1, 0.3, 0.6, 1.0)]
+    began = clock()
+    driver.play(Track([dict(CHANNEL), *pts], [0.15] * 5), "lift")
+    assert (clock() - began) / 1e9 < 1.0                 # 0.75 s planned
+    assert goal["shoulder_lift"] == driver.target["shoulder_lift"]

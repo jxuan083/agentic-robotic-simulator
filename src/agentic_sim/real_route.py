@@ -354,6 +354,10 @@ class Driver:
         sent = dict(self.target)
         next_status = 0
         previous, speed = None, 0.0    # follower speed (fastest body joint, deg/s, smoothed) for the lag allowance
+        # Program moves start from the standing sag (11/27 S0001: ~5 deg at the grasp, the lift crawled 1.2 s at
+        # PUSH_RATE before it got going): that much lag (at most PUSH_LAG - GATE_LAG) is the baseline, not a lag.
+        start = self.last if self.last is not None else self.read()
+        sag = min(body_gap(self.target, start), PUSH_LAG - GATE_LAG) if self.lag_per_speed else 0.0
         while True:
             began = self.clock()
             if self.stop_requested():
@@ -364,7 +368,7 @@ class Driver:
             if previous is not None:
                 speed = 0.7 * speed + 0.3 * body_gap(previous, actual) * self.hz
             previous = actual
-            allow = self.lag_per_speed * speed
+            allow = self.lag_per_speed * speed + sag
             if lag <= GATE_LAG + allow:
                 tau += 1 / self.hz
                 stalled = 0.0
