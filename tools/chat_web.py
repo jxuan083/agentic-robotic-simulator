@@ -41,7 +41,8 @@ PAGE = os.path.join(ROOT, "tools", "chat_web", "index.html")
 LINK_ERRORS = (RemoteError, ConnectionError, OSError, TimeoutError)
 
 # quick replies for the open question: option -> what the user would say (sent through the model like typed text)
-QUICK = {"return": "放回去", "deliver": "照樣送出", "wait": "等補料", "reduce": "不用補了"}
+QUICK = {"return": "放回去", "deliver": "照樣送出", "wait": "等補料", "reduce": "不用補了", "hold": "停住等我取下",
+         "removed": "取下了"}
 
 
 def tag(line: str) -> str:

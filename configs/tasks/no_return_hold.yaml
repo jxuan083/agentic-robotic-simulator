@@ -1,0 +1,28 @@
+# Finals rule (docs/real-progress.md): hold_return with no_return. The order changes while red 2 is carried; the only
+# answers are deliver anyway or hold. "hold": the arm keeps the block still until someone takes it off the gripper,
+# "removed": the gripper opens and the rest of the order goes on. Red 2 never goes back to the storage tray.
+name: no_return_hold
+task: {no_return: true}
+blocks: [red, red, red, blue, blue, yellow]
+order: {red: 3}
+timeout_s: 160
+events:
+  - when: {event: phase, skill: place, color: red, nth: 2, phase: transport}
+    after_s: 0.5
+    order: {total: {red: 1, blue: 2}}
+  - when: {event: question, kind: held_item}
+    after_s: 3.0
+    answer: {choice: hold}
+  - when: {event: question, kind: removal}
+    after_s: 3.0
+    answer: {choice: removed}
+checks:
+  - {question: {kind: held_item, color: red, block: 1}}
+  - {question: {kind: removal, color: red, block: 1}}
+  - {hold_still: {mm: 3.0}}
+  - no_over_delivery_retrieval
+  - {final_placement: {red: 1, blue: 2}}
+  - {ledger: {target: {red: 1, blue: 2}, delivered: {red: 1, blue: 2}}}
+  - stop_latency
+  - no_stale_commands
+  - skills_ok

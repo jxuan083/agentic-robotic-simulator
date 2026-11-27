@@ -44,8 +44,9 @@ class ChatAgent:
         self.palette = list(cfg["colors"])
         self.max_count = int(cfg.get("max_count", 8))
         pick = bool(cfg.get("pick_by_position", False))     # order_pick: off = the measured schema and prompt
-        self.schema = schema(self.palette, self.max_count, pick)
-        self.system = system_prompt(cfg["colors"], self.max_count, pick)
+        no_return = bool(cfg.get("no_return", False))      # hold / removed answers: off = the measured schema
+        self.schema = schema(self.palette, self.max_count, pick, no_return)
+        self.system = system_prompt(cfg["colors"], self.max_count, pick, no_return)
         self.history: list = []
         self.transcript: list = []
         self.events_seen = 0

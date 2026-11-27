@@ -54,6 +54,8 @@ class TaskRunner:
         cfg = load(task_cfg)
         spec = load_scenario(scenario) if scenario else None
         finals = spec is not None and "finals" in spec
+        if spec is not None and spec.get("task"):      # scenario-level task.yaml overrides (e.g. no_return: true)
+            cfg = {**cfg, **spec["task"]}
         if finals:   # choose only from observations; the shortage question offers a substitute or waiting
             cfg["observation"] = {**(cfg.get("observation") or {}), "snapshot": True}
             cfg["shortage"] = {**cfg["shortage"], "options": ["substitute", "wait"]}
@@ -72,6 +74,9 @@ class TaskRunner:
                 raise ValueError("finals scenarios need the session's scene operations (MuJoCo session)")
             from agentic_sim.task.finals import FinalsDirector
             self.finals = FinalsDirector(spec, self.ex, world_ops, scene_cfg, teleop_path, log)
+        if world_ops is not None and hasattr(world_ops, "remove_block"):
+            # no_return "removed": someone took the block off the gripper, so it leaves the simulated scene too
+            self.ex.hooks.append(lambda e: e["kind"] == "block_removed" and world_ops.remove_block(e["block"]))
         self.log = log
         log(f"task executor ready: blocks {colors}" + (f", scenario {scenario}" if scenario else ""))
 
