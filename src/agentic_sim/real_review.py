@@ -74,6 +74,11 @@ def _candidates(episode, arm, warnings):
     if "close" not in marks:
         return {}, ["no sustained measured gripper closure"]
     close, lift = marks["close"], marks.get("lift")
+    # Demonstration + programmed place: the operator presses c at the stable lift and the rows after it are "script".
+    # The lift is never later than c, so the grasp segment holds only the operator's rows.
+    script = next((i for i, row in enumerate(rows) if row["command_source"] == "script"), None)
+    if script is not None and close < script - 1 and (lift is None or lift >= script):
+        lift = script - 1
     stamps = [row["timestamp_ns"] for row in rows]
     # The policy learns the whole approach: training starts at the settled standard start (first task frame).
     hints = {"start": (marks["start"], "first arm motion (minus 5 frames)"),
@@ -85,7 +90,8 @@ def _candidates(episode, arm, warnings):
     if lift is None:
         reasons.append("no lift candidate with a closed gripper")
     else:
-        hints["lift"] = (lift, "first still moment after lifting with the gripper closed")
+        hints["lift"] = (lift, "first still moment after lifting with the gripper closed" if script is None or lift < script - 1
+                         else "c pressed at the stable lift (last operator row before the programmed place)")
     candidates = {}
     for name, (index, basis) in hints.items():
         stamp = stamps[index]
@@ -135,7 +141,7 @@ def review_episode(root, *, source, arm, card=None, rgb_depth=None):
     report = episode.validate()
     m = episode.manifest
     result = m.get("operator_result", {})
-    allowed = {"manual"} if card else {"manual", "policy"}
+    allowed = {"manual", "script"} if card else {"manual", "policy", "script"}
     issues = []
     if m["source"] != source or list(m["arms"]) != [arm] or not {"global", "wrist"} <= episode.frames.keys():
         issues.append("unexpected episode source, arm or camera streams")

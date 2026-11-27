@@ -242,11 +242,11 @@ def grasp_session(driver, hand, data, args, refs, hz):
         # The demonstration ends at the stable lift; the program places into the same beige slots (P1-P4) as the
         # finals reach tool, at the D455-measured positions of this tray layout.
         from agentic_sim.real_kinematics import ArmModel, find_calibration
-        from agentic_sim.real_place import Placer, beige_slots, camera_from_pose, make_corr
+        from agentic_sim.real_place import PROGRAM_SPEED, Placer, beige_slots, camera_from_pose, make_corr
         if (args.destination or "beige") != "beige":
             raise ValueError("--program-place places into the beige tray only")
         model = ArmModel.from_file(find_calibration(data["calibrations"]["follower"]["id"]), ROOT)
-        placer = Placer(driver, model, make_corr(args.corr))
+        placer = Placer(driver, model, make_corr(args.corr), speed=PROGRAM_SPEED)   # route stays at PLAY_SPEED
         slot_mounts = beige_slots(camera_from_pose(args.pose), quads)
     used = {}
     if index.exists():

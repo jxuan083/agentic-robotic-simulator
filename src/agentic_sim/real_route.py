@@ -36,6 +36,11 @@ GRIPPER_PLAY_SPEED = 60.0    # percent/s
 PUSH_LAG = 8.0               # between GATE_LAG and this, playback creeps on at PUSH_RATE (gravity sag) ...
 PUSH_RATE = 0.3              # ... beyond it the clock stops and a lasting lag pauses as an obstruction
 GATE_LAG = 4.0               # playback clock pauses while body lag exceeds this
+# Program moves (Placer: reach, programmed place, auto): a servo trails a moving command by about speed x 0.1 s, so
+# GATE_LAG / PUSH_LAG widen by this many degrees per deg/s of the follower's measured speed. 11/27: the place sat at
+# a 4 deg lag and played at 13.6 deg/s median under a 45 cap. A blocked arm stops moving, the widening falls back to 0
+# and the stall pause works as before. Routes (fold area) keep 0.
+LAG_PER_SPEED = 0.10
 STALL_LAG = 15.0             # teleop: lag treated as obstruction ...
 STALL_SECONDS = 0.8          # ... when it persists this long (playback: gated time)
 ENDPOINT = 3.0               # follower must be this near park/channel to start a route
@@ -171,6 +176,7 @@ class Driver:
         self.hz = hz
         self.rate = rate
         self.play_speed, self.gripper_speed = PLAY_SPEED, GRIPPER_PLAY_SPEED   # caps for play(); reach raises them
+        self.lag_per_speed = 0.0   # LAG_PER_SPEED during program moves (Placer.move)
         self.relative = relative  # fallback when leader/follower calibration zeros disagree
         self.drive_leader = drive_leader  # hand-over: drive the leader to the follower pose, then release it
         self.clutch = None        # leader pose at a driven hand-over: teleop maps displacement from here
@@ -347,6 +353,7 @@ class Driver:
         stalled = 0.0
         sent = dict(self.target)
         next_status = 0
+        previous, speed = None, 0.0    # follower speed (fastest body joint, deg/s, smoothed) for the lag allowance
         while True:
             began = self.clock()
             if self.stop_requested():
@@ -354,10 +361,14 @@ class Driver:
                 raise Paused("操作者暫停", work, segment)
             actual = self.last if self.last is not None else self.read()
             lag = body_gap(sent, actual)
-            if lag <= GATE_LAG:
+            if previous is not None:
+                speed = 0.7 * speed + 0.3 * body_gap(previous, actual) * self.hz
+            previous = actual
+            allow = self.lag_per_speed * speed
+            if lag <= GATE_LAG + allow:
                 tau += 1 / self.hz
                 stalled = 0.0
-            elif lag <= PUSH_LAG:
+            elif lag <= PUSH_LAG + allow:
                 # Heavy, stretched poses sag a steady few degrees under gravity: keep advancing slowly, the
                 # growing command error adds servo torque. An obstacle drives the lag past PUSH_LAG instead.
                 tau += PUSH_RATE / self.hz

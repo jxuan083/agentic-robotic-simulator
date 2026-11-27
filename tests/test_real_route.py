@@ -656,3 +656,31 @@ def test_set_aside_moves_the_episode_out_of_the_session(tmp_path):
     row = json.loads((moved.parent / "index.jsonl").read_text())
     assert row["why"] == "failed" and row["moved_to"] == moved.name and row["round"] == {"n": 1}
     assert not list((session / "episodes").glob("P*"))         # the next episode reuses the number
+
+
+def test_program_moves_widen_the_lag_gate_with_speed_but_still_stop_on_an_obstacle(tmp_path):
+    """11/27: the programmed place trailed its command by ~4 deg (servo lag + sag) and played at 13.6 deg/s under a
+    45 cap. With the speed-proportional allowance a lagging servo runs near the cap; a blocked one still pauses."""
+    import pytest
+
+    from agentic_sim.real_route import LAG_PER_SPEED, Driver, Paused, Track
+    from agentic_sim.real_route_fake import CHANNEL, FakeClock, FakeFollower, ScriptedTerminal
+
+    def run(allowance, block=None):
+        clock = FakeClock()
+        follower = FakeFollower(clock, start=CHANNEL, torque=True, tau=0.1, block=block,
+                                sag=dict.fromkeys(CHANNEL, 0.0) | {"shoulder_lift": -2.5, "elbow_flex": 2.5})
+        driver = Driver(follower, ScriptedTerminal(clock), tmp_path / f"r{allowance}{block is None}", hz=60,
+                        clock=clock, wait=clock.sleep, drive_leader=False)
+        driver.target = dict(CHANNEL)
+        driver.play_speed, driver.lag_per_speed = 75.0, allowance
+        goal = dict(CHANNEL) | {"shoulder_pan": CHANNEL["shoulder_pan"] + 60, "elbow_flex": CHANNEL["elbow_flex"] - 40}
+        began = clock()
+        driver.play(Track([dict(CHANNEL), goal], [0.0]), "test")
+        return (clock() - began) / 1e9
+
+    slow, fast = run(0.0), run(LAG_PER_SPEED)
+    assert fast < 1.3 < slow                         # 60 deg at 75 deg/s = 0.8 s
+    wall = lambda state, now: state | {"shoulder_pan": min(state["shoulder_pan"], CHANNEL["shoulder_pan"] + 15)}
+    with pytest.raises(Paused):
+        run(LAG_PER_SPEED, block=wall)

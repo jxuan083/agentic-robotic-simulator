@@ -29,6 +29,7 @@ GRIP_MIN_S, GRIP_STILL_S, GRIP_STILL_PCT, GRIP_MAX_S = 0.4, 0.3, 0.6, 2.5   # gr
 # Beige slots, tray-local mm: one set for demonstrations and programmed placing (configs/real_slots.json).
 SLOTS_MM = json.loads((ROOT / "configs/real_slots.json").read_text(encoding="utf-8"))["beige"]
 DEFAULT_CORR = "21,-1.3,20"
+PROGRAM_SPEED = 75.0  # deg/s body cap for programmed place in the park rounds (11/27 demos: 29-50 median, 61-85 peak)
 # A tilted gripper's open fingers reach below the grasp centre on the low side (11/26: far blocks touched the table):
 # grasp / place heights rise by TILT_RAISE_M * sin(tilt). 30 mm ~ half the open finger span plus the jaw edge.
 TILT_RAISE_M = 0.030
@@ -70,8 +71,9 @@ def camera_from_pose(path):
 class Placer:
     """IK moves of the follower through an agentic_sim.real_route Driver (Esc pauses like any playback)."""
 
-    def __init__(self, driver, model, corr_at, on_move=None):
-        self.driver, self.model, self.corr_at, self.on_move = driver, model, corr_at, on_move
+    def __init__(self, driver, model, corr_at, on_move=None, speed=None):
+        """speed: body-joint cap (deg/s) for these moves; None keeps the driver's play_speed."""
+        self.driver, self.model, self.corr_at, self.on_move, self.speed = driver, model, corr_at, on_move, speed
 
     def pose_for(self, xyz, yaw, seed, phase, grip):
         """Joint target for the grasp centre at xyz (corrected for sag). The IK tilts only as much as the reach
@@ -105,8 +107,15 @@ class Placer:
         return True
 
     def move(self, points, label):
-        from agentic_sim.real_route import Track, follow
-        follow(self.driver, Track([dict(self.driver.target), *points], [0.0] * len(points)), (label[0], label[1]))
+        from agentic_sim.real_route import LAG_PER_SPEED, Track, follow
+        d = self.driver
+        saved = d.play_speed, d.lag_per_speed
+        d.play_speed = self.speed or d.play_speed
+        d.lag_per_speed = LAG_PER_SPEED
+        try:
+            follow(d, Track([dict(d.target), *points], [0.0] * len(points)), (label[0], label[1]))
+        finally:
+            d.play_speed, d.lag_per_speed = saved
         if self.on_move:
             self.on_move()
 
