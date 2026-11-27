@@ -410,7 +410,17 @@ def run(args):
                 return True
 
             while done_rounds < args.rounds:
-                blocks = look(args.serial, cam, quads)
+                blocks = None
+                for attempt in range(2):     # 11/27: the D455 colour stream stopped after S0001 and the tool exited
+                    try:
+                        blocks = look(args.serial, cam, quads)
+                        break
+                    except RuntimeError as error:
+                        term.say(f"D455 讀取失敗（{error}）" + ("，再試一次。" if not attempt else "。"))
+                        time.sleep(2.0)
+                if blocks is None:
+                    term.say("D455 讀不到：回停放位、解扭力後結束（重插 D455 或重開後再跑）。")
+                    break
                 source = [b for b in blocks if b["tray"] == "pink" and in_zone(zone, b["x"], b["y"])]
                 if not source:
                     beige = [b for b in blocks if b["tray"] == "beige"]
