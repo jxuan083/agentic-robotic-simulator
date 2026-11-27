@@ -177,7 +177,7 @@ case "$step" in
     v4l2-ctl -d "$dev" --list-ctrls | grep -E "white_balance|exposure_dynamic|auto_exposure" ;;
   datacheck)
     # Between collection blocks: would training take the newest episodes, and what to fix at the desk (read-only).
-    train="${TRAIN_TREE:-../agentic-robotic-simulator-real-training}"
+    train="${TRAIN_TREE:-.}"   # the converter and checks are on this branch since 11/28
     need "$train/tools/check_park_session.py" "outputs/$DATE-park"
     "$PY" "$train/tools/check_park_session.py" "outputs/$DATE-park" --last "${LAST:-20}" ;;
   try)
