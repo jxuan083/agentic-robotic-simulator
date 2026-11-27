@@ -75,3 +75,37 @@ tools/lab_day.sh chat-web
 - 聊天的「位置指定」（`pick_by_position`）在實機用 D455 座標，`pick_ref` 的上／左方向要依現場視角確認。
 - S3（座標條件 ACT）取代 S1 的抓取：`RealArm.pick` 換成政策推論。
 - 比賽現場在 Thor 上跑：RealSense、LeRobot、vLLM。
+
+## 下一步：聊天裡的「收資料」技能（設計，11/27）
+
+目標：在聊天頁說「開始自動收資料，五輪」或「我要手動示範」，由實機任務伺服器用它已開著的 follower 和 D455 執行。收資料和整單任務互斥，同時只能做一件。
+
+**聊天層**（照 `pick_by_position`、`no_return` 的做法，用 `configs/chat.yaml` 的 `collection` 開關控制，預設關閉，模擬端不受影響）：
+
+| 意圖 | 例句 | 送出的指令 |
+|---|---|---|
+| `collect_auto` | 「開始自動收資料，五輪」「讓手臂自己收十輪」 | `collect_start {mode: auto, rounds}`（1–20，沒說輪數就反問） |
+| `collect_manual` | 「我要手動示範」「開始手動收資料」 | `collect_start {mode: manual}` |
+| `collect_stop` | 「收到這裡就好」「停止收資料」 | `collect_stop`：做完這一筆、兩支手臂回停放位後結束 |
+| `status` | 「收了幾筆？」 | 從 `collect_state` 回答 |
+
+「停止收資料」和現有的 `stop`（緊急停止）是兩件事。緊急停止仍然只指向暫停按鈕和 Esc，聊天不直接控制手臂。
+
+**伺服器**（`tools/real_task_server.py`）：
+- 收資料在背景執行緒裡跑，使用伺服器已開著的裝置。
+  - 自動：`auto_collect` 拆出「已開好裝置版」的迴圈。
+  - 手動：`grasp_session`（起姿停留模式）同樣拆出。
+- **手動收資料的前置檢查**（任一項不通過就拒絕，聊天回覆原因）：
+  1. 設定檔裡的 leader 序列埠（by-id）存在；
+  2. leader 開得起來，而且扭力是關的；
+  3. leader 的校正和路線教示時的校正相同（`check_calibration(leader=True)`）；
+  4. leader 在折疊位附近（離路線起點 25° 內）。不在的話，請操作者先擺回去。
+
+  通過後才開 leader 的匯流排，收完就關。
+- 手動示範時，操作者仍在伺服器終端按 `c`、`a`、`s`/`f`。手在 leader 上，不方便操作網頁。之後可以改用腳踏開關。
+- 事件：`collect_started`、`collect_episode`（第幾筆、顏色、成功與否、自動或手動）、`collect_waiting`（需要操作者處理，例如補放方塊）、`collect_done`（各類筆數）。聊天頁要補這幾種事件的繁中模板（`zh.report_line`）。
+- 安全：任何中止都照現行規則處理，兩支手臂先回停放位再解扭力，leader 只在有人扶住時才解扭力。
+
+**工作量**：約 1 天，週末用假手臂、假 leader、腳本化終端機開發和測試。11/30 上機。
+
+**風險**：新增意圖會改變 schema 和提示詞。開啟 `collection` 前要用 `tools/chat_eval.py` 重跑語句表，確認原有句子的結果沒變。
