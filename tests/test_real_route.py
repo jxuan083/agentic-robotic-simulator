@@ -565,6 +565,37 @@ class PickPlaceRoundCase(RouteCase):
         self.assertEqual(kinds, ["on", "off", "on", "off"])                # hand-over, then held at c and parked
         self.assertLess(body_gap(leader.goal, rest), 1e-6)                 # driven home to its own fold
 
+    def test_a_camera_stall_mid_demonstration_stops_the_episode_and_brings_the_arm_home(self):
+        """11/27 P0015: the wrist camera stalled ~1 s while the arm reached out and the tool exited (emergency
+        release by hand). Now the recording stops, the follower retraces to the start pose and parks."""
+        from agentic_sim.real_grasp import pick_place_round
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        reach = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 15, "elbow_flex": CHANNEL["elbow_flex"] - 8}
+        d = lambda pose_: {j: pose_[j] - CHANNEL[j] for j in CHANNEL}  # noqa: E731
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        leader = FakeDrivenLeader(clock, dict(PARK), [(0.5, dict.fromkeys(CHANNEL, 0.0)), (4.0, d(reach))])
+        term = ScriptedTerminal(clock, [], ("a", "d", "r", "y", "f"))
+        driver = self.driver(follower, term, clock, "camera-stall")
+        began = clock()
+
+        def check_cameras():
+            if clock() - began > 30e9:
+                raise RuntimeError("wrist: no recent camera frame")
+
+        writer = FakeWriter(clock)
+        result = pick_place_round(driver, leader, data, writer, check_cameras, color="red", destination="beige",
+                                  slot={"index": 1, "xy": [50, 190]}, quads=None,
+                                  placer=object(), slot_mount=((0.21, -0.07), 0.0))
+        driver.close_logs()
+        self.assert_released_at_park(follower)
+        self.assertTrue(result["cancelled"])
+        self.assertFalse(result["success"])
+        self.assertTrue(writer.rows)                                       # rows up to the stall, none after
+
     def test_round_chooser_sets_the_colour_and_cancels_on_an_empty_tray(self):
         from agentic_sim.real_grasp import pick_place_round
         from agentic_sim.real_route_fake import FakeDrivenLeader

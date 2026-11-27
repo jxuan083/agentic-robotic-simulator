@@ -106,11 +106,20 @@ def record_demo(driver, leader, writer, check_cameras):
     """Teleop from park until c; every follower command becomes an episode control row.
     Returns (samples, kept): the driven path (also when discarded, to retrace it safely) and whether c ended it."""
     rows = [0]
+    driver.camera_error = None
 
     def on_send(sent, actual):
+        if driver.camera_error:
+            return
         rows[0] += 1
         if rows[0] % 15 == 0:
-            check_cameras()
+            try:
+                check_cameras()
+            except RuntimeError as error:
+                # 11/27 P0015: the wrist camera stalled ~1 s mid-demonstration and the whole tool exited with the
+                # arm reaching out. Now the recording stops, the follower holds, and the arm goes back by itself.
+                driver.camera_error = str(error)
+                raise Paused(f"相機中斷（{error}）") from error
         writer.add_control(control_row(writer, sent, actual))
 
     samples = [(driver.clock(), dict(driver.target))]
@@ -124,6 +133,11 @@ def record_demo(driver, leader, writer, check_cameras):
                 return samples, True
             except Paused as pause:
                 driver.term.say(f"已暫停並原地保持：{pause}")
+                if driver.camera_error:
+                    driver.term.say("這筆已停錄、不能用。leader 先放著；按 d 後 follower 沿剛才的路徑退回起姿、再回停放位"
+                                    "（路上不錄），結果請按 f。")
+                    choice = driver.menu("d 放棄這筆、自動退回／x 緊急原地解扭力", {"d": "放棄", "x": "緊急解力"})
+                    return samples, False
                 choice = driver.menu("t 重新交接 leader 繼續這筆／d 放棄這筆（之後回停放位）／x 緊急原地解扭力",
                                      {"t": "繼續", "d": "放棄", "x": "緊急解力"})
                 if choice == "d" or not driver.align_leader(leader, driver.read()):
@@ -284,8 +298,11 @@ def script_recorder(writer, check_cameras):
 
     def on_send(sent, actual):
         rows[0] += 1
-        if rows[0] % 15 == 0:
-            check_cameras()
+        if rows[0] % 15 == 0 and not getattr(writer, "camera_error", None):
+            try:
+                check_cameras()
+            except RuntimeError as error:   # never stop a carry over the trays: finish the place, fail the episode
+                writer.camera_error = str(error)
         writer.add_control(control_row(writer, sent, actual) | {"command_source": "script", "task_is_policy": 1})
     return on_send
 
@@ -408,6 +425,9 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
                 f"，離旁邊方塊只有 {landed['neighbour_mm']:.0f} mm（太擠，下一顆可能撞到）" if
                 landed["neighbour_mm"] is not None and landed["neighbour_mm"] < CROWDED_MM else "") + "。"
             if landed else "D455 沒在目的盤看到新放的方塊。")
+    camera_error = getattr(driver, "camera_error", None) or getattr(writer, "camera_error", None)
+    if camera_error:
+        seen = f"錄製中相機中斷（{camera_error}），這筆不能用，請按 f。" + seen
     outcome = driver.menu(seen + "結果：s 成功（收進資料）／f 失敗（移出、重錄這一格）", {"s": "成功", "f": "失敗"})
     return {"color": color, "destination": destination, "slot": slot, "target_choice": target, "scene": scene,
             "landed": landed, "program_place": programmed, "placed": landed is not None and outcome == "s", "success": outcome == "s" and kept,
