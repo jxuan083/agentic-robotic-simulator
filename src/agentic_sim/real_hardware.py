@@ -332,14 +332,13 @@ def open_camera(spec):
     import numpy as np
     import pyrealsense2 as rs
 
-    pipeline = rs.pipeline()
-    config = rs.config()
-    config.enable_device(str(spec["device"]))
     size = spec["width"], spec["height"]
-    config.enable_stream(rs.stream.color, *size, rs.format.bgr8, spec["fps"])
-    if spec.get("depth"):
-        config.enable_stream(rs.stream.depth, *size, rs.format.z16, spec["fps"])
-    active = pipeline.start(config)
+
+    def enable(config):
+        config.enable_stream(rs.stream.color, *size, rs.format.bgr8, spec["fps"])
+        if spec.get("depth"):
+            config.enable_stream(rs.stream.depth, *size, rs.format.z16, spec["fps"])
+    pipeline, active = start_realsense(spec["device"], enable)
     try:
         color_stream = active.get_stream(rs.stream.color)
         info = {"color_intrinsics": _intrinsics(color_stream)}
@@ -368,6 +367,40 @@ def open_camera(spec):
         yield read, info
     finally:
         pipeline.stop()
+
+
+def start_realsense(serial, enable, first_timeout_ms=5000, reset_wait_s=15.0):
+    """Start a RealSense pipeline (enable(config) adds the streams) and wait for the first frameset.
+
+    11/27: after many open / close cycles (a D455 on USB 2.1) the colour stream stopped delivering while depth kept
+    coming, until a hardware reset. So a start without frames resets the device once and starts again.
+    Returns (pipeline, active profile)."""
+    import time
+
+    import pyrealsense2 as rs
+
+    for attempt in (0, 1):
+        pipeline, config = rs.pipeline(), rs.config()
+        config.enable_device(str(serial))
+        enable(config)
+        active = pipeline.start(config)
+        try:
+            pipeline.wait_for_frames(first_timeout_ms)
+            return pipeline, active
+        except RuntimeError:
+            device = active.get_device()
+            pipeline.stop()
+            if attempt:
+                raise
+            print(f"RealSense {serial}: no frames after start; hardware reset and one retry", flush=True)
+            device.hardware_reset()
+            time.sleep(3.0)                      # the device drops off the bus, then comes back
+            deadline = time.monotonic() + reset_wait_s
+            while time.monotonic() < deadline and not any(
+                    d.get_info(rs.camera_info.serial_number) == str(serial) for d in rs.context().query_devices()):
+                time.sleep(0.5)
+            time.sleep(1.0)
+    raise RuntimeError("unreachable")
 
 
 def _intrinsics(stream):

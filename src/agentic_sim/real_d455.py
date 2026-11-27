@@ -354,11 +354,12 @@ def open_aligned(serial: str, width=640, height=480, fps=30):
     """Context-free D455 opener: returns (read, intrinsics, stop). read() -> (bgr, depth_m aligned to colour)."""
     import pyrealsense2 as rs
 
-    pipe, cfg = rs.pipeline(), rs.config()
-    cfg.enable_device(str(serial))
-    cfg.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
-    cfg.enable_stream(rs.stream.depth, width, height, rs.format.z16, fps)
-    prof = pipe.start(cfg)
+    from agentic_sim.real_hardware import start_realsense
+
+    def enable(cfg):
+        cfg.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
+        cfg.enable_stream(rs.stream.depth, width, height, rs.format.z16, fps)
+    pipe, prof = start_realsense(serial, enable)   # resets a D455 whose colour stream stopped (11/27)
     scale = prof.get_device().first_depth_sensor().get_depth_scale()
     intr = prof.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
     align = rs.align(rs.stream.color)
