@@ -726,14 +726,16 @@ def sample_park(follower, wait, count=6):
 
 
 # -- flows ---------------------------------------------------------------------
-def follow(driver, track, ends):
-    """Play track from ends[0] to ends[1] with the pause menu. Returns the endpoint reached."""
+def follow(driver, track, ends, settle=True):
+    """Play track from ends[0] to ends[1] with the pause menu. Returns the endpoint reached. settle=False goes on
+    without waiting for the follower to stop (a recorded scripted grasp flows into the gripper close like a hand)."""
     while True:
         try:
             driver.stage(f"to_{ends[1]}")
             try:
                 driver.play(track, f"往{ends[1]}")
-                driver.settle()
+                if settle:
+                    driver.settle()
             except Paused as pause:
                 if pause.track is None:  # paused while settling at the end of the track
                     pause.track, pause.index = track, len(track.points) - 2
