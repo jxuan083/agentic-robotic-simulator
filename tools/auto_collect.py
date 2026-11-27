@@ -41,7 +41,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import numpy as np  # noqa: E402
 
 from agentic_sim.real_place import (  # noqa: E402
-    CARRY_Z, CLOSED_PCT, EDGE_M, GRASP_M, HELD_PCT, HOVER_M, OPEN_PCT, Placer, beige_slots, camera_from_pose,
+    CARRY_Z, CLOSED_PCT, EDGE_M, GRASP_M, HELD_PCT, HOVER_M, OPEN_PCT, SLOTS_MM, Placer, beige_slots, camera_from_pose,
     hold_while, make_corr,
 )
 
@@ -72,6 +72,8 @@ STYLE_LIFT_MM = (55.0, 85.0)
 STYLE_LIFT_S = (0.7, 1.1)     # close -> lift of the operator: 1.2-2.2 s including the close
 STYLE_HOLD_S = (0.3, 0.6)
 STYLE_STEP_S = 1 / 15         # min-jerk samples (the driver interpolates at the control rate)
+WRIST_TURN_DEG = 30.0         # wrist_roll travel from the start pose (operator's grasps <= 31 deg; 11/27 S0005 turned
+                              # 89 deg squaring a block and adding the yaw error)
 
 
 def low_z(placer, reading):
@@ -247,6 +249,30 @@ class Episodes:
                 return g
             d.tick(t)
 
+    def _finger_yaw(self, g, block_yaw, err, style):
+        """Finger heading (rad, the 'block yaw' Placer.pose_for squares with) for `wanted`, with the wrist turned at
+        most WRIST_TURN_DEG from the start pose like the operator; the rest stays as misalignment (closing squares
+        the block). style["wrist_turn_deg"] / ["yaw_left_deg"] (fingers vs block faces) record what was used."""
+        from agentic_sim.real_kinematics import wrap_quarter
+        pl, start = self.placer, self.driver.target
+        r = pl.model.radial(g[:2])
+        want = wrap_quarter(block_yaw + err - r)                 # turn from radial fingers, +-45 deg
+
+        def travel(turn):
+            p = pl.pose_for(g, r + turn, start, "grasp", 30.0)
+            return None if p is None else p["wrist_roll"] - start["wrist_roll"]
+        f_want, f0 = travel(want), travel(0.0)
+        turn = want
+        if f_want is not None and f0 is not None and abs(f_want) > WRIST_TURN_DEG and abs(want) > 1e-3:
+            slope = (f_want - f0) / math.degrees(want)               # deg of wrist_roll per deg of turn (~ +-1)
+            if abs(slope) > 0.2:
+                turn = math.radians((math.copysign(WRIST_TURN_DEG - 4.0, f_want) - f0) / slope)   # margin: the
+                # approach and lift poses tilt differently and roll the wrist a few degrees more
+                turn = float(np.clip(turn, min(0.0, want), max(0.0, want)))
+        style["wrist_turn_deg"] = None if travel(turn) is None else round(travel(turn), 1)
+        style["yaw_left_deg"] = round(math.degrees(wrap_quarter(block_yaw - r - turn)), 1)   # vs the block faces
+        return r + turn
+
     def grasp_like_human(self, block, style):
         """Recorded grasp shaped like the operator's (see STYLE_*). Returns (gripper reading after the hold, None) or
         (None, reason) when an IK fails before anything moved."""
@@ -256,7 +282,7 @@ class Episodes:
         tan = np.array([-rad[1], rad[0]])
         off = (style["offset_mm"][0] * rad + style["offset_mm"][1] * tan) / 1000
         g = c + [off[0], off[1], GRASP_M + style["z_mm"] / 1000]
-        yaw = block["yaw"] + math.radians(style["yaw_err_deg"])
+        yaw = self._finger_yaw(g, block["yaw"], math.radians(style["yaw_err_deg"]), style)
         here = pl.model.ee(d.target)
         here = here - pl.corr_at(here)
         back = here[:2] - g[:2]
@@ -491,7 +517,7 @@ def run(args):
                     home()
                     final = latest_global(writer)
                     landed = placed_block(before, locate(final, quads)["blocks"], target["color"], "beige",
-                                          {"index": slot_k + 1, "xy": [0, 0]}) if final is not None else None
+                                          {"index": slot_k + 1, "xy": SLOTS_MM[slot_k]}) if final is not None else None
                 place_err = place_err or (camera and f"相機中斷（{camera['error']}）")
                 success = bool(ok_hold and not place_err and landed is not None)
                 slot = {"index": slot_k + 1, "xy": json.loads((ROOT / "configs/real_slots.json").read_text())["beige"][slot_k]}
