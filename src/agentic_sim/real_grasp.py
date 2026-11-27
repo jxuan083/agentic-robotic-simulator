@@ -322,13 +322,19 @@ def park_all(driver, leader, data):
     driver.target = driver.target | {"gripper": channel["gripper"]}
     park_and_release(driver, route.reverse(), park, support)
     driver.at_start = False
-    if getattr(driver, "leader_waiting", False):
-        rev = route.reverse()
-        grip = float(pose(leader.read())["gripper"])
-        goals = [pose(p) | {"gripper": grip} for p in rev.points[1:-1]]
-        goals.append(pose(driver.leader_rest) if driver.leader_rest is not None else pose(rev.points[-1]))
-        driver.park_leader(leader, goals)
-        driver.leader_waiting = False
+    park_leader_home(driver, leader, data)
+
+
+def park_leader_home(driver, leader, data):
+    """A leader waiting at the start pose: driven home along the reversed route to its own fold and released."""
+    if not getattr(driver, "leader_waiting", False):
+        return
+    rev = Track(data["waypoints"], data["segment_seconds"]).reverse()
+    grip = float(pose(leader.read())["gripper"])
+    goals = [pose(p) | {"gripper": grip} for p in rev.points[1:-1]]
+    goals.append(pose(driver.leader_rest) if driver.leader_rest is not None else pose(rev.points[-1]))
+    driver.park_leader(leader, goals)
+    driver.leader_waiting = False
 
 
 def script_recorder(writer, check_cameras):
