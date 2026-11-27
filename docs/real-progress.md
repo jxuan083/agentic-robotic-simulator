@@ -120,6 +120,10 @@ ACT 輸出絕對關節角，同一個「下降、轉腕、閉爪、抬起」在�
 
 模擬端的驗收 `retrieve_over_delivery` 與 `hold_return` 要改成新的行為：只回報、不搬動，帳本仍正確。
 
+## 訓練端（RTX 5090）
+
+實機 episode 轉 LeRobot 資料集、ACT 訓練與推論檢查的流程已用假資料打通，見 [real-training.md](real-training.md)。實機資料進來後即可直接轉換並訓練。
+
 ## 尚未可靠、勿直接使用
 
 - 關節映射（`real_joints.lerobot_to_shared`）仍為暫定，由它算出的末端位姿與 11/25 手眼外參都不可靠。程式定位（D455 → IK → 方塊上方）要在逐軸核對與 D455 基座外參量測後才能上機。

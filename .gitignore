@@ -6,3 +6,4 @@ __pycache__/
 .venv-perception-classical/
 .venv-mujoco/
 weights/
+.venv-train/

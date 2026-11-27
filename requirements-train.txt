@@ -1,0 +1,9 @@
+# Training side (LeRobot ACT on the real right-arm dataset). Tested on an RTX 5090 (driver 580.126.18), 2026-11-25:
+#   uv venv .venv-train --python 3.10
+#   uv pip install --python .venv-train/bin/python --index-url https://download.pytorch.org/whl/cu128 \
+#       torch==2.7.1 torchvision==0.22.1
+#   uv pip install --python .venv-train/bin/python -r requirements-train.txt
+# LeRobot 0.4.3 needs torch < 2.8; the PyPI torch 2.7.1 wheel is CUDA 12.6 without Blackwell (sm_120) kernels, so
+# torch / torchvision come from the cu128 index first. Same LeRobot version as LeHome's ACT configs and
+# requirements-real.txt.
+lerobot==0.4.3
