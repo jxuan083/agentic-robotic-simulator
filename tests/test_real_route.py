@@ -658,6 +658,59 @@ class PickPlaceRoundCase(RouteCase):
         """An error between rounds: both arms go home by their fixed ways before any torque is released."""
         self.test_stay_rounds_wait_at_the_start_pose_and_park_both_arms_at_the_end()
 
+    def test_plush_round_takes_the_depth_target_and_places_from_its_grasp_height(self):
+        """11/28: the plush toy: target from the opening depth (find_plush), the program releases it at P0 from the
+        height it was taken at, the landing comes from depth too."""
+        from unittest import mock
+
+        import numpy as np
+
+        from agentic_sim.real_grasp import pick_place_round
+        from agentic_sim.real_route import follow
+        from agentic_sim.real_route_fake import FakeDrivenLeader
+
+        self.teach()
+        data, _ = load_route(self.route)
+        lift = dict(CHANNEL) | {"shoulder_lift": CHANNEL["shoulder_lift"] + 15, "gripper": 17.0}
+        clock = FakeClock()
+        follower = FakeFollower(clock)
+        leader = FakeDrivenLeader(clock, dict(PARK) | {"gripper": 1.0},
+                                  [(0.5, dict.fromkeys(CHANNEL, 0.0)), (4.0, {j: lift[j] - CHANNEL[j] for j in CHANNEL})])
+        term = ScriptedTerminal(clock, [(30.0, "c")], ("a", "s", "y"))
+        driver = self.driver(follower, term, clock, "plush")
+        asked = {}
+
+        class StubPlacer:
+            corr_at = staticmethod(lambda xyz: np.zeros(3))
+            model = type("M", (), {"ee": staticmethod(lambda p: np.array([0.3, -0.1, 0.05 + 0.0 * p["shoulder_lift"]]))})
+
+            def plan_place(self, xy, yaw, held, grip, current, **heights):
+                asked.update(heights, xy=xy)
+                return [dict(current)], dict(current), dict(current) | {"gripper": grip}
+
+            def execute_place(self, plan, label):
+                path, over, low = plan
+                follow(driver, Track([dict(driver.target), low | {"gripper": 40.0}, over | {"gripper": 40.0}],
+                                     [0.0] * 2), ("玩偶上方", label))
+
+        def plush(x, y, tray):
+            return {"x": x, "y": y, "z_top": 0.1, "yaw": 0.5, "head": [x, y], "tray": tray, "x_mm": x * 1000,
+                    "y_mm": y * 1000, "yaw_deg": 28.6, "pixel": [300.0, 200.0], "height_mm": 98.0,
+                    "size_mm": [88.0, 60.0], "upright": True}
+        seen = [[plush(0.30, -0.10, None)], [plush(0.215, -0.20, "beige")]]
+        with mock.patch("agentic_sim.real_grasp.find_plush", side_effect=lambda *a: seen.pop(0)):
+            result = pick_place_round(driver, leader, data, FakeWriter(clock), lambda: None, color=None,
+                                      destination="beige", slot={"index": 0, "xy": [55, 58]}, quads=None,
+                                      placer=StubPlacer(), slot_mount=((0.215, -0.197), 0.0), stay=True,
+                                      plush_cam=object())
+        driver.close_logs()
+        self.assertTrue(result["success"])
+        self.assertEqual(result["color"], "plush")
+        self.assertEqual(result["target_choice"]["x_mm"], 300.0)
+        self.assertAlmostEqual(asked["place_z"], 0.05 + 0.015)          # grasp height + floor + release gap
+        self.assertAlmostEqual(asked["carry_z"], 0.05 + 0.083)          # bottom 6 cm over the rims
+        self.assertLess(result["landed"]["slot_offset_mm"], 5.0)
+
     def test_round_chooser_sets_the_colour_and_cancels_on_an_empty_tray(self):
         from agentic_sim.real_grasp import pick_place_round
         from agentic_sim.real_route_fake import FakeDrivenLeader

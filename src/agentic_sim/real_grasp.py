@@ -13,6 +13,8 @@ block (fixed tray corners); a frame taken back at park (arm folded, trays unobst
 start/close/lift/release/end and both targets. Training ranges: grasp [start, lift], place [lift, end].
 """
 
+import math
+
 from agentic_sim.real_control import JOINTS, pose
 from agentic_sim.real_route import (
     CARRY_SQUEEZE, Paused, Track, _simplify, body_gap, follow, park_and_release, place_from_channel, retimed,
@@ -189,11 +191,12 @@ def grasp_round(driver, leader, data, drops, writer, check_cameras, color):
 
 
 def finalize(root, *, color, destination, success, quads, target_pose=None, slot=None, landed=None, extra=None,
-             start="park", mode="demonstration"):
+             start="park", mode="demonstration", known_target=None):
     """Readback, D455 target from the opening frame (fixed trays) and review.json.
 
     Frames: start (first motion), close, lift (first still moment after lifting), and for demonstrated placement
-    release and end. Ranges: grasp [start, lift]; place [lift, end] when the release is in the episode."""
+    release and end. Ranges: grasp [start, lift]; place [lift, end] when the release is in the episode.
+    known_target: the target already measured (the plush, plush_target) instead of the opening colour frame."""
     import json
 
     from agentic_sim.real_episode import Episode, write_json
@@ -203,15 +206,17 @@ def finalize(root, *, color, destination, success, quads, target_pose=None, slot
     episode = Episode(root)
     probe = {"color": color, "pose": list(target_pose or (0.0, 0.0)) + [0.0]}
     target = located = None
-    for tray in ("pink", "beige"):
+    for tray in () if known_target else ("pink", "beige"):
         result = locate_opening(episode, probe | {"source_tray": tray}, quads)
         if result and result.get("target") and (target is None or result["target"]["card_offset_mm"]
                                                  < target["card_offset_mm"]):
             located, target = result, result["target"]
+    target = known_target or target
     marks = {key: value["frame"] for key, value in report.get("candidates", {}).items()}
     review = {"outcome": {"color": color, "destination": destination, "success": success,
                           "placed": bool(success and destination)},
-              "target": {"tray": target and target["tray"], "color": color, "frame": "tray-local mm, deg",
+              "target": {"tray": target and target["tray"], "color": color,
+                         "frame": (known_target or {}).get("frame", "tray-local mm, deg"),
                          "card_pose": None, "actual_pose": None, "d455": target},
               "place_target": slot and {"tray": destination, "slot": slot["index"], "xy_mm": slot["xy"],
                                         "landed_d455": landed},
@@ -230,7 +235,7 @@ def finalize(root, *, color, destination, success, quads, target_pose=None, slot
         report["review_reasons"].append("no gripper closure / lift found: mark close and lift by hand")
     if target is None:
         report["review_reasons"].append(f"D455 found no {color} block in the opening frame")
-    elif target["same_colour_in_tray"] > 1 and target_pose is None:
+    elif (target.get("same_colour_in_tray") or 1) > 1 and target_pose is None:
         report["review_reasons"].append(f"more than one {color} block in the {target['tray']} tray")
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     manifest["task_card"] = {"color": color, "source_tray": target and target["tray"], "destination": destination,
@@ -289,6 +294,51 @@ def latest_global(writer):
     if not count:
         return None
     return cv2.imread(str(writer.root / "global" / _image_name(count - 1)))
+
+
+def latest_global_depth(writer, frames=3):
+    """The newest saved native depth frames of the running episode's global camera (uint16 images, newest last)
+    and their metadata (manifest cameras.global.depth), or ([], None)."""
+    import cv2
+
+    from agentic_sim.real_episode import _image_name
+
+    count = getattr(writer, "camera_counts", {}).get("global", 0)
+    meta = (writer.manifest["cameras"].get("global") or {}).get("depth")
+    if not count or not meta:
+        return [], None
+    out = []
+    for i in range(max(0, count - frames), count):
+        img = cv2.imread(str(writer.root / "global" / _image_name(i, depth=True)), cv2.IMREAD_UNCHANGED)
+        if img is not None:
+            out.append(img)
+    return out, meta
+
+
+def find_plush(writer, cam, quads):
+    """Plush toys in the newest global depth frames of the episode (agentic_sim.real_plush), each with its tray
+    (None: on the table), mount mm and the colour-image pixel of its top (the condition marker)."""
+    import numpy as np
+
+    from agentic_sim.real_plush import detect, native_points, tray_of
+    depths, meta = latest_global_depth(writer)
+    if not depths:
+        return []
+    pts = np.concatenate([native_points(d, meta["units_m"], meta["intrinsics"], meta["depth_to_color"], cam)
+                          for d in depths])
+    plushes = detect(pts)[0]
+    for p in plushes:
+        u, v = cam.project([[p["x"], p["y"], p["z_top"]]])[0]
+        p |= {"tray": tray_of(p, cam, quads), "x_mm": round(p["x"] * 1000, 1), "y_mm": round(p["y"] * 1000, 1),
+              "yaw_deg": round(math.degrees(p["yaw"]), 1), "pixel": [float(u), float(v)]}
+    return plushes
+
+
+def plush_target(plush):
+    """review.json target.d455 of a plush episode: mount-frame mm (not tray-local), yaw mod 180 (yaw_fold 2)."""
+    keys = ("x_mm", "y_mm", "yaw_deg", "pixel", "height_mm", "size_mm", "upright", "tray")
+    return {"object": "plush", "color": "plush", "frame": "mount mm, deg", "yaw_fold": 2} | \
+        {k: plush[k] for k in keys} | {"head_mm": [round(v * 1000, 1) for v in plush["head"]]}
 
 
 def describe(target, blocks):
@@ -388,7 +438,7 @@ def script_recorder(writer, check_cameras):
     return on_send
 
 
-def program_place(driver, placer, slot_mount, label):
+def program_place(driver, placer, slot_mount, label, heights=None):
     """After a demonstration that ended at a stable lift: carry the held block into the slot with IK
     (agentic_sim.real_place), open, rise over the slot. With a recorder on driver.on_send these are the episode's
     "script" rows (the IK is planned while the follower keeps sending, so the rows have no gap)."""
@@ -399,7 +449,7 @@ def program_place(driver, placer, slot_mount, label):
         return {"held": False, "gripper_pct": round(grip, 1)}
     xy, yaw = slot_mount
     current = dict(driver.target)
-    plan = hold_while(driver, lambda: placer.plan_place(xy, yaw, yaw, current["gripper"], current))
+    plan = hold_while(driver, lambda: placer.plan_place(xy, yaw, yaw, current["gripper"], current, **(heights or {})))
     err = plan if isinstance(plan, str) else None
     if err:
         driver.term.say(f"程式放置沒有執行：{err}")
@@ -410,20 +460,33 @@ def program_place(driver, placer, slot_mount, label):
 
 
 def pick_place_round(driver, leader, data, writer, check_cameras, *, color, destination, slot, quads, choose=None,
-                     placer=None, slot_mount=None, stay=False):
+                     placer=None, slot_mount=None, stay=False, plush_cam=None):
     """Park -> demonstrated pick and place (ending near the start pose) -> park. Returns the operator result.
     With choose (see random_pick) the target block, and so its colour, is picked from the opening D455 frame.
     With placer (agentic_sim.real_place.Placer) and slot_mount ((x, y) m, tray yaw): the demonstration ends at the
-    stable lift (c) and the program places the block (the place height and release varied too much by hand)."""
+    stable lift (c) and the program places the block (the place height and release varied too much by hand).
+    With plush_cam (the D455 Camera): the plush toy instead of a block; its target comes from the opening depth
+    frames (agentic_sim.real_plush), it is placed at its own beige slot (slot_mount = P0) from the height it was
+    taken at, and its landing is read from depth too."""
     from agentic_sim.real_locate import locate
 
     park, channel, support = data["park"]["pose"], data["channel"]["command"], data["park_support"]
     route = Track(data["waypoints"], data["segment_seconds"])
     driver.leader_route = route
+    plush = plush_cam is not None
     opening = latest_global(writer)
-    blocks = locate(opening, quads)["blocks"] if opening is not None else []
+    blocks = locate(opening, quads)["blocks"] if opening is not None and not plush else []
     scene = None
-    if choose is not None:
+    if plush:
+        color = "plush"
+        found = [p for p in find_plush(writer, plush_cam, quads) if p["tray"] != destination]
+        target = found[0] if found else None
+        if target is None:
+            driver.term.say("D455 開場深度沒看到柴犬玩偶（要站著、離手臂和手 3 cm 以上），這筆不錄。")
+            return {"cancelled": True, "demo_frames": None, "scene": None}
+        driver.term.say(f"這筆夾：柴犬玩偶（x {target['x_mm']:.0f} y {target['y_mm']:.0f} mm，"
+                        f"朝向 {target['yaw_deg']:.0f}°，高 {target['height_mm']:.0f} mm）")
+    elif choose is not None:
         target, scene = choose(blocks)
         if target is None:
             driver.term.say(f"D455 開場畫面在{TRAY_NAME[scene['source']]}沒找到方塊，這筆不錄。")
@@ -434,9 +497,10 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         target = choose_target(driver.term, blocks, color) if opening is not None else None
     if target is None:
         driver.term.say(f"D455 開場畫面沒找到{color}方塊；仍可錄，讀回時再確認。")
+    noun = "柴犬玩偶" if plush else f"{color}方塊"
     if placer is not None:
-        driver.demo_prompt = (f"錄製中：從起姿 → 夾起{color}方塊 → 抬起約 5 cm 停穩，按 c（不用放）。"
-                              f"按 c 後 leader 會上扭力定住，手放開；程式把方塊放進{TRAY_NAME[destination]} P{slot['index']}，"
+        driver.demo_prompt = (f"錄製中：從起姿 → 夾起{noun} → 抬起約 5 cm 停穩，按 c（不用放）。"
+                              f"按 c 後 leader 會上扭力定住，手放開；程式把{noun}放進{TRAY_NAME[destination]} P{slot['index']}，"
                               "follower 回停放位後 leader 自動收回。Esc 暫停；腕部只在 ±30° 內對齊方塊。")
     else:
         driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]} P{slot['index']}"
@@ -487,7 +551,13 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         try:
             leader_end = hold_while(driver, hold)
             driver.term.say("leader 已上扭力定住，手可以放開。")
-            programmed = program_place(driver, placer, slot_mount, f"{TRAY_NAME[destination]} P{slot['index']}")
+            heights = None
+            if plush:       # released from the height it was taken at: the lowest grasp centre of the demonstration
+                from agentic_sim.real_plush import place_heights
+                low = min(float(placer.model.ee(p)[2] - placer.corr_at(placer.model.ee(p))[2]) for _, p in samples)
+                heights = place_heights(max(low, 0.0))
+            programmed = program_place(driver, placer, slot_mount, f"{TRAY_NAME[destination]} P{slot['index']}",
+                                       heights)
         finally:
             driver.on_send = None
         back = lift_and_return(driver.target, channel, data["calibrations"]["follower"]["id"])
@@ -518,8 +588,17 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
                                                          data["calibrations"]["follower"]["id"]))
     # Landing is read only now, the arm at park or at the start pose: the D455 sees both trays past it there.
     final = latest_global(writer) if kept else None
-    after = locate(final, quads)["blocks"] if final is not None else None
-    landed = placed_block(blocks, after, color, destination, slot) if after is not None else None
+    if plush:
+        from agentic_sim.real_plush import delivered
+        seen_plush = delivered(find_plush(writer, plush_cam, quads), slot_mount[0]) if kept else None
+        landed = seen_plush and {k: seen_plush[k] for k in ("x_mm", "y_mm", "yaw_deg", "pixel", "upright")} | {
+            "frame": "mount mm", "slot_offset_mm": round(math.hypot(seen_plush["x"] - slot_mount[0][0],
+                                                                    seen_plush["y"] - slot_mount[0][1]) * 1000, 1),
+            "neighbour_mm": None}
+        after = None
+    else:
+        after = locate(final, quads)["blocks"] if final is not None else None
+        landed = placed_block(blocks, after, color, destination, slot) if after is not None else None
     if after is not None and target is not None:
         taken = taken_block(blocks, after, color, target["tray"])
         if taken is not None and ((taken["x_mm"] - target["x_mm"]) ** 2 + (taken["y_mm"] - target["y_mm"]) ** 2) ** .5 > 25:
@@ -530,7 +609,7 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
             f"離參考位置 {landed['slot_offset_mm']:.0f} mm" + (
                 f"，離旁邊方塊只有 {landed['neighbour_mm']:.0f} mm（太擠，下一顆可能撞到）" if
                 landed["neighbour_mm"] is not None and landed["neighbour_mm"] < CROWDED_MM else "") + "。"
-            if landed else "D455 沒在目的盤看到新放的方塊。")
+            if landed else f"D455 沒在目的盤看到新放的{'柴犬玩偶' if plush else '方塊'}。")
     camera_error = getattr(driver, "camera_error", None) or getattr(writer, "camera_error", None)
     if camera_error:
         seen = f"錄製中相機中斷（{camera_error}），這筆不能用，請按 f。" + seen

@@ -48,13 +48,15 @@ def make_corr(spec=DEFAULT_CORR):
     return corr_at
 
 
-def beige_slots(cam, quads):
-    """Beige slots in the mount frame and the tray's x axis direction (rad), from the tray corners."""
+def beige_slots(cam, quads, slots_mm=None):
+    """Beige slots (default P1-P4; or other tray-local mm points, e.g. the plush's P0) in the mount frame and the
+    tray's x axis direction (rad), from the tray corners."""
     import cv2
     from agentic_sim.real_locate import tray_homography
     quad = np.asarray(quads["beige"], np.float32)
     Hinv = np.linalg.inv(tray_homography(quad, "beige"))
-    pts = cv2.perspectiveTransform(np.asarray(SLOTS_MM, np.float32).reshape(-1, 1, 2), Hinv).reshape(-1, 2)
+    pts = cv2.perspectiveTransform(np.asarray(SLOTS_MM if slots_mm is None else slots_mm, np.float32).reshape(-1, 1, 2),
+                                   Hinv).reshape(-1, 2)
     xy = cam.on_plane(pts, 0.023)[:, :2]
     c = cam.on_plane(quad, 0.023)[:, :2]
     yaw = math.atan2(c[1, 1] - c[0, 1], c[1, 0] - c[0, 0])
@@ -156,18 +158,19 @@ class Placer:
         self.set_grip(OPEN_PCT, "張開")
         self.move([over | {"gripper": OPEN_PCT}], ("格位", "格位上方"))
 
-    def plan_place(self, xy, tray_yaw, held_yaw, grip, current):
+    def plan_place(self, xy, tray_yaw, held_yaw, grip, current, place_z=PLACE_Z, carry_z=CARRY_Z):
         """IK only (no motion, no bus access; safe in a thread): (path, over, low) from the current command, or an
-        error string."""
+        error string. place_z / carry_z: grasp-centre heights at the release and while carrying (a block's defaults;
+        the plush is held higher above its bottom, agentic_sim.real_plush.place_heights)."""
         xy = np.asarray(xy, float)
-        top = np.array([xy[0], xy[1], PLACE_Z + HOVER_M])
+        top = np.array([xy[0], xy[1], place_z + HOVER_M])
         here = self.model.ee(current)
         here = here - self.corr_at(here)
         path, seed = [], dict(current)
         for k, s_ in enumerate(np.linspace(0, 1, 6)):
             p_xy = here[:2] + (xy - here[:2]) * s_
             p = None
-            for z in (CARRY_Z, 0.095, 0.08, max(0.065, here[2])):   # far blocks: start lower, rise as the path comes in
+            for z in (carry_z, carry_z - 0.015, carry_z - 0.03, max(carry_z - 0.045, here[2])):   # far: start lower
                 p = self.pose_for([p_xy[0], p_xy[1], z], tray_yaw if k == 5 else held_yaw, seed, "above", grip)
                 if p is not None:
                     break
@@ -176,7 +179,7 @@ class Placer:
             path.append(p)
             seed = p
         over = self.pose_for(top, tray_yaw, seed, "place", grip)
-        low = self.pose_for([xy[0], xy[1], PLACE_Z], tray_yaw, over or seed, "place", grip)
+        low = self.pose_for([xy[0], xy[1], place_z], tray_yaw, over or seed, "place", grip)
         if over is None or low is None:
             return "格位 IK 無解，不移動。"
         return path, over, low

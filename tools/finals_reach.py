@@ -35,7 +35,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import numpy as np  # noqa: E402
 
-from agentic_sim.real_d455 import EDGE_M, Camera, detect, draw, open_aligned  # noqa: E402
+from agentic_sim.real_d455 import EDGE_M, Camera, draw, open_aligned  # noqa: E402
+from agentic_sim.real_plush import draw as draw_plush, scene as plush_scene  # noqa: E402
 from agentic_sim.real_kinematics import ArmModel, find_calibration  # noqa: E402
 
 from agentic_sim.real_place import (  # noqa: E402  (shared with the park collection)
@@ -66,7 +67,7 @@ class Live:
                 bgr, depth = self.read()
             except RuntimeError:
                 continue
-            blocks, rejected, info = detect(bgr, depth, self.cam, self.quads)
+            blocks, plushes, rejected, info = plush_scene(bgr, depth, self.cam, self.quads)
             self.info = info
             if self.model is not None:
                 for b in blocks:
@@ -76,6 +77,7 @@ class Live:
             lines = self.lines + (["! something over the trays: hidden / shifted blocks"] if info.get("occluded") else [])
             img = draw(bgr, self.cam, blocks, selected=self.selected, quads=self.quads, rejected=rejected,
                        arm=self.arm_xyz, lines=lines, slots=self.slots, next_slot=self.next_slot, zone=self.zone)
+            draw_plush(img, self.cam, plushes)
             with self.lock:
                 self.blocks, self.rejected, self.image, self.raw = blocks, rejected, img, (bgr, depth)
 

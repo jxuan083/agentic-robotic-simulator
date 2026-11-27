@@ -20,6 +20,7 @@ covers several starting states. The language instruction comes from the task car
 
 Target condition (`condition`, constant over the episode, written as observation.environment_state):
   "target"        [target x, y (mm, tray-local, D455 opening frame), sin 4*yaw, cos 4*yaw]   (a cube repeats every 90 deg)
+                  the plush toy: x, y in mount-frame mm and its target's yaw_fold 2 (the tram repeats every 180 deg)
   "target+place"  the above + [place x, y]: the D455 landing seen back at park, else the nominal slot
 Markers (`markers`): a circle at the target's pixel and a square at the landing's pixel, drawn on the global camera
 image of every frame (D455 is fixed, so training and runtime draw the same marks; see draw_markers).
@@ -43,7 +44,7 @@ MARKER = {"color": (0, 255, 0), "outline": (0, 0, 0), "radius": 16, "width": 3} 
 COLORS = {"red": ("red", "紅色"), "blue": ("blue", "藍色"), "yellow": ("yellow", "黃色"),
           "green": ("green", "綠色"), "light_green": ("light green", "淺綠色"),
           "dark_green": ("dark green", "深綠色"), "orange": ("orange", "橘色"), "cyan": ("cyan", "青色"),
-          "purple": ("purple", "紫色")}
+          "purple": ("purple", "紫色"), "plush": ("Shiba plush", "柴犬玩偶")}
 TRAYS = {"pink": ("pink", "粉色"), "beige": ("beige", "米色")}
 
 
@@ -76,10 +77,12 @@ def instruction(card: dict | None, side: str | None = None) -> dict:
     c_en, c_zh = COLORS.get(card["color"], (card["color"], card["color"]))
     if side in SIDES:
         c_en, c_zh = f"{SIDES[side][0]} {c_en}", f"{SIDES[side][1]}{c_zh}"
+    if card["color"] != "plush":       # the plush's name is the whole noun
+        c_en, c_zh = f"{c_en} block", f"{c_zh}方塊"
     if not card.get("destination"):
-        return {"en": f"Pick up the {c_en} block.", "zh": f"夾起{c_zh}方塊"}
+        return {"en": f"Pick up the {c_en}.", "zh": f"夾起{c_zh}"}
     t_en, t_zh = TRAYS.get(card["destination"], (card["destination"], card["destination"]))
-    return {"en": f"Put the {c_en} block in the {t_en} tray.", "zh": f"把{c_zh}方塊放進{t_zh}盤"}
+    return {"en": f"Put the {c_en} in the {t_en} tray.", "zh": f"把{c_zh}放進{t_zh}盤"}
 
 
 def _review(root: Path) -> dict | None:
@@ -126,7 +129,7 @@ def condition(review: dict | None, kind: str) -> list | None:
     target = ((review or {}).get("target") or {}).get("d455")
     if not target:
         raise ValueError("review.json has no target.d455 (D455 did not find the target block)")
-    yaw = math.radians(4 * float(target.get("yaw_deg") or 0.0))
+    yaw = math.radians(int(target.get("yaw_fold") or 4) * float(target.get("yaw_deg") or 0.0))
     out = [float(target["x_mm"]), float(target["y_mm"]), math.sin(yaw), math.cos(yaw)]
     if kind == "target":
         return out

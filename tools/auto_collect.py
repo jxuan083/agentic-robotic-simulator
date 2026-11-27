@@ -145,14 +145,27 @@ def log_failure(session, episode, target, style, held, why, path=None):
                              "why": why, "style": style}, ensure_ascii=False) + "\n")
 
 
-def snapshot(read, cam, quads, frames=6):
-    """Median D455 detection over a few aligned frames (positions; yaw by the 4-fold circular mean)."""
-    from agentic_sim.real_d455 import detect
-    seen = []
+def snapshot(read, cam, quads, frames=6, plushes=None):
+    """Median D455 detection over a few aligned frames (positions; yaw by the 4-fold circular mean). The plush toy
+    is found first and its parts are not blocks (agentic_sim.real_plush); with a list as plushes, the plushes of
+    the last frame are appended to it (positions: median over the frames)."""
+    from agentic_sim.real_plush import scene
+    seen, toys = [], []
     for _ in range(frames + 3):
         bgr, depth = read()
-        seen.append(detect(bgr, depth, cam, quads)[0])
-    seen = seen[3:]
+        blocks, found, _, _ = scene(bgr, depth, cam, quads)
+        seen.append(blocks)
+        toys.append(found)
+    seen, toys = seen[3:], toys[3:]
+    if plushes is not None:
+        for p in toys[-1]:
+            same = [min(t, key=lambda q: math.hypot(q["x"] - p["x"], q["y"] - p["y"])) for t in toys if t]
+            same = [q for q in same if math.hypot(q["x"] - p["x"], q["y"] - p["y"]) < 0.015]
+            m = dict(p)
+            for k in ("x", "y", "z_top"):
+                m[k] = float(np.median([q[k] for q in same]))
+            m["yaw"] = float(np.angle(np.exp(2j * np.array([q["yaw"] for q in same])).mean()) / 2) % math.pi
+            plushes.append(m)
     out = []
     for b in seen[-1]:
         same = [min(s, key=lambda c: math.hypot(c["x"] - b["x"], c["y"] - b["y"])) for s in seen if s]

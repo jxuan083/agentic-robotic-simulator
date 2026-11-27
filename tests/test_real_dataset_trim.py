@@ -46,3 +46,17 @@ def test_same_colour_targets_get_a_side_in_the_instruction():
     assert same_colour_side(review) == "left"
     review["target"]["d455"]["same_colour_in_tray"] = 1
     assert same_colour_side(review) is None and instruction(card)["en"] == "Put the blue block in the beige tray."
+
+
+def test_plush_condition_and_instruction():
+    """11/28: the plush toy's condition folds its yaw by 2 (mount mm), its instruction names the toy."""
+    import math
+
+    from agentic_sim.real_dataset import condition, instruction
+    review = {"target": {"d455": {"object": "plush", "x_mm": 300.0, "y_mm": -100.0, "yaw_deg": 120.0, "yaw_fold": 2}}}
+    c = condition(review, "target")
+    assert c[:2] == [300.0, -100.0]
+    assert math.isclose(c[2], math.sin(math.radians(240))) and math.isclose(c[3], math.cos(math.radians(240)))
+    assert instruction({"color": "plush", "destination": "beige"}) == {
+        "en": "Put the Shiba plush in the beige tray.", "zh": "把柴犬玩偶放進米色盤"}
+    assert instruction({"color": "red", "destination": "beige"})["en"] == "Put the red block in the beige tray."

@@ -179,9 +179,10 @@ def _spread(parts, iters=5):
             break
 
 
-def detect(bgr, depth_m, cam: Camera, quads=None):
+def detect(bgr, depth_m, cam: Camera, quads=None, ignore=None):
     """Blocks in one aligned colour / depth frame (depth_m: metres per colour pixel, 0 = none).
-    Returns (blocks, rejected, info); block x / y / z_top in metres (mount frame), yaw in rad mod 90 deg."""
+    Returns (blocks, rejected, info); block x / y / z_top in metres (mount frame), yaw in rad mod 90 deg.
+    ignore: pixels left out (bool image; the plush toy, agentic_sim.real_plush.scene)."""
     H = cam.height_map(depth_m)
     regions = _regions(bgr.shape[:2], quads)
     trays = np.zeros(bgr.shape[:2], bool)
@@ -191,7 +192,10 @@ def detect(bgr, depth_m, cam: Camera, quads=None):
     table_z = float(np.median(table)) if table.size > 500 else 0.0
     rel = H - table_z
     cand = np.nan_to_num(rel, nan=0.0)
-    cand = ((cand > TOP_MIN) & (cand < TOP_MAX)).astype(np.uint8)
+    cand = (cand > TOP_MIN) & (cand < TOP_MAX)
+    if ignore is not None:
+        cand &= ~ignore
+    cand = cand.astype(np.uint8)
     cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     bgr_f = bgr.astype(np.float32)
@@ -276,7 +280,10 @@ def detect(bgr, depth_m, cam: Camera, quads=None):
                 name, dist = classify(med)
                 add(pu, pv, top, name, dist, med)
     blocks.sort(key=lambda b: (b["tray"] or "~", -b["x"], -b["y"]))
-    over = int(np.count_nonzero(trays & (np.nan_to_num(rel, nan=0.0) > OVER_M)))  # a hand / arm above the trays
+    high = trays & (np.nan_to_num(rel, nan=0.0) > OVER_M)
+    if ignore is not None:
+        high &= ~ignore
+    over = int(np.count_nonzero(high))  # a hand / arm above the trays
     return blocks, rejected, {"table_z_mm": round(table_z * 1000, 1), "over_trays_px": over,
                               "occluded": over > OVER_PX}
 

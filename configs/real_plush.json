@@ -1,0 +1,5 @@
+{
+  "_note": "Finals plush toy (Shiba in an Enoden 305 tram, notes/261128_玩偶規格與決賽用法.md). slot_beige_mm: where the program releases it in the beige tray, tray-local mm like configs/real_slots.json (origin: inner corner nearest the arm base on its right; +x forward, +y left). PROVISIONAL (11/28, from the tray geometry, not tried): in the corner nearest the base on the right, clear of P1-P4 (y >= 117 mm with their 15 mm half edge) and inside the safe grasp zone (mount ~ (215, -197) mm, r ~ 0.29 m). Check on 11/30 with the overlay (P0 drawn) and one programmed place. verify_mm: a plush seen back in the beige tray this close to P0 counts as delivered.",
+  "slot_beige_mm": [55, 58],
+  "verify_mm": 50
+}

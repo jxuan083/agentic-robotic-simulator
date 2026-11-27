@@ -20,6 +20,8 @@
 #     drop-test-beige / drop-test-pink   replay park -> channel -> drop pose -> release -> back (no leader)
 #     grasp        park-start rounds (random target): demo park -> grasp -> lift, c, program places in P1-P4
 #                  (HAND_PLACE=1: demonstrate the placing too), session outputs/<date>-park
+#     plush        plush toy demos (leader): start -> grasp the plush -> lift, c, program places it at beige P0;
+#                  target from the D455 depth; session outputs/<date>-plush (configs/real_plush.json: P0)
 #     auto         scripted rounds: program grasp recorded (start -> lift), program place, automatic tray reset
 #     wristcam     fix the wrist camera's white balance (WB, default 4600 K) and frame rate; once per day
 #     datacheck    every 5 rounds: training selection and desk issues of the newest LAST (20) episodes
@@ -161,6 +163,13 @@ case "$step" in
     PLACE_ARG=(--program-place ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"}); [[ -n "${HAND_PLACE:-}" ]] && PLACE_ARG=()
     "$PY" tools/real_route.py grasp "${MOTION[@]}" --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" \
       --trays "$TRAYS" --session "outputs/$DATE-park" --pick "${PICK:-random}" "${PLACE_ARG[@]}" ;;
+  plush)
+    # The finals plush toy for its own ACT (notes/261128_玩偶規格與決賽用法.md): one demonstration per episode, the
+    # operator re-places the plush (position / heading varied) between episodes; the follower waits at the start pose.
+    need "$ROUTE" "$DROP_BEIGE" "$DROP_PINK" "$TRAYS"
+    "$PY" tools/real_route.py grasp "${MOTION[@]}" --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" \
+      --trays "$TRAYS" --session "outputs/$DATE-plush" --pick manual --object plush \
+      --program-place ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} ;;
   auto)
     # Scripted park rounds: program grasp recorded start -> lift (mode "script"), program place, automatic reset of
     # the pink tray. ROUNDS (default 5), SEED; session outputs/<date>-auto. Torque on: confirm the start like reach.

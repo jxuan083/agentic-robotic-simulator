@@ -253,7 +253,8 @@ def _grasp_session(driver, hand, data, args, refs, hz):
     import random
 
     from agentic_sim.real_grasp import (
-        COLOR_NAME, COLORS, ROUND_SET, TRAY_NAME, finalize, grasp_round, park_all, pick_place_round, random_pick,
+        COLOR_NAME, COLORS, ROUND_SET, TRAY_NAME, finalize, grasp_round, park_all, pick_place_round, plush_target,
+        random_pick,
     )
 
     term = driver.term
@@ -266,8 +267,11 @@ def _grasp_session(driver, hand, data, args, refs, hz):
     episodes = args.session / "episodes"
     episodes.mkdir(parents=True, exist_ok=True)
     index = args.session / "index.jsonl"
-    rounds = args.pick == "random" and not args.auto_place
-    placer, slot_mounts = None, []
+    plush = getattr(args, "object", "block") == "plush"
+    if plush and not getattr(args, "program_place", False):
+        raise ValueError("--object plush needs --program-place (the program places it at P0)")
+    rounds = args.pick == "random" and not args.auto_place and not plush
+    placer, slot_mounts, plush_cam = None, [], None
     if getattr(args, "program_place", False):
         # The demonstration ends at the stable lift; the program places into the same beige slots (P1-P4) as the
         # finals reach tool, at the D455-measured positions of this tray layout.
@@ -278,6 +282,10 @@ def _grasp_session(driver, hand, data, args, refs, hz):
         model = ArmModel.from_file(find_calibration(data["calibrations"]["follower"]["id"]), ROOT)
         placer = Placer(driver, model, make_corr(args.corr), speed=PROGRAM_SPEED)   # route stays at PLAY_SPEED
         slot_mounts = beige_slots(camera_from_pose(args.pose), quads)
+        if plush:
+            from agentic_sim import real_plush
+            plush_cam = camera_from_pose(args.pose)
+            slot_mounts = [real_plush.slot(plush_cam, quads)]
     used = {}
     if index.exists():
         for line in index.read_text(encoding="utf-8").splitlines():
@@ -318,6 +326,12 @@ def _grasp_session(driver, hand, data, args, refs, hz):
                     placed = size
                     continue
             color = None
+        elif plush:
+            key = term.choose(f"第 {number} 筆：柴犬玩偶站著擺在桌上（位置、朝向每筆換；離手臂和托盤邊 3 cm 以上），"
+                              "米盤 P0 清空，手離開後按 a；q 結束", {"a": "錄", "q": "結束"})
+            if key == "q":
+                return
+            color, destination = "plush", "beige"
         else:
             key = term.choose(f"第 {number} 筆：先擺好方塊、手離開盤子與手臂，再選目標顏色 r 紅／b 藍／y 黃；q 結束",
                               {"r": "紅", "b": "藍", "y": "黃", "q": "結束"})
@@ -326,8 +340,11 @@ def _grasp_session(driver, hand, data, args, refs, hz):
             color = COLORS[key]
             destination = args.destination or {"p": "pink", "b": "beige"}[
                 term.choose("放到哪一盤？p 粉盤／b 米盤", {"p": "粉盤", "b": "米盤"})]
-        k = placed if rounds else used.get(destination, 0) % len(slots[destination])
-        slot = {"index": k + 1, "xy": slots[destination][k]}
+        if plush:
+            k, slot = 0, {"index": 0, "xy": real_plush.config()["slot_beige_mm"]}
+        else:
+            k = placed if rounds else used.get(destination, 0) % len(slots[destination])
+            slot = {"index": k + 1, "xy": slots[destination][k]}
         if not args.auto_place:
             term.say(f"放置：{TRAY_NAME[destination]}第 {slot['index']} 個位置，照固定順序接在上一顆旁邊"
                      f"（參考 x {slot['xy'][0]}, y {slot['xy'][1]} mm；落點由 D455 在停放位量）。")
@@ -340,7 +357,7 @@ def _grasp_session(driver, hand, data, args, refs, hz):
                 result = pick_place_round(driver, hand, data, writer, check, color=color, destination=destination,
                                           slot=slot, quads=quads, choose=random_pick(rng, source) if rounds else None,
                                           placer=placer, slot_mount=slot_mounts[k] if placer else None,
-                                          stay=placer is not None)
+                                          stay=placer is not None, plush_cam=plush_cam)
         if result.get("demo_frames") is None:
             if root.exists():
                 set_aside(root, args.session, "cancelled before the demonstration")
@@ -365,7 +382,8 @@ def _grasp_session(driver, hand, data, args, refs, hz):
                                   target_pose=choice and (choice["x_mm"], choice["y_mm"]),
                                   slot=None if args.auto_place else slot, landed=result.get("landed"),
                                   extra=round_info and {"round": round_info, "scene": result["scene"]},
-                                  start="start" if placer else "park")   # program place: hand-over at the start pose
+                                  start="start" if placer else "park",   # program place: hand-over at the start pose
+                                  known_target=plush and choice and plush_target(choice))
         target = review["target"]["d455"]
         line = {"episode": root.name, "color": color, "result": result, "ok": report["ok"],
                 "target": target and {k: target[k] for k in ("tray", "x_mm", "y_mm", "yaw_deg")},
@@ -383,7 +401,7 @@ def _grasp_session(driver, hand, data, args, refs, hz):
         used[destination] = used.get(destination, 0) + 1
         with index.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
-        where = f"{target['tray']} x {target['x_mm']:.0f} y {target['y_mm']:.0f} mm" if target else "D455 未找到目標"
+        where = f"{target['tray'] or '桌面'} x {target['x_mm']:.0f} y {target['y_mm']:.0f} mm" if target else "D455 未找到目標"
         term.say(f"{root.name}：讀回 {'OK' if report['ok'] else '有問題'}，{report.get('observed_control_hz')} Hz，"
                  f"目標 {where}，訓練段 {review.get('training_ranges')}"
                  + ("" if not report["review_reasons"] else f"；待確認：{'；'.join(report['review_reasons'])}"))
@@ -515,6 +533,10 @@ def main(argv=None):
             p.add_argument("--pose", type=Path, default=ROOT / "outputs/d455/pose_261125.json",
                            help="D455 pose (mount_from_color) for the slot positions of --program-place")
             p.add_argument("--corr", default="21,-1.3,20", help="--program-place sag correction (as finals_reach)")
+            p.add_argument("--object", choices=("block", "plush"), default="block",
+                           help="plush: the finals plush toy (agentic_sim.real_plush): one per episode, target from "
+                                "the D455 depth, placed at its beige slot P0 (configs/real_plush.json); needs "
+                                "--program-place")
         if name == "record-drop":
             p.add_argument("--tray", required=True, choices=("pink", "beige"))
             p.add_argument("--out", type=Path, required=True, help="drop route JSON to write")
