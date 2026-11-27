@@ -3,10 +3,13 @@
 
   python3 tools/check_park_session.py outputs/261126-park [--last 20]
 
-Runs the converter's own selection (agentic_sim.real_dataset.plan_episode, segment task, condition target+place) on
-the newest episodes and prints, per episode, whether training would take it and why not, plus what to fix at the
-desk: D455 target / landing found, crowded placement, wrist_roll travel (the wrist must not turn), demonstration
-length and late camera rows. Exit 1 when more than --max-skip of the checked episodes would be excluded for a
+Runs the converter's own selection (agentic_sim.real_dataset.plan_episode) on the newest episodes for both datasets
+- ACT: segment grasp (start .. lift, the operator's rows), condition target;
+- VLA: segment task (start .. rise over the slot, programmed place included), no condition -
+and prints, per episode, whether each would take it and why not, plus what to fix at the desk: D455 target / landing
+found, crowded placement, wrist_roll travel in the grasp segment (the wrist may turn up to ~30 deg; the programmed
+place turns it to the tray, not counted), demonstration length and late camera rows. The share of exclusions counts
+the ACT dataset. Exit 1 when more than --max-skip of the checked episodes would be excluded for a
 data problem (episodes the operator marked failed are excluded from training but not counted here).
 """
 
@@ -30,14 +33,15 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("session")
     ap.add_argument("--last", type=int, default=20, help="newest episodes to check (0 = all)")
-    ap.add_argument("--condition", default="target+place", help="condition the training will use")
+    ap.add_argument("--condition", default="target", help="ACT condition the training will use")
     ap.add_argument("--max-skip", type=float, default=0.2, help="excluded share that fails the check")
     a = ap.parse_args(argv)
     episodes = find_episodes([a.session])
     episodes = episodes[-a.last:] if a.last else episodes
     lines, skipped, success, rounds = [], 0, 0, set()
     for ep in episodes:
-        plan = plan_episode(ep, condition_kind=a.condition)
+        plan = plan_episode(ep, segment="grasp", condition_kind=a.condition)
+        vla = plan_episode(ep, segment="task", condition_kind="none")
         review = json.loads((ep / "review.json").read_text()) if (ep / "review.json").exists() else {}
         result = json.loads((ep / "manifest.json").read_text()).get("operator_result") or {}
         success += bool(result.get("success"))
@@ -56,7 +60,7 @@ def main(argv=None) -> int:
             rolls = [s["state"][4] for s in plan["segments"][0]["samples"]]
             travel = max(rolls) - min(rolls)
             if travel > WRIST_TURN_DEG:
-                notes.append(f"wrist_roll 轉了 {travel:.0f}°")
+                notes.append(f"夾取段 wrist_roll 轉了 {travel:.0f}°")
             late = sum(plan["stats"].get("late_camera_rows", {}).values())
             if late:
                 notes.append(f"相機延遲 {late} 列")
@@ -64,14 +68,19 @@ def main(argv=None) -> int:
         else:
             skipped += "failed" not in plan["reason"]   # a failed demonstration is not a data problem
             length = "-"
-        status = "ok  " if plan["included"] else "skip"
+        act = "ok  " if plan["included"] else "skip"
+        v = "ok  " if vla["included"] else "skip"
         where = f"R{rnd.get('n', '?')}-{rnd.get('step', '?')}" if rnd else "    "
-        lines.append(f"{status} {ep.name} {where} {result.get('success') and '成功' or '失敗'} {length:>6}  "
-                     + ("" if plan["included"] else plan["reason"] + "  ") + "；".join(notes))
+        why = [] if plan["included"] else [f"ACT: {plan['reason']}"]
+        if not vla["included"] and vla["reason"] != plan["reason"]:
+            why.append(f"VLA: {vla['reason']}")
+        lines.append(f"ACT {act} VLA {v} {ep.name} {where} {result.get('success') and '成功' or '失敗'} {length:>6}  "
+                     + "".join(w + "  " for w in why) + "；".join(notes))
     print("\n".join(lines))
     n = len(episodes)
     share = skipped / n if n else 0.0
-    print(f"\n{n} 筆（輪次 {sorted(rounds)}）：成功 {success}，資料問題排除 {skipped}（{share:.0%}）")
+    print(f"\n{n} 筆（輪次 {sorted(rounds)}）：成功 {success}，ACT 資料問題排除 {skipped}（{share:.0%}）；"
+          f"夾取段長度是 ACT 段（起姿 → 抬起）")
     if share > a.max_skip:
         print(f"排除超過 {a.max_skip:.0%}：先看上面的原因再繼續收")
         return 1
