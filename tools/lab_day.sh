@@ -31,6 +31,9 @@
 #     recover      follower left holding with torque on: follow the route home and release
 #     d455         finals: live D455 blocks (colour, mount-frame mm, yaw, wrist turn); s saves, q quits
 #     reach        finals: d455 + arm over a chosen block (park -> start -> hover, nudge, k logs the aim)
+#     task-server  the real arm behind the chat (tools/real_task_server.py; this terminal is the operator console);
+#                  FAKE_TABLE=blue,blue,red,yellow for a simulated table, STANDBY_AFTER=2 for the finals shortage step
+#     chat-web     chat page on the real arm (needs the model service; LLM_URL=http://<host>:8000/v1 for another machine)
 #     d455-restore re-mounted D455: live height / tilt vs the target pose from the table plane, reference edges for
 #                  the in-plane position (--once: report only); then d455-capture / d455-fit
 #     d455-capture finals: torque off, follower moved by hand to ~8 poses -> D455 depth + readings (camera pose)
@@ -228,6 +231,17 @@ PYEOF
     TRAY_ARG=(); [[ -e "$TRAYS" ]] && TRAY_ARG=(--trays "$TRAYS")
     "$PY" tools/finals_reach.py reach --serial "$D455" --route "$ROUTE" --config "$CONFIG" "${TRAY_ARG[@]}" \
         ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} ${SPEED:+--speed "$SPEED"} "$@" ;;
+  task-server)
+    if [[ -n "${FAKE_TABLE:-}" ]]; then
+      "$PY" tools/real_task_server.py --fake "$FAKE_TABLE" ${STANDBY_AFTER:+--standby-after "$STANDBY_AFTER"} "$@"
+    else
+      need "$ROUTE" "$TRAYS"
+      "$PY" tools/real_task_server.py --config "$CONFIG" --route "$ROUTE" --trays "$TRAYS" --serial "$D455" \
+          ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} ${STANDBY_AFTER:+--standby-after "$STANDBY_AFTER"} "$@"
+    fi ;;
+  chat-web)
+    # Chat page (progress, quick replies, pause / resume, push-to-talk) on --backend real; open http://127.0.0.1:8765
+    uv run tools/chat_web.py --backend real ${LLM_URL:+--base-url "$LLM_URL"} "$@" ;;
   d455-restore)
     # Target = the fitted pose (POSE=..., else 11/25); TARGET=outputs/d455/restore-target-*.json for a pose saved with t.
     "$CAMPY" tools/d455_restore.py --serial "$D455" --target "${TARGET:-${POSE:-outputs/d455/pose_261125.json}}" \

@@ -339,7 +339,7 @@ def start(a, cfg: dict, app_ref: dict, stop: threading.Event):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--backend", choices=["isaac", "mujoco"], required=True)
+    ap.add_argument("--backend", choices=["isaac", "mujoco", "real"], required=True)
     ap.add_argument("--config", default="configs/chat.yaml")
     ap.add_argument("--load", action="store_true", help="(re)load the experiment first (fresh scene, no task)")
     ap.add_argument("--experiment", default="lab_20261120")
