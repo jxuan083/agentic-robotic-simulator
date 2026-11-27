@@ -476,9 +476,9 @@ def run(args):
                 """The scripted grasp missed: the operator demonstrates the same block with the leader (episode
                 H<nnnn>, mode demonstration: start pose -> grasp -> lift, c, the program places into P<k+1>), as in
                 the park rounds. Returns 1 when that slot got its block."""
-                from agentic_sim.real_grasp import pick_place_round
-                park_and_release(driver, Track([dict(driver.target), park], [0.0]), park, support)
-                where["at"] = "released"
+                from agentic_sim.real_grasp import park_leader_home, pick_place_round
+                to_start()                              # the follower waits at the start pose for the hand-over
+                driver.at_start = True
                 number = 1 + len(list((session / "episodes").glob("H*")))
                 hroot = session / "episodes" / f"H{number:04}"
 
@@ -495,7 +495,7 @@ def run(args):
                                      tool="tools/auto_collect.py takeover", start_pose="start") as (writer, check):
                     result = pick_place_round(driver, hand, data, writer, check, color=target["color"],
                                               destination="beige", slot=slot, quads=quads, choose=choose,
-                                              placer=placer, slot_mount=slots[k])
+                                              placer=placer, slot_mount=slots[k], stay=True)
                 ok = False
                 if result.get("demo_frames") is None:
                     if hroot.exists():
@@ -520,8 +520,15 @@ def run(args):
                     else:
                         set_aside(hroot, session, "takeover failed", hline)
                         term.say("手動示範沒成功：方塊放回粉盤後繼續。")
-                driver.arm_at(park)                      # torque on again for the scripted rounds
-                where["at"] = "park"
+                if driver.at_start:
+                    # the place went well: the follower stays at the start pose and the scripted rounds go on from
+                    # there; the leader is not needed until the next miss, so it goes home to its fold (torque off)
+                    park_leader_home(driver, hand, data)
+                    where["at"] = "start"
+                else:
+                    # cancelled or trouble: pick_place_round parked and released the follower; arm it again
+                    driver.arm_at(park)
+                    where["at"] = "park"
                 return int(ok)
 
             def reset(beige_blocks, occupied=()):
