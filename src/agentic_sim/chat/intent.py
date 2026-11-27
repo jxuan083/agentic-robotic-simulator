@@ -233,7 +233,7 @@ def plan(intent: dict, st: dict, words, max_count: int, text: str = "") -> Actio
             confirm = f"好的，{'、'.join(parts)}，其他顏色不變。"
         missing = [c for c, n in items.items() if n > 0 and c not in scene]
         if missing:
-            confirm += f"（場景中沒有{'、'.join(words.color(c) for c in missing)}積木，系統會回報缺料。）"
+            confirm += f"（場景中沒有{'、'.join(words.item(c) for c in missing)}，系統會回報缺料。）"
         return Action("send", confirm, "task_order", {"counts": items, "mode": mode}, k)
     if k == "order_pick":
         return plan_pick(intent, st, words, max_count, target, scene)
@@ -252,7 +252,7 @@ def plan(intent: dict, st: dict, words, max_count: int, text: str = "") -> Actio
             if not c:
                 return Action("say", "要換成哪個顏色？", intent=k, reply="ask", followup="color")
             if c not in scene:
-                return rej(f"場景中沒有{words.color(c)}積木，請換別的顏色。")
+                return rej(f"場景中沒有{words.item(c)}，請換別的顏色。")
             args["color"] = c
         if choice == "place_at":
             xy = intent.get("xy")
@@ -283,11 +283,11 @@ def plan_pick(intent: dict, st: dict, words, max_count: int, target: dict, scene
     c = next(iter(items))
     name, where = words.color(c), REF_ZH[ref]
     if c not in scene:
-        return Action("say", f"場景裡沒有{name}積木。", intent=k, reply="reject")
+        return Action("say", f"場景裡沒有{words.item(c)}。", intent=k, reply="reject")
     if "storage_blocks" in st:
         blocks = [b for b in st["storage_blocks"] if b["color"] == c]
         if not blocks:
-            return Action("say", f"備料盤裡已經沒有{name}積木了。", intent=k, reply="reject")
+            return Action("say", f"備料盤裡已經沒有{words.item(c)}了。", intent=k, reply="reject")
         best, tie = resolve(blocks, ref, st.get("pick_frame"), st.get("pan_xy") or (0.0, 0.0))
         if tie:
             return Action("say", f"有不只一顆{name}在{where}附近，說清楚一點好嗎？例如「最左邊那顆{name}」。",

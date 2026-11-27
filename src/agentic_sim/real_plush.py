@@ -24,10 +24,7 @@ import numpy as np
 
 CONFIG = Path(__file__).resolve().parents[2] / "configs/real_plush.json"
 
-NAME = "plush"
-NAME_ZH = "柴犬玩偶"
-LENGTH_M, WIDTH_M, BODY_M, HEIGHT_M = 0.090, 0.060, 0.050, 0.100   # tram length / width / height; total height
-MASS_G = 28.6                                                        # without the ball chain and tag (11/28)
+from agentic_sim.plush import BODY_HEIGHT as BODY_M, ID as NAME, NAME_ZH  # noqa: E402,F401  (sizes: one place)
 GRID_M = 0.004
 MIN_Z = 0.040                  # above a block on a tray floor (~35 mm) and the tray rims (~23 mm)
 TOP_M = (0.050, 0.135)         # its highest point: 50 lying on its side, ~100 upright; the arm and hands are taller

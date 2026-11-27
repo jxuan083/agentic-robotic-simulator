@@ -499,7 +499,9 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         driver.term.say(f"D455 開場畫面沒找到{color}方塊；仍可錄，讀回時再確認。")
     noun = "柴犬玩偶" if plush else f"{color}方塊"
     if placer is not None:
-        driver.demo_prompt = (f"錄製中：從起姿 → 夾起{noun} → 抬起約 5 cm 停穩，按 c（不用放）。"
+        driver.demo_prompt = (("夾法：夾爪張大（頭寬約 5 cm），從正上方下來夾柴犬頭的左右兩側；每筆都用這個夾法"
+                               "（模擬：夾車身會往下滑）。" if plush else "") +
+                              f"錄製中：從起姿 → 夾起{noun} → 抬起約 5 cm 停穩，按 c（不用放）。"
                               f"按 c 後 leader 會上扭力定住，手放開；程式把{noun}放進{TRAY_NAME[destination]} P{slot['index']}，"
                               "follower 回停放位後 leader 自動收回。Esc 暫停；腕部只在 ±30° 內對齊方塊。")
     else:

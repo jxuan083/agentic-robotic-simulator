@@ -5,6 +5,9 @@ positions, so each scan is matched to the known blocks: same colour within MATCH
 the program moved (place) is moved here first; an unmatched detection takes a same-colour ID that is no longer seen
 (a block restocked at a new spot) or a new ID. Blocks not seen in a scan keep their last position but belong to no
 tray (taken away, or hidden).
+
+The plush toy (colour "plush", agentic_sim.real_plush) stands on the table outside the trays: there it counts as in
+storage (available to order); in the beige tray it is placed like a block.
 """
 
 from __future__ import annotations
@@ -16,6 +19,13 @@ import numpy as np
 MATCH_M = 0.04
 EDGE_M = 0.0295
 TRAYS = {"pink": "storage", "beige": "placement"}
+PLUSH = "plush"
+
+
+def tray_of(d: dict) -> str | None:
+    if d.get("color") == PLUSH and d.get("tray") is None:
+        return "storage"          # on the table, where it is put out to be ordered
+    return TRAYS.get(d.get("tray"))
 
 
 class Tracker:
@@ -36,18 +46,18 @@ class Tracker:
         self.colors.append(d["color"])
         self.pos.append(self._centre(d))
         self.yaw.append(float(d.get("yaw", 0.0)))
-        self.tray.append(TRAYS.get(d.get("tray")))
+        self.tray.append(tray_of(d))
         return len(self.colors) - 1
 
     def _set(self, b: int, d: dict):
         self.pos[b] = self._centre(d)
         self.yaw[b] = float(d.get("yaw", 0.0))
-        self.tray[b] = TRAYS.get(d.get("tray"))
+        self.tray[b] = tray_of(d)
 
     def update(self, detections: list, exclude=()) -> list:
         """Match one scan (dicts with color, tray, x, y, z_top, yaw; mount m). exclude: IDs not on the table (held).
-        Returns [(id, detection)]; detections outside both trays are ignored."""
-        dets = [d for d in detections if d.get("tray") in TRAYS]
+        Returns [(id, detection)]; detections outside both trays (except the plush) are ignored."""
+        dets = [d for d in detections if tray_of(d) is not None]
         pairs = sorted((math.hypot(d["x"] - self.pos[b][0], d["y"] - self.pos[b][1]), i, b)
                        for i, d in enumerate(dets) for b in range(len(self))
                        if b not in exclude and self.colors[b] == d["color"])

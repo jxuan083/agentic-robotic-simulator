@@ -273,10 +273,13 @@ def main(argv=None) -> int:
     if args.fake:
         from agentic_sim.real_task.arm import FakeArm
         rng = np.random.default_rng(0)
-        colors = args.fake.split(",")
+        from agentic_sim.real_task.arm import FAKE_PLUSH_AT
+        colors = [c for c in args.fake.split(",") if c != "plush"]
         xs = [(0.20 + 0.05 * (i % 3), 0.10 + 0.05 * (i // 3)) for i in range(len(colors))]
-        arm = FakeArm([{"color": c, "x": x, "y": y, "yaw": float(rng.uniform(0, 1.5))} for c, (x, y) in zip(colors, xs)],
-                      seconds=1.0)
+        items = [{"color": c, "x": x, "y": y, "yaw": float(rng.uniform(0, 1.5))} for c, (x, y) in zip(colors, xs)]
+        if "plush" in args.fake.split(","):          # FAKE_TABLE=red,red,blue,yellow,plush: the toy on the table
+            items.append({"color": "plush", "x": FAKE_PLUSH_AT[0], "y": FAKE_PLUSH_AT[1], "yaw": 0.4})
+        arm = FakeArm(items, seconds=1.0)
         session = RealSession(arm, event_log=args.events, standby_after=args.standby_after)
         serve(session, RealHandler(session, fake=True), port)
         return 0

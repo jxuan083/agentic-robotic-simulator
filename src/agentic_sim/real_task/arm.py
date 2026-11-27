@@ -6,7 +6,9 @@ Arm (duck-typed; agentic_sim.real_task.real_arm.RealArm on the follower):
   pick(block, phase)           -> (held: bool, info): park -> start -> grasp -> lift; a miss ends back at park
   place(xy, phase)             -> error str or None: holding -> slot -> open -> rise -> start -> park
   home(open_gripper=True)      -> to park (gripper opened when the hand is empty)
-  at_park() / ee() / gripper_open() / reachable(xy) / home_xyz / pan_xy / slots
+  at_park() / ee() / gripper_open() / reachable(xy) / home_xyz / pan_xy / slots / plush_slot
+The plush toy is a block of colour "plush" on the table (scan: tray None): pick takes it with its ACT policy, place
+puts it at plush_slot (beige P0).
   pause() / resume()           operator pause from the chat page (the arm holds)
 phase(name) reports progress inside a routine.
 """
@@ -24,6 +26,8 @@ EDGE_M = 0.0295
 FAKE_PINK = ((0.15, 0.06), (0.45, 0.27))
 FAKE_BEIGE = ((0.14, -0.27), (0.48, -0.01))
 FAKE_SLOTS = [(0.210, -0.065), (0.210, -0.120), (0.265, -0.065), (0.265, -0.120)]
+FAKE_PLUSH_SLOT = (0.215, -0.197)
+FAKE_PLUSH_AT = (0.09, 0.20)     # on the table beside the pink tray
 FAKE_HOME = (0.08, 0.0, 0.20)
 REACH_M = 0.32
 
@@ -41,6 +45,7 @@ class FakeArm:
         self.seconds = seconds
         self.misses = list(misses)
         self.slots = [tuple(s) for s in slots]
+        self.plush_slot = FAKE_PLUSH_SLOT
         self.home_xyz = np.array(FAKE_HOME, float)
         self.pan_xy = (0.0, 0.0)
         self.held = None
@@ -93,7 +98,8 @@ class FakeArm:
     def pick(self, block, phase=None):
         self._move("start", phase, "approach")
         with self._lock:
-            near = [b for b in self.blocks if b["color"] == block["color"] and self._tray(b) == "pink"
+            near = [b for b in self.blocks if b["color"] == block["color"]
+                    and (self._tray(b) == "pink" or b["color"] == "plush" and self._tray(b) is None)
                     and math.hypot(b["x"] - block["x"], b["y"] - block["y"]) < 0.02]
         self._move("grasp", phase, "descend")
         self.gripper = "closed"

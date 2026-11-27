@@ -132,8 +132,9 @@ class RealObserve(RealSkill):
 
 
 class RealPick(RealSkill):
-    """Park -> start pose -> program grasp of the block -> lifted, holding. A miss opens, goes back to park and
-    fails ("missed"); the executor retries (task.yaml retry.pick_attempts) or skips the block."""
+    """Park -> start pose -> grasp -> lifted, holding: blocks by the program grasp, the plush toy by its ACT policy
+    (params method "program" / "act", set by the executor). A miss opens, goes back to park and fails ("missed");
+    the executor retries (task.yaml retry.pick_attempts) or skips the block."""
     name = "pick"
 
     def run(self):
@@ -164,6 +165,7 @@ class RealPlace(RealSkill):
     (a block of that colour in the placement tray near the slot). Not cancellable once started."""
     name = "place"
     VERIFY_M = 0.04
+    PLUSH_VERIFY_M = 0.05       # configs/real_plush.json verify_mm
 
     def run(self):
         xy = self.params["xy"]
@@ -182,8 +184,9 @@ class RealPlace(RealSkill):
             self.holding = b                    # nothing moved: still holding (the arm raises at its lift)
             return self._finish("failed", value["error"])
         xy = self.params["xy"]
+        limit = self.PLUSH_VERIFY_M if self.tracker.colors[b] == "plush" else self.VERIFY_M
         near = [d for d in value["blocks"] if d.get("tray") == "beige" and d["color"] == self.tracker.colors[b]
-                and ((d["x"] - xy[0]) ** 2 + (d["y"] - xy[1]) ** 2) ** .5 < self.VERIFY_M]
+                and ((d["x"] - xy[0]) ** 2 + (d["y"] - xy[1]) ** 2) ** .5 < limit]
         self.holding = None
         if near:
             d = min(near, key=lambda d: (d["x"] - xy[0]) ** 2 + (d["y"] - xy[1]) ** 2)

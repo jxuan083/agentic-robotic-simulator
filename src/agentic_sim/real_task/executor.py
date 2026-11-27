@@ -5,7 +5,8 @@ only what touches the world is replaced:
   _in()        tray membership from the last D455 scan (Tracker), not from simulator positions
   associate()  D455 items already carry their tracker ID
   reachable()  the arm's safe grasp zone + IK (RealArm) instead of the simulator's EE controller
-  slots        the beige slots P1-P4 of the rig (configs/real_slots.json via the D455 pose)
+  slots        the beige slots P1-P4 of the rig (configs/real_slots.json via the D455 pose); the plush toy has its
+               own slot P0 (configs/real_plush.json) and is picked by its ACT policy (pick param method "act")
 
 Always the finals settings: snapshot observations (choices only from the last look, taken at park), shortage
 options substitute / wait, no_return (nothing is taken back; a held block the order no longer needs is delivered or
@@ -23,7 +24,7 @@ from agentic_sim.config import load
 from agentic_sim.task.executor import TaskExecutor
 from agentic_sim.task.skills import Obs, World
 from agentic_sim.real_task.skills import SKILLS
-from agentic_sim.real_task.tracker import EDGE_M
+from agentic_sim.real_task.tracker import EDGE_M, PLUSH
 
 AWAY = np.array([9.0, 9.0, 0.0])   # obs position of a block that is in no tray (taken away / not seen)
 
@@ -90,7 +91,15 @@ class RealTaskExecutor(TaskExecutor):
         return super()._look(reason)
 
     def _start(self, cls, **params):
+        if cls.name == "pick" and "block" in params:     # shown in the chat's progress line
+            params["method"] = "act" if self.tracker.colors[params["block"]] == PLUSH else "program"
         return super()._start(SKILLS.get(cls.name, cls), **params)
+
+    def free_slot(self, b: int):
+        if self.tracker.colors[b] == PLUSH:
+            xy = getattr(self.arm, "plush_slot", None)
+            return list(map(float, xy)) if xy is not None and self._free(xy, ignore=b, radius=0.06) else None
+        return super().free_slot(b)
 
     def _in(self, b: int, tray: str) -> bool:
         return b < len(self.tracker) and self.tracker.tray[b] == tray
@@ -106,6 +115,10 @@ class RealTaskExecutor(TaskExecutor):
         return blocks, poses, []
 
     def reachable(self, xy) -> bool:
+        tr = self.tracker
+        if any(c == PLUSH and abs(tr.pos[b][0] - xy[0]) < 1e-3 and abs(tr.pos[b][1] - xy[1]) < 1e-3
+               for b, c in enumerate(tr.colors)):
+            return True            # the plush ACT was shown where the plush is put out (no program-grasp zone)
         key = (round(float(xy[0]), 3), round(float(xy[1]), 3))
         if key not in self._reach_cache:
             self._reach_cache[key] = bool(self.arm.reachable(key))

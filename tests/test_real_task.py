@@ -103,3 +103,26 @@ def test_finals_standby_waits_for_the_operator_before_looking_again():
     assert run_until(s, lambda: ex.question is not None)
     assert ex.question["kind"] == "shortage" and ex.question["missing"] == {"blue": 1}
     assert "waiting_operator" in kinds(s) and "standby_reached" in kinds(s)
+
+
+def test_plush_order_goes_to_the_act_pick_and_its_own_slot():
+    """11/28: the plush on the table is in storage, is ordered like a colour, picked with method "act" and placed
+    at P0; blocks of the same order still go by the program into P1-P4."""
+    from agentic_sim.chat.zh import Words
+    from agentic_sim.config import load
+    from agentic_sim.real_task.arm import FAKE_PLUSH_AT, FAKE_PLUSH_SLOT
+
+    arm = FakeArm(FINALS + [{"color": "plush", "x": FAKE_PLUSH_AT[0], "y": FAKE_PLUSH_AT[1], "yaw": 0.4}],
+                  seconds=0.01)
+    s = RealSession(arm, log=lambda *a: None)
+    h = RealHandler(s, fake=True)
+    assert h.cmd_task_state()["storage"]["plush"] == 1
+    h.cmd_task_order(counts={"plush": 1, "red": 1}, mode="total")
+    assert run_until(s, lambda: s.task.ex.state == "done")
+    starts = [e for e in s.task.ex.events if e["kind"] == "skill_start" and e["skill"] == "pick"]
+    assert {e["color"]: e["method"] for e in starts} == {"plush": "act", "red": "program"}
+    places = {e["color"]: e["xy"] for e in s.task.ex.events if e["kind"] == "skill_start" and e["skill"] == "place"}
+    assert places["plush"] == list(FAKE_PLUSH_SLOT) and places["red"] == list(arm.slots[0])
+    words = Words(load(ROOT / "configs/chat.yaml")["colors"])
+    line = words.progress(next(e for e in starts if e["color"] == "plush"))
+    assert line.startswith("正在用 ACT 模型夾取") and "柴犬玩偶" in line and "積木" not in line
