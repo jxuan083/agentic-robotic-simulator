@@ -9,10 +9,13 @@ Per episode (the follower parks in between, like the human rounds):
   1. D455 at park (aligned depth, agentic_sim.real_d455.detect, median of 6 frames): blocks in the pink tray inside the
      safe grasp zone; one picked at random.
   2. The episode recording opens; the fixed route takes the follower to the start pose (not recorded, as for people).
-  3. Recorded, command_source "script": start pose -> over the block (half of the episodes first over a point
-     offset by up to 10 mm / 10 deg, then corrected: recovery data) -> grasp height -> close (until the gripper stops)
-     -> lift 5 cm and hold 0.5 s (the grasp segment ACT learns) -> carry into the next beige slot (P1-P4), release,
-     rise over the slot (the place segment; VLA learns the whole episode).
+  3. Recorded, command_source "script", shaped like the operator's grasps (11/27, 12 demonstrations): one smooth
+     motion (minimum jerk, no stop over the block) from the start pose through a point 2-4 cm back towards the start
+     and 5.5-9 cm up, down to the grasp; the grasp point off the block centre by N(0, 5 mm) and the fingers off the
+     block faces by N(0, 10 deg) (closing squares the block, as the operator's grasps do); gripper opened to 26-32 %
+     on the way and closed to the operator's 13.5 %; 2.0-3.4 s start -> close, peak joint speed <= 85 deg/s; lift
+     5.5-8.5 cm, hold (the grasp segment ACT learns) -> carry into the next beige slot (P1-P4), release, rise over
+     the slot at 75 deg/s (the place segment; VLA learns the whole episode). The sampled style is in review.json.
   4. Not recorded: straight up, start pose, park.
   5. review.json as for the human rounds (start "start", D455 target from the opening frame, training range up to the
      lift); success = the gripper held after the lift and the D455 sees the block in the beige tray at park.
@@ -42,14 +45,67 @@ from agentic_sim.real_place import (  # noqa: E402
     hold_while, make_corr,
 )
 
-LIFT_M = 0.05            # recorded lift above the grasp height (the human prompt: about 5 cm)
-LIFT_HOLD_S = 0.5        # still at the lift before the recording stops (the review's lift frame)
-PERTURB_P = 0.5          # share of episodes approaching an offset point first
-PERTURB_MM, PERTURB_DEG = 10.0, 10.0
+LIFT_M = 0.05            # lift of the unrecorded reset grasps
+LIFT_HOLD_S = 0.5
 RESET_MARGIN_M = 0.040   # reset positions this far inside the pink rim (wall + half a block + clearance)
 RESET_GAP_M = 0.050      # centre distance between reset blocks (room for the open fingers)
-RECORD_SPEED = 45.0      # deg/s while recording (the collection playback cap; close to the human pace)
-MOVE_SPEED = 75.0        # deg/s for the unrecorded moves
+MOVE_SPEED = 75.0        # deg/s for the unrecorded IK moves (reset) and the programmed place
+
+# Recorded grasps shaped like the operator's (11/27 P0001-P0014 without P0006, 12 grasps; FK of the commands minus the
+# sag correction against the D455 target): grasp point off the centre radial 1 +- 5 mm, tangential -1 +- 4 mm (all
+# within 10 mm); fingers off the block faces sd 10 deg (max 26 deg, all held: closing squares the block); gripper
+# opened to 26 % and closed to a 13.3-14.7 % command (held reading 16.7-17.7 %); start -> close 2.0-4.3 s, close ->
+# lift 1.2-2.2 s; fastest joint peak 52-85 deg/s; 3 cm short of the block the hand is still ~8.5 cm above its centre;
+# lift 6-8.6 cm.
+STYLE_OFFSET_SD_MM, STYLE_OFFSET_MAX_MM = 5.0, 10.0
+STYLE_YAW_SD_DEG, STYLE_YAW_MAX_DEG = 10.0, 20.0
+STYLE_OPEN_PCT = (26.0, 32.0)
+STYLE_CLOSE_PCT = 13.5        # command, like the operator; an empty grasp reads ~13.5, a held block 16.7-17.7
+STYLE_HELD_PCT = 15.2         # gripper reading above this after the lift: a block is held
+STYLE_GRASP_Z_MM = 3.0        # +- jitter of the grasp height
+STYLE_PRE_BACK_MM = (20.0, 40.0)   # approach point: back towards the start pose ...
+STYLE_PRE_UP_MM = (55.0, 90.0)     # ... and this far above the grasp point
+STYLE_APPROACH_S = (2.0, 3.4)
+STYLE_PEAK_DEG_S = 85.0
+STYLE_CLOSE_S = (0.35, 0.6)
+STYLE_LIFT_MM = (55.0, 85.0)
+STYLE_LIFT_S = (0.8, 1.3)
+STYLE_HOLD_S = (0.3, 0.6)
+STYLE_STEP_S = 1 / 15         # min-jerk samples (the driver interpolates at the control rate)
+
+
+def low_z(placer, reading):
+    """Grasp-centre height (sag-corrected) of a joint reading, m."""
+    p = placer.model.ee(reading)
+    return float((p - placer.corr_at(p))[2])
+
+
+def min_jerk(t):
+    return t ** 3 * (10 - 15 * t + 6 * t ** 2)
+
+
+def timed_path(points, seconds, step=STYLE_STEP_S):
+    """Points along a piecewise-linear joint path (body joints + gripper) on a minimum-jerk clock over `seconds`:
+    (points, segment seconds) for agentic_sim.real_route.Track; one smooth motion, no stop at the inner points."""
+    keys = list(points[0])
+    P = np.array([[p[k] for k in keys] for p in points], float)
+    seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(seg)])
+    n = max(2, int(math.ceil(seconds / step)))
+    out = []
+    for k in range(1, n + 1):
+        a = min_jerk(k / n) * arc[-1]
+        i = min(int(np.searchsorted(arc, a, side="right")) - 1, len(seg) - 1)
+        f = 0.0 if seg[i] < 1e-9 else (a - arc[i]) / seg[i]
+        out.append({key: float(v) for key, v in zip(keys, P[i] + (P[i + 1] - P[i]) * f)})
+    return out, [seconds / n] * n
+
+
+def peak_seconds(points, peak=STYLE_PEAK_DEG_S):
+    """Shortest minimum-jerk duration keeping every joint under `peak` deg/s (peak speed = 1.875 x mean)."""
+    body = [k for k in points[0] if k != "gripper"]
+    travel = max(sum(abs(b[k] - a[k]) for a, b in zip(points, points[1:])) for k in body)
+    return 1.875 * travel / peak
 
 
 def snapshot(read, cam, quads, frames=6):
@@ -151,6 +207,92 @@ class Episodes:
         held = self.hold(LIFT_HOLD_S)
         return held, None
 
+    def style(self):
+        """Random operator-like grasp parameters (constants STYLE_*), stored in review.json."""
+        r = self.rng
+        clip = lambda v, m: float(np.clip(v, -m, m))  # noqa: E731
+        u = lambda lo_hi: float(r.uniform(*lo_hi))  # noqa: E731
+        return {"offset_mm": [clip(r.normal(0, STYLE_OFFSET_SD_MM), STYLE_OFFSET_MAX_MM),
+                              clip(r.normal(0, STYLE_OFFSET_SD_MM), STYLE_OFFSET_MAX_MM)],   # radial, tangential
+                "yaw_err_deg": clip(r.normal(0, STYLE_YAW_SD_DEG), STYLE_YAW_MAX_DEG),
+                "z_mm": float(r.uniform(-STYLE_GRASP_Z_MM, STYLE_GRASP_Z_MM)),
+                "open_pct": u(STYLE_OPEN_PCT), "pre_back_mm": u(STYLE_PRE_BACK_MM), "pre_up_mm": u(STYLE_PRE_UP_MM),
+                "approach_s": u(STYLE_APPROACH_S), "close_s": u(STYLE_CLOSE_S), "lift_mm": u(STYLE_LIFT_MM),
+                "lift_s": u(STYLE_LIFT_S), "hold_s": u(STYLE_HOLD_S)}
+
+    def _glide(self, points, seconds, label):
+        """One smooth timed motion through points (no settle at the end); the driver's lag allowance as in
+        Placer.move, the speed cap high enough that the minimum-jerk clock sets the pace."""
+        from agentic_sim.real_route import LAG_PER_SPEED, Track, follow
+        d = self.driver
+        pts, secs = timed_path([dict(d.target), *points], seconds)
+        saved = d.play_speed, d.lag_per_speed
+        d.play_speed, d.lag_per_speed = 1.5 * STYLE_PEAK_DEG_S, LAG_PER_SPEED
+        try:
+            follow(d, Track([dict(d.target), *pts], secs), label, settle=False)
+        finally:
+            d.play_speed, d.lag_per_speed = saved
+
+    def _grip_still(self, min_s=0.2, still_s=0.2, max_s=1.5):
+        """Hold until the gripper reading stops (closed on the block, or at the command when empty)."""
+        d = self.driver
+        began, seen = d.clock(), []
+        while True:
+            t = d.clock()
+            _, actual, _ = d.send(d.target)
+            g = float(actual["gripper"])
+            seen = [(ts, v) for ts, v in seen + [(t, g)] if t - ts <= still_s * 1e9]
+            if (t - began >= min_s * 1e9 and t - seen[0][0] >= still_s * 0.9e9
+                    and max(v for _, v in seen) - min(v for _, v in seen) < 0.6) or t - began >= max_s * 1e9:
+                return g
+            d.tick(t)
+
+    def grasp_like_human(self, block, style):
+        """Recorded grasp shaped like the operator's (see STYLE_*). Returns (gripper reading after the hold, None) or
+        (None, reason) when an IK fails before anything moved."""
+        d, pl = self.driver, self.placer
+        c = np.array([block["x"], block["y"], block["z_top"] - EDGE_M / 2])
+        rad = c[:2] / np.linalg.norm(c[:2])
+        tan = np.array([-rad[1], rad[0]])
+        off = (style["offset_mm"][0] * rad + style["offset_mm"][1] * tan) / 1000
+        g = c + [off[0], off[1], GRASP_M + style["z_mm"] / 1000]
+        yaw = block["yaw"] + math.radians(style["yaw_err_deg"])
+        here = pl.model.ee(d.target)
+        here = here - pl.corr_at(here)
+        back = here[:2] - g[:2]
+        back = back / np.linalg.norm(back) if np.linalg.norm(back) > 1e-6 else -rad
+        pre = g + [*(back * style["pre_back_mm"] / 1000), style["pre_up_mm"] / 1000]
+        grip = style["open_pct"]
+        seed, path = dict(d.target), []
+        for s_ in (0.0, 0.35, 0.65, 0.85):
+            p = pl.pose_for(pre + (g - pre) * s_, yaw, seed, "hover", grip)
+            if p is None:
+                return None, "接近路徑 IK 無解"
+            path.append(p)
+            seed = p
+        low = pl.pose_for(g, yaw, seed, "grasp", grip)
+        if low is None:
+            return None, "夾取高度 IK 無解"
+        lift_pts, seed = [], low
+        top = g + [0, 0, style["lift_mm"] / 1000]
+        for s_ in (0.4, 0.75, 1.0):
+            p = pl.pose_for(np.array([g[0], g[1], low_z(pl, low) + (top[2] - low_z(pl, low)) * s_]), yaw, seed,
+                            "hover", STYLE_CLOSE_PCT)
+            if p is None:
+                return None, "抬起 IK 無解"
+            lift_pts.append(p)
+            seed = p
+        if not pl.path_ok(d.target, path[0]):      # from high up only: never dip into a rim or a neighbour
+            above = pl.pose_for([pre[0], pre[1], max(CARRY_Z, pre[2] + 0.02)], yaw, d.target, "above", grip)
+            if above is not None:
+                path.insert(0, above)
+        approach = [*path, low]
+        self._glide(approach, max(style["approach_s"], peak_seconds([dict(d.target), *approach])), ("起姿", "夾取"))
+        self._glide([dict(d.target) | {"gripper": STYLE_CLOSE_PCT}], style["close_s"], ("夾取", "閉合"))
+        self._grip_still()
+        self._glide(lift_pts, max(style["lift_s"], peak_seconds([dict(d.target), *lift_pts])), ("閉合", "抬起"))
+        return self.hold(style["hold_s"]), None
+
     def hold(self, seconds):
         d = self.driver
         end = d.clock() + seconds * 1e9
@@ -217,8 +359,8 @@ def run(args):
         with real_devices(args.config, "right", leader=False) as (_, follower, refs, hz):
             check_calibration(data, refs, leader=False)
             driver = Driver(follower, term, run_dir(Path(args.route), "auto"), hz=hz, drive_leader=False)
-            driver.play_speed, driver.gripper_speed = MOVE_SPEED, 2 * MOVE_SPEED
-            placer = Placer(driver, model, corr_at)
+            driver.gripper_speed = 2 * MOVE_SPEED            # routes keep PLAY_SPEED (the fold area), like the demos
+            placer = Placer(driver, model, corr_at, speed=MOVE_SPEED)
             eps = Episodes(driver, placer, rng)
             driver.arm_at(park)
             slot_k, done_rounds = 0, 0
@@ -250,7 +392,6 @@ def run(args):
                         term.say("粉盤找不到可放的位置；停在起姿。")
                         return False
                     xy, yaw = spot
-                    driver.play_speed = MOVE_SPEED
                     held, err = eps.grasp(b)
                     if err or held < HELD_PCT:
                         term.say(f"還原：{b['color']} 沒夾起（{err or f'{held:.1f}%'}）。")
@@ -286,36 +427,40 @@ def run(args):
                     reset([b for b in blocks if b["tray"] == "beige"], [b for b in blocks if b["tray"] == "pink"])
                     continue
                 target = pyrng.choice(source)
-                perturb = None
-                if rng.random() < PERTURB_P:
-                    perturb = (rng.uniform(-PERTURB_MM, PERTURB_MM), rng.uniform(-PERTURB_MM, PERTURB_MM),
-                               rng.uniform(-PERTURB_DEG, PERTURB_DEG))
+                style = eps.style()
                 number = 1 + len(list((session / "episodes").glob("S*")))
                 root = session / "episodes" / f"S{number:04}"
                 u, v = target["pixel"]
                 local = cv2.perspectiveTransform(np.array([[[u, v]]], np.float32), H_pink)[0, 0]
                 term.say(f"S{number:04}：{target['color']} x {target['x'] * 1000:.0f} y {target['y'] * 1000:.0f} mm "
-                         f"yaw {math.degrees(target['yaw']):.0f}°" + (f"，擾動 {np.round(perturb, 1).tolist()}" if perturb else ""))
+                         f"yaw {math.degrees(target['yaw']):.0f}°；偏心 {np.round(style['offset_mm'], 0).tolist()} mm、"
+                         f"偏角 {style['yaw_err_deg']:.0f}°、{style['approach_s']:.1f} s")
                 with episode_capture(root, args.config, "right", refs, hz, data["layout_id"],
                                      tool="tools/auto_collect.py", start_pose="start", mapping="script") as (writer, check):
                     opening = latest_global(writer)
                     before = locate(opening, quads)["blocks"] if opening is not None else []
                     to_start()
-                    rows = [0]
+                    rows, camera = [0], {}
 
                     def on_send(sent, actual):
                         rows[0] += 1
-                        if rows[0] % 15 == 0:
-                            check()
+                        if rows[0] % 15 == 0 and not camera:
+                            try:
+                                check()
+                            except RuntimeError as error:   # never stop mid-move: finish, then fail the episode
+                                camera["error"] = str(error)
                         writer.add_control(control_row(writer, sent, actual) | {"command_source": "script",
                                                                                  "task_is_policy": 1})
-                    driver.play_speed = RECORD_SPEED
                     driver.on_send = on_send
                     place_err = None
                     try:
-                        held, err = eps.grasp(target, perturb)
+                        for _ in range(3):              # an IK miss fails before anything moves: new style
+                            held, err = eps.grasp_like_human(target, style)
+                            if held is not None:
+                                break
+                            style = eps.style()
                         demo_frames = writer.count          # start -> lift (the grasp segment)
-                        ok_hold = held is not None and held >= HELD_PCT
+                        ok_hold = held is not None and held >= STYLE_HELD_PCT
                         if ok_hold:                         # recorded on to the rise over the slot, like the demos
                             xy, yaw = slots[slot_k]
                             current = dict(driver.target)
@@ -326,7 +471,6 @@ def run(args):
                                 placer.execute_place(plan, f"米盤 P{slot_k + 1}")
                     finally:
                         driver.on_send = None
-                        driver.play_speed = MOVE_SPEED
                     if ok_hold:
                         if place_err:   # still holding: never open on the way home
                             term.choose(f"程式放置沒有執行（{place_err}）。扶住夾爪裡的方塊後按 o 張爪",
@@ -338,9 +482,10 @@ def run(args):
                     final = latest_global(writer)
                     landed = placed_block(before, locate(final, quads)["blocks"], target["color"], "beige",
                                           {"index": slot_k + 1, "xy": [0, 0]}) if final is not None else None
+                place_err = place_err or (camera and f"相機中斷（{camera['error']}）")
                 success = bool(ok_hold and not place_err and landed is not None)
                 slot = {"index": slot_k + 1, "xy": json.loads((ROOT / "configs/real_slots.json").read_text())["beige"][slot_k]}
-                extra = {"script": {"perturb_mm_deg": perturb, "gripper_after_lift": held, "error": err or place_err,
+                extra = {"script": {"style": style, "gripper_after_lift": held, "error": err or place_err,
                                     "target_mount_m": [target["x"], target["y"], target["z_top"]],
                                     "target_yaw_deg": math.degrees(target["yaw"]), "corr": args.corr,
                                     "seed": args.seed}}
@@ -349,7 +494,7 @@ def run(args):
                                           landed=landed, extra=extra, start="start", mode="script")
                 line = {"episode": root.name, "color": target["color"], "success": success, "ok": report["ok"],
                         "demo_frames": demo_frames, "training_ranges": review.get("training_ranges"),
-                        "perturb": perturb, "reasons": report["review_reasons"]}
+                        "style": style, "reasons": report["review_reasons"]}
                 if not success:
                     moved = set_aside(root, session, "failed", line)
                     term.say(f"失敗（{err or place_err or ('沒夾到' if not ok_hold else 'D455 沒看到落點')}），"

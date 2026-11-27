@@ -57,6 +57,18 @@ def placed_block(before, after, color, tray, slot):
                      "neighbour_mm": round(min(dist(landed, b) for b in others), 1) if others else None}
 
 
+def taken_block(before, after, color, tray, near_mm=20.0):
+    """The block of that colour that left the source tray (opening frame vs park after the episode), or None when
+    not exactly one did. 11/27 P0006: with two blues the operator took the other one than the D455 target."""
+    def dist(a, b):
+        return ((a["x_mm"] - b["x_mm"]) ** 2 + (a["y_mm"] - b["y_mm"]) ** 2) ** .5
+
+    left = [b for b in after if b["tray"] == tray and b["color"] == color]
+    gone = [b for b in before if b["tray"] == tray and b["color"] == color
+            and all(dist(b, a) > near_mm for a in left)]
+    return gone[0] if len(gone) == 1 else None
+
+
 def lift_and_return(reading, channel, follower_id):
     """After c away from the start pose (placed in the beige tray and lifted): straight up to RETURN_LIFT_Z over
     the same spot (IK on the follower's calibration-file joint map), then to the start pose. Returns a Track, or None
@@ -419,7 +431,14 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
                                                      data["calibrations"]["follower"]["id"]))
     # Landing is read only now: with the arm folded at park it neither hides the trays nor shades the colour masks.
     final = latest_global(writer) if kept else None
-    landed = placed_block(blocks, locate(final, quads)["blocks"], color, destination, slot) if final is not None else None
+    after = locate(final, quads)["blocks"] if final is not None else None
+    landed = placed_block(blocks, after, color, destination, slot) if after is not None else None
+    if after is not None and target is not None:
+        taken = taken_block(blocks, after, color, target["tray"])
+        if taken is not None and ((taken["x_mm"] - target["x_mm"]) ** 2 + (taken["y_mm"] - target["y_mm"]) ** 2) ** .5 > 25:
+            driver.term.say(f"注意：夾走的是另一顆（x {taken['x_mm']:.0f} y {taken['y_mm']:.0f}），不是指定的 "
+                            f"x {target['x_mm']:.0f} y {target['y_mm']:.0f}；目標改記成實際夾走的那顆。")
+            target = taken | {"relabelled_from": [target["x_mm"], target["y_mm"]]}
     seen = (f"D455（停放位）：落點{TRAY_NAME[destination]} x {landed['x_mm']:.0f} y {landed['y_mm']:.0f}，"
             f"離參考位置 {landed['slot_offset_mm']:.0f} mm" + (
                 f"，離旁邊方塊只有 {landed['neighbour_mm']:.0f} mm（太擠，下一顆可能撞到）" if
