@@ -33,7 +33,7 @@
 #     reach        finals: d455 + arm over a chosen block (park -> start -> hover, nudge, k logs the aim)
 #     task-server  the real arm behind the chat (tools/real_task_server.py; this terminal is the operator console);
 #                  FAKE_TABLE=blue,blue,red,yellow for a simulated table, STANDBY_AFTER=2 for the finals shortage step
-#     chat-web     chat page on the real arm (needs the model service; LLM_URL=http://<host>:8000/v1 for another machine)
+#     chat-web     chat page on the real arm (Q4=1: llama.cpp Q4_K_M on this PC; LLM_URL / LLM_MODEL: another service)
 #     d455-restore re-mounted D455: live height / tilt vs the target pose from the table plane, reference edges for
 #                  the in-plane position (--once: report only); then d455-capture / d455-fit
 #     d455-capture finals: torque off, follower moved by hand to ~8 poses -> D455 depth + readings (camera pose)
@@ -241,7 +241,10 @@ PYEOF
     fi ;;
   chat-web)
     # Chat page (progress, quick replies, pause / resume, push-to-talk) on --backend real; open http://127.0.0.1:8765
-    uv run tools/chat_web.py --backend real ${LLM_URL:+--base-url "$LLM_URL"} "$@" ;;
+    # Model service: Q4=1 -> llama.cpp Q4_K_M on this PC (docker/llamacpp/serve.sh up, port 8001, 6 GB, Turing OK);
+    # LLM_URL / LLM_MODEL -> any OpenAI-compatible service (e.g. BF16 vLLM on the 5090: http://<host>:8000/v1)
+    if [[ -n "${Q4:-}" ]]; then LLM_URL="${LLM_URL:-http://127.0.0.1:8001/v1}"; LLM_MODEL="${LLM_MODEL:-Qwen3.5-9B-Q4_K_M}"; fi
+    uv run tools/chat_web.py --backend real ${LLM_URL:+--base-url "$LLM_URL"} ${LLM_MODEL:+--model "$LLM_MODEL"} "$@" ;;
   d455-restore)
     # Target = the fitted pose (POSE=..., else 11/25); TARGET=outputs/d455/restore-target-*.json for a pose saved with t.
     "$CAMPY" tools/d455_restore.py --serial "$D455" --target "${TARGET:-${POSE:-outputs/d455/pose_261125.json}}" \

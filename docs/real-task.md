@@ -40,12 +40,22 @@
 ```bash
 # 模擬桌面（不接硬體）
 FAKE_TABLE=blue,blue,red,yellow STANDBY_AFTER=2 tools/lab_day.sh task-server
-tools/lab_day.sh chat-web            # 需要模型服務；LLM_URL=http://<主機>:8000/v1 可指向別台
+tools/lab_day.sh chat-web            # 需要模型服務，見下方「模型服務」
 
 # 實機（終端機就是操作台：Esc 原地暫停；結束時回停放位、確認支撐後解扭力）
 STANDBY_AFTER=2 tools/lab_day.sh task-server
 tools/lab_day.sh chat-web
 ```
+
+## 模型服務
+
+| 位置 | 指令 | 備註 |
+|---|---|---|
+| 實驗室這台（2080 Ti） | `docker/llamacpp/serve.sh up`，然後 `Q4=1 tools/lab_day.sh chat-web` | Qwen3.5-9B Q4_K_M（llama.cpp），約 6 GB 顯存，延遲 P50 0.6 秒；舊語句表 141/144（BF16 144/144）。`lerobot` 要在 docker 群組 |
+| 5090 | 那台 `docker/vllm/serve.sh up`，這台 `LLM_URL=http://<5090>:8000/v1 tools/lab_day.sh chat-web` | BF16，舊語句表 144/144；vLLM 只聽 127.0.0.1，要改對外或用 SSH 通道 |
+| 比賽（Thor） | 練習場地驗證 | |
+
+數字來自 `docs/chat-layer.md`（5090 上的比較，11/19）。
 
 ## 驗證狀態（2026-11-27）
 
