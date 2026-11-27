@@ -76,6 +76,16 @@ tools/lab_day.sh chat-web
 - S3（座標條件 ACT）取代 S1 的抓取：`RealArm.pick` 換成政策推論。
 - 比賽現場在 Thor 上跑：RealSense、LeRobot、vLLM。
 
+## 柴犬玩偶：方塊用程式夾、玩偶用 ACT 夾（11/28）
+
+決賽 demo 的一幕：同一個聊天下單，執行器依物件種類選技能。規格與上機順序見 `notes/261128_玩偶規格與決賽用法.md`。
+
+- **D455**：`agentic_sim.real_plush` 用高度和底面尺寸找出玩偶；桌上的玩偶算在「備料」裡。
+- **聊天**：`configs/chat.yaml` 的 `plush`（柴犬、狗狗、玩偶、小熊…），下單方式和顏色一樣，回覆用「柴犬玩偶」。
+- **執行器**：玩偶的 pick 參數是 `method: act`，方塊是 `program`。玩偶放在米盤 P0（`configs/real_plush.json`），不在程式夾取區內也照樣接單。
+- **實機**：`PLUSH_POLICY=<…/pretrained_model> tools/lab_day.sh task-server`。沒有設定時，玩偶的訂單會以「沒有模型」失敗。ACT 迴圈在 `agentic_sim.real_policy`。
+- **假桌面**：`FAKE_TABLE=red,red,blue,yellow,plush tools/lab_day.sh task-server`。
+
 ## 下一步：聊天裡的「收資料」技能（設計，11/27）
 
 目標：在聊天頁說「開始自動收資料，五輪」或「我要手動示範」，由實機任務伺服器用它已開著的 follower 和 D455 執行。收資料和整單任務互斥，同時只能做一件。
