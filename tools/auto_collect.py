@@ -576,10 +576,21 @@ def run(args):
                         term.say("D455 讀不到：回停放位、解扭力後結束（重插 D455 或重開後再跑）。")
                         break
                     source = [b for b in blocks if b["tray"] == "pink" and in_zone(zone, b["x"], b["y"])]
+                    outside = [b for b in blocks if b["tray"] == "pink" and not in_zone(zone, b["x"], b["y"])]
+                    if not source and outside:
+                        # 11/27: after a takeover the two blocks left lay outside the safe grasp zone; they were taken for an empty
+                        # tray and the run ended. Blocks the arm cannot reach are the operator's to move, not the end of a round.
+                        home()
+                        names = "、".join(f"{b['color']}（x {b['x'] * 1000:.0f} y {b['y'] * 1000:.0f}）" for b in outside)
+                        if term.choose(f"粉盤還有 {len(outside)} 顆在橘色弧線外、夾不到：{names}。移進弧線內後 c 繼續／q 結束",
+                                       {"c": "繼續", "q": "結束"}) == "q":
+                            break
+                        continue
                     if not source:
                         beige = [b for b in blocks if b["tray"] == "beige"]
                         done_rounds += 1 if slot_k else 0
                         if not beige or done_rounds >= args.rounds:
+                            term.say(f"結束：完成 {done_rounds} 輪（ROUNDS={args.rounds}）" if beige else "結束：兩個托盤都沒有方塊。")
                             break
                         term.say(f"粉盤空了：把米盤 {len(beige)} 顆放回粉盤（不錄）。")
                         if not reset(beige):
