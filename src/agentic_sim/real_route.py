@@ -542,6 +542,19 @@ class Driver:
         self._release_leader_supported()
         return False
 
+    def bring_leader(self, leader, goals):
+        """Drive a held leader along goals and keep it holding there (torque on): between park rounds it waits at the
+        start pose for the next hand-over. False when it did not arrive (then it is released once supported)."""
+        self._leader = leader
+        outcome = self._drive_leader(leader, goals[-1], goals=[dict(g) for g in goals])
+        if outcome == "arrived":
+            self.event("leader_waiting", leader=pose(leader.read()))
+            return True
+        notes = {"esc": "已暫停", "stall": "leader 被擋住或卡住", "short": "leader 沒回到起姿"}
+        self.term.say(f"{notes.get(outcome, outcome)}，leader 原地保持中。")
+        self._release_leader_supported()
+        return False
+
     def _drive_leader(self, leader, reference, goals=None):
         goal = pose(leader.read())
         goals = goals or self._leader_goals(goal, reference)
