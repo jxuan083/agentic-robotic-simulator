@@ -459,117 +459,129 @@ def run(args):
                 slot_k = 0
                 return True
 
-            while done_rounds < args.rounds:
-                blocks = None
-                for attempt in range(2):     # 11/27: the D455 colour stream stopped after S0001 and the tool exited
-                    try:
-                        blocks = look(args.serial, cam, quads)
-                        break
-                    except RuntimeError as error:
-                        term.say(f"D455 讀取失敗（{error}）" + ("，再試一次。" if not attempt else "。"))
-                        time.sleep(2.0)
-                if blocks is None:
-                    term.say("D455 讀不到：回停放位、解扭力後結束（重插 D455 或重開後再跑）。")
-                    break
-                source = [b for b in blocks if b["tray"] == "pink" and in_zone(zone, b["x"], b["y"])]
-                if not source:
-                    beige = [b for b in blocks if b["tray"] == "beige"]
-                    done_rounds += 1 if slot_k else 0
-                    if not beige or done_rounds >= args.rounds:
-                        break
-                    term.say(f"粉盤空了：把米盤 {len(beige)} 顆放回粉盤（不錄）。")
-                    if not reset(beige):
-                        home()                          # folded away before the operator reaches into the trays
-                        if term.choose("還原失敗。手動整理好方塊後 c 繼續／q 結束", {"c": "繼續", "q": "結束"}) == "q":
+            try:
+                while done_rounds < args.rounds:
+                    blocks = None
+                    for attempt in range(2):     # 11/27: the D455 colour stream stopped after S0001 and the tool exited
+                        try:
+                            blocks = look(args.serial, cam, quads)
                             break
-                    continue
-                if slot_k >= len(slots):
-                    term.say("米盤 4 格已滿，但粉盤還有方塊：先還原。")
-                    reset([b for b in blocks if b["tray"] == "beige"], [b for b in blocks if b["tray"] == "pink"])
-                    continue
-                target = pyrng.choice(source)
-                style = eps.style()
-                number = 1 + len(list((session / "episodes").glob("S*")))
-                root = session / "episodes" / f"S{number:04}"
-                u, v = target["pixel"]
-                local = cv2.perspectiveTransform(np.array([[[u, v]]], np.float32), H_pink)[0, 0]
-                term.say(f"S{number:04}：{target['color']} x {target['x'] * 1000:.0f} y {target['y'] * 1000:.0f} mm "
-                         f"yaw {math.degrees(target['yaw']):.0f}°；偏心 {np.round(style['offset_mm'], 0).tolist()} mm、"
-                         f"偏角 {style['yaw_err_deg']:.0f}°、{style['approach_s']:.1f} s")
-                with episode_capture(root, args.config, "right", refs, hz, data["layout_id"],
-                                     tool="tools/auto_collect.py", start_pose="start", mapping="script") as (writer, check):
-                    opening = latest_global(writer)
-                    before = locate(opening, quads)["blocks"] if opening is not None else []
-                    to_start()
-                    rows, camera = [0], {}
-
-                    def on_send(sent, actual):
-                        rows[0] += 1
-                        if rows[0] % 15 == 0 and not camera:
-                            try:
-                                check()
-                            except RuntimeError as error:   # never stop mid-move: finish, then fail the episode
-                                camera["error"] = str(error)
-                        writer.add_control(control_row(writer, sent, actual) | {"command_source": "script",
-                                                                                 "task_is_policy": 1})
-                    driver.on_send = on_send
-                    place_err = None
-                    try:
-                        for _ in range(3):              # an IK miss fails before anything moves: new style
-                            held, err = eps.grasp_like_human(target, style)
-                            if held is not None:
-                                break
-                            style = eps.style()
-                        demo_frames = writer.count          # start -> lift (the grasp segment)
-                        ok_hold = held is not None and held >= STYLE_HELD_PCT
-                        if ok_hold:                         # recorded on to the rise over the slot, like the demos
-                            xy, yaw = slots[slot_k]
-                            current = dict(driver.target)
-                            plan = hold_while(driver, lambda: placer.plan_place(xy, yaw, yaw, CLOSED_PCT, current))
-                            if isinstance(plan, str):
-                                place_err = plan
-                            else:
-                                placer.execute_place(plan, f"米盤 P{slot_k + 1}")
-                    finally:
-                        driver.on_send = None
-                    if ok_hold:
-                        if place_err:   # still holding: never open on the way home
-                            term.choose(f"程式放置沒有執行（{place_err}）。扶住夾爪裡的方塊後按 o 張爪",
-                                        {"o": "張爪"})
-                            placer.set_grip(OPEN_PCT, "張開")
-                    else:
-                        placer.set_grip(OPEN_PCT, "張開")
-                    where["at"] = "slot"
-                    back_to_start()
-                    final = latest_global(writer)       # at the start pose: the D455 sees the landing
-                    landed = placed_block(before, locate(final, quads)["blocks"], target["color"], "beige",
-                                          {"index": slot_k + 1, "xy": SLOTS_MM[slot_k]}) if final is not None else None
-                place_err = place_err or (camera and f"相機中斷（{camera['error']}）")
-                success = bool(ok_hold and not place_err and landed is not None)
-                slot = {"index": slot_k + 1, "xy": json.loads((ROOT / "configs/real_slots.json").read_text())["beige"][slot_k]}
-                extra = {"script": {"style": style, "gripper_after_lift": held, "error": err or place_err,
-                                    "target_mount_m": [target["x"], target["y"], target["z_top"]],
-                                    "target_yaw_deg": math.degrees(target["yaw"]), "corr": args.corr,
-                                    "seed": args.seed}}
-                report, review = finalize(root, color=target["color"], destination="beige", success=success,
-                                          quads=quads, target_pose=(float(local[0]), float(local[1])), slot=slot,
-                                          landed=landed, extra=extra, start="start", mode="script")
-                line = {"episode": root.name, "color": target["color"], "success": success, "ok": report["ok"],
-                        "demo_frames": demo_frames, "training_ranges": review.get("training_ranges"),
-                        "style": style, "reasons": report["review_reasons"]}
-                if not success:
-                    home()                              # folded away before the operator reaches into the trays
-                    moved = set_aside(root, session, "failed", line)
-                    term.say(f"失敗（{err or place_err or ('沒夾到' if not ok_hold else 'D455 沒看到落點')}），"
-                             f"原檔 {moved.name}。")
-                    if term.choose("把掉落的方塊放回粉盤弧線內、米盤該格清空後 c 繼續／q 結束",
-                                   {"c": "繼續", "q": "結束"}) == "q":
+                        except RuntimeError as error:
+                            term.say(f"D455 讀取失敗（{error}）" + ("，再試一次。" if not attempt else "。"))
+                            time.sleep(2.0)
+                    if blocks is None:
+                        term.say("D455 讀不到：回停放位、解扭力後結束（重插 D455 或重開後再跑）。")
                         break
-                    continue
-                with index.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(line, ensure_ascii=False) + "\n")
-                slot_k += 1
-                term.say(f"{root.name} 成功：{demo_frames} 幀，訓練段 {review.get('training_ranges')}。")
+                    source = [b for b in blocks if b["tray"] == "pink" and in_zone(zone, b["x"], b["y"])]
+                    if not source:
+                        beige = [b for b in blocks if b["tray"] == "beige"]
+                        done_rounds += 1 if slot_k else 0
+                        if not beige or done_rounds >= args.rounds:
+                            break
+                        term.say(f"粉盤空了：把米盤 {len(beige)} 顆放回粉盤（不錄）。")
+                        if not reset(beige):
+                            home()                          # folded away before the operator reaches into the trays
+                            if term.choose("還原失敗。手動整理好方塊後 c 繼續／q 結束", {"c": "繼續", "q": "結束"}) == "q":
+                                break
+                        continue
+                    if slot_k >= len(slots):
+                        term.say("米盤 4 格已滿，但粉盤還有方塊：先還原。")
+                        reset([b for b in blocks if b["tray"] == "beige"], [b for b in blocks if b["tray"] == "pink"])
+                        continue
+                    target = pyrng.choice(source)
+                    style = eps.style()
+                    number = 1 + len(list((session / "episodes").glob("S*")))
+                    root = session / "episodes" / f"S{number:04}"
+                    u, v = target["pixel"]
+                    local = cv2.perspectiveTransform(np.array([[[u, v]]], np.float32), H_pink)[0, 0]
+                    term.say(f"S{number:04}：{target['color']} x {target['x'] * 1000:.0f} y {target['y'] * 1000:.0f} mm "
+                             f"yaw {math.degrees(target['yaw']):.0f}°；偏心 {np.round(style['offset_mm'], 0).tolist()} mm、"
+                             f"偏角 {style['yaw_err_deg']:.0f}°、{style['approach_s']:.1f} s")
+                    with episode_capture(root, args.config, "right", refs, hz, data["layout_id"],
+                                         tool="tools/auto_collect.py", start_pose="start", mapping="script") as (writer, check):
+                        opening = latest_global(writer)
+                        before = locate(opening, quads)["blocks"] if opening is not None else []
+                        to_start()
+                        rows, camera = [0], {}
+
+                        def on_send(sent, actual):
+                            rows[0] += 1
+                            if rows[0] % 15 == 0 and not camera:
+                                try:
+                                    check()
+                                except RuntimeError as error:   # never stop mid-move: finish, then fail the episode
+                                    camera["error"] = str(error)
+                            writer.add_control(control_row(writer, sent, actual) | {"command_source": "script",
+                                                                                     "task_is_policy": 1})
+                        driver.on_send = on_send
+                        place_err = None
+                        try:
+                            for _ in range(3):              # an IK miss fails before anything moves: new style
+                                held, err = eps.grasp_like_human(target, style)
+                                if held is not None:
+                                    break
+                                style = eps.style()
+                            demo_frames = writer.count          # start -> lift (the grasp segment)
+                            ok_hold = held is not None and held >= STYLE_HELD_PCT
+                            if ok_hold:                         # recorded on to the rise over the slot, like the demos
+                                xy, yaw = slots[slot_k]
+                                current = dict(driver.target)
+                                plan = hold_while(driver, lambda: placer.plan_place(xy, yaw, yaw, CLOSED_PCT, current))
+                                if isinstance(plan, str):
+                                    place_err = plan
+                                else:
+                                    placer.execute_place(plan, f"米盤 P{slot_k + 1}")
+                        finally:
+                            driver.on_send = None
+                        if ok_hold:
+                            if place_err:   # still holding: never open on the way home
+                                term.choose(f"程式放置沒有執行（{place_err}）。扶住夾爪裡的方塊後按 o 張爪",
+                                            {"o": "張爪"})
+                                placer.set_grip(OPEN_PCT, "張開")
+                        else:
+                            placer.set_grip(OPEN_PCT, "張開")
+                        where["at"] = "slot"
+                        back_to_start()
+                        final = latest_global(writer)       # at the start pose: the D455 sees the landing
+                        landed = placed_block(before, locate(final, quads)["blocks"], target["color"], "beige",
+                                              {"index": slot_k + 1, "xy": SLOTS_MM[slot_k]}) if final is not None else None
+                    place_err = place_err or (camera and f"相機中斷（{camera['error']}）")
+                    success = bool(ok_hold and not place_err and landed is not None)
+                    slot = {"index": slot_k + 1, "xy": json.loads((ROOT / "configs/real_slots.json").read_text())["beige"][slot_k]}
+                    extra = {"script": {"style": style, "gripper_after_lift": held, "error": err or place_err,
+                                        "target_mount_m": [target["x"], target["y"], target["z_top"]],
+                                        "target_yaw_deg": math.degrees(target["yaw"]), "corr": args.corr,
+                                        "seed": args.seed}}
+                    report, review = finalize(root, color=target["color"], destination="beige", success=success,
+                                              quads=quads, target_pose=(float(local[0]), float(local[1])), slot=slot,
+                                              landed=landed, extra=extra, start="start", mode="script")
+                    line = {"episode": root.name, "color": target["color"], "success": success, "ok": report["ok"],
+                            "demo_frames": demo_frames, "training_ranges": review.get("training_ranges"),
+                            "style": style, "reasons": report["review_reasons"]}
+                    if not success:
+                        home()                              # folded away before the operator reaches into the trays
+                        moved = set_aside(root, session, "failed", line)
+                        term.say(f"失敗（{err or place_err or ('沒夾到' if not ok_hold else 'D455 沒看到落點')}），"
+                                 f"原檔 {moved.name}。")
+                        if term.choose("把掉落的方塊放回粉盤弧線內、米盤該格清空後 c 繼續／q 結束",
+                                       {"c": "繼續", "q": "結束"}) == "q":
+                            break
+                        continue
+                    with index.open("a", encoding="utf-8") as fh:
+                        fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+                    slot_k += 1
+                    term.say(f"{root.name} 成功：{demo_frames} 幀，訓練段 {review.get('training_ranges')}。")
+            except BaseException as error:
+                # Any stop (an error, the D455, the bus): home by the fixed route first, then release.
+                driver.on_send = None
+                term.say(f"自動收集中止（{type(error).__name__}: {error}）：先沿路線回停放位再解扭力。")
+                try:
+                    home()
+                except BaseException as again:  # noqa: BLE001
+                    term.say(f"回停放位沒有完成（{again}）：follower 原地保持，之後用 tools/lab_day.sh recover。")
+                    raise error from again
+                park_and_release(driver, Track([dict(driver.target), park], [0.0]), park, support)
+                raise
             home()                                      # the fixed route through the fold area, never straight
             park_and_release(driver, Track([dict(driver.target), park], [0.0]), park, support)
     return 0

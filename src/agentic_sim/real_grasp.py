@@ -304,6 +304,33 @@ def leader_home_goals(now, channel, route, rest, follower_id):
     return goals
 
 
+def leader_start_goals(now, channel, follower_id):
+    """Driven leader from where the demonstration ended to the start pose (the first part of leader_home_goals):
+    between park rounds it waits there for the next hand-over."""
+    grip = float(now["gripper"])
+    back = lift_and_return(now, channel, follower_id)
+    return list(back.points[1:]) if back is not None else [pose(channel) | {"gripper": grip}]
+
+
+def park_all(driver, leader, data):
+    """End of a stretch of rounds at the start pose (a failure to clear up, a new round to lay out, the end): the
+    follower takes the fixed route to park and is released there, the waiting leader is driven home to its fold."""
+    if not getattr(driver, "at_start", False):
+        return
+    route = Track(data["waypoints"], data["segment_seconds"])
+    park, channel, support = data["park"]["pose"], data["channel"]["command"], data["park_support"]
+    driver.target = driver.target | {"gripper": channel["gripper"]}
+    park_and_release(driver, route.reverse(), park, support)
+    driver.at_start = False
+    if getattr(driver, "leader_waiting", False):
+        rev = route.reverse()
+        grip = float(pose(leader.read())["gripper"])
+        goals = [pose(p) | {"gripper": grip} for p in rev.points[1:-1]]
+        goals.append(pose(driver.leader_rest) if driver.leader_rest is not None else pose(rev.points[-1]))
+        driver.park_leader(leader, goals)
+        driver.leader_waiting = False
+
+
 def script_recorder(writer, check_cameras):
     """driver.on_send hook for programmed motion inside an episode: rows tagged command_source "script"."""
     rows = [0]
@@ -341,7 +368,7 @@ def program_place(driver, placer, slot_mount, label):
 
 
 def pick_place_round(driver, leader, data, writer, check_cameras, *, color, destination, slot, quads, choose=None,
-                     placer=None, slot_mount=None):
+                     placer=None, slot_mount=None, stay=False):
     """Park -> demonstrated pick and place (ending near the start pose) -> park. Returns the operator result.
     With choose (see random_pick) the target block, and so its colour, is picked from the opening D455 frame.
     With placer (agentic_sim.real_place.Placer) and slot_mount ((x, y) m, tray yaw): the demonstration ends at the
@@ -373,14 +400,23 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
         driver.demo_prompt = (f"錄製中：從停靠位出收折區 → 夾起{color}方塊並抬穩 → 放進{TRAY_NAME[destination]} P{slot['index']}"
                               "（overlay 圖上的格位：米盤靠基座、靠粉盤的角落，P1 最近；貼近盤面再張爪）→ 抬起退回起姿附近，停穩按 c。"
                               "Esc 暫停；腕部只在 ±30° 內對齊方塊。")
-    driver.arm_at(park)
-    if placer is not None:
-        # The demonstration starts at the start pose (ACT learns start -> lift); the fixed route gets there.
-        follow(driver, route, ("停放位", "起姿"))
+    if not (stay and getattr(driver, "at_start", False)):
+        driver.arm_at(park)
+        if placer is not None:
+            # The demonstration starts at the start pose (ACT learns start -> lift); the fixed route gets there.
+            follow(driver, route, ("停放位", "起姿"))
+    # else: since the last round the follower holds at the start pose and the leader waits there (stay)
+    driver.at_start = placer is not None
     if not driver.align_leader(leader, driver.read()):
-        park_and_release(driver, route.reverse() if placer is not None else Track([driver.target, park], [0.0]),
-                         park, support)
+        if stay:
+            park_all(driver, leader, data)
+        else:
+            park_and_release(driver, route.reverse() if placer is not None else Track([driver.target, park], [0.0]),
+                             park, support)
+            driver.at_start = False
         return {"cancelled": True, "demo_frames": None}
+    driver.leader_waiting = False
+    driver.at_start = False          # the demonstration moves the arm away: a stop now holds it there (recover)
     back, programmed = None, None
     while True:
         samples, kept = record_demo(driver, leader, writer, check_cameras)
@@ -425,11 +461,20 @@ def pick_place_round(driver, leader, data, writer, check_cameras, *, color, dest
     if not kept or (programmed and programmed.get("held") and programmed.get("error")):
         driver.menu("在起姿保持。若夾爪裡還有方塊請取下，回程淨空後按 r 回停放位", {"r": "回停放位"})
     driver.target = driver.target | {"gripper": channel["gripper"]}
-    park_and_release(driver, route.reverse(), park, support)
-    if leader_end is not None:
-        driver.park_leader(leader, leader_home_goals(leader_end, channel, route, driver.leader_rest,
-                                                     data["calibrations"]["follower"]["id"]))
-    # Landing is read only now: with the arm folded at park it neither hides the trays nor shades the colour masks.
+    trouble = not kept or (programmed and programmed.get("held") and programmed.get("error"))
+    if stay and placer is not None and leader_end is not None and not trouble:
+        # Stay at the start pose for the next round (no trip through the fold area): the follower holds there and
+        # the leader is driven from where c left it back to the start pose, where it waits torque-on.
+        driver.at_start = True
+        driver.leader_waiting = driver.bring_leader(leader, leader_start_goals(
+            leader_end, channel, data["calibrations"]["follower"]["id"]))
+    else:
+        park_and_release(driver, route.reverse(), park, support)
+        driver.at_start = False
+        if leader_end is not None:
+            driver.park_leader(leader, leader_home_goals(leader_end, channel, route, driver.leader_rest,
+                                                         data["calibrations"]["follower"]["id"]))
+    # Landing is read only now, the arm at park or at the start pose: the D455 sees both trays past it there.
     final = latest_global(writer) if kept else None
     after = locate(final, quads)["blocks"] if final is not None else None
     landed = placed_block(blocks, after, color, destination, slot) if after is not None else None
