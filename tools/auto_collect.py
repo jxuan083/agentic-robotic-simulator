@@ -16,7 +16,9 @@ Per episode (the follower parks in between, like the human rounds):
      on the way and closed to the operator's 13.5 %; 2.0-3.4 s start -> close, peak joint speed <= 85 deg/s; lift
      5.5-8.5 cm, hold (the grasp segment ACT learns) -> carry into the next beige slot (P1-P4), release, rise over
      the slot at 75 deg/s (the place segment; VLA learns the whole episode). The sampled style is in review.json.
-  4. Not recorded: straight up, start pose, park.
+  4. Not recorded: straight up, back to the start pose; the next scan, the landing check and the next choice are
+     made there (the D455 sees both trays past the arm). Park only at the end and before the operator handles a
+     failure.
   5. review.json as for the human rounds (start "start", D455 target from the opening frame, training range up to the
      lift); success = the gripper held after the lift and the D455 sees the block in the beige tray at park.
      Failures move to <session>-rejected/ and the loop waits for the operator.
@@ -391,15 +393,35 @@ def run(args):
             driver.arm_at(park)
             slot_k, done_rounds = 0, 0
 
+            # The arm stays at the start pose between episodes: the D455 sees both trays from there (11/27 S0002,
+            # the gripper in front of the beige rim), so the scan, the landing check and the next choice need no
+            # trip through the fold area. Park only at the end and before the operator reaches into the trays.
+            where = {"at": "park"}
+
             def to_start():
-                follow(driver, route, ("停放位", "起姿"))
+                if where["at"] == "park":
+                    follow(driver, route, ("停放位", "起姿"))
+                where["at"] = "start"
+
+            def back_to_start():
+                if where["at"] == "park":
+                    return to_start()
+                back = lift_and_return(driver.target, channel, args.follower_id)
+                if back is None:        # no straight way up from here: the old way, through park
+                    return home() or to_start()
+                follow(driver, back, ("目前位置", "起姿"))
+                driver.target = driver.target | {"gripper": channel["gripper"]}
+                where["at"] = "start"
 
             def home():
+                if where["at"] == "park":
+                    return
                 back = lift_and_return(driver.target, channel, args.follower_id)
                 if back is not None:
                     follow(driver, back, ("目前位置", "起姿"))
                 driver.target = driver.target | {"gripper": channel["gripper"]}
                 follow(driver, route.reverse(), ("起姿", "停放位"))
+                where["at"] = "park"
 
             def feasible(xy, yaw):
                 c = np.array([xy[0], xy[1], EDGE_M / 2])
@@ -418,6 +440,7 @@ def run(args):
                         term.say("粉盤找不到可放的位置；停在起姿。")
                         return False
                     xy, yaw = spot
+                    where["at"] = "pink"
                     held, err = eps.grasp(b)
                     if err or held < HELD_PCT:
                         term.say(f"還原：{b['color']} 沒夾起（{err or f'{held:.1f}%'}）。")
@@ -427,11 +450,12 @@ def run(args):
                     if err:
                         term.say(f"還原：{err}")
                         return False
+                    where["at"] = "pink"
                     taken.append(np.asarray(xy))
                     with reset_log.open("a", encoding="utf-8") as fh:
                         fh.write(json.dumps({"t": time.time(), "color": b["color"], "from": [b["x"], b["y"]],
                                              "to": [float(xy[0]), float(xy[1])], "yaw_deg": math.degrees(yaw)}) + "\n")
-                home()
+                back_to_start()
                 slot_k = 0
                 return True
 
@@ -455,6 +479,7 @@ def run(args):
                         break
                     term.say(f"粉盤空了：把米盤 {len(beige)} 顆放回粉盤（不錄）。")
                     if not reset(beige):
+                        home()                          # folded away before the operator reaches into the trays
                         if term.choose("還原失敗。手動整理好方塊後 c 繼續／q 結束", {"c": "繼續", "q": "結束"}) == "q":
                             break
                     continue
@@ -514,8 +539,9 @@ def run(args):
                             placer.set_grip(OPEN_PCT, "張開")
                     else:
                         placer.set_grip(OPEN_PCT, "張開")
-                    home()
-                    final = latest_global(writer)
+                    where["at"] = "slot"
+                    back_to_start()
+                    final = latest_global(writer)       # at the start pose: the D455 sees the landing
                     landed = placed_block(before, locate(final, quads)["blocks"], target["color"], "beige",
                                           {"index": slot_k + 1, "xy": SLOTS_MM[slot_k]}) if final is not None else None
                 place_err = place_err or (camera and f"相機中斷（{camera['error']}）")
@@ -532,6 +558,7 @@ def run(args):
                         "demo_frames": demo_frames, "training_ranges": review.get("training_ranges"),
                         "style": style, "reasons": report["review_reasons"]}
                 if not success:
+                    home()                              # folded away before the operator reaches into the trays
                     moved = set_aside(root, session, "failed", line)
                     term.say(f"失敗（{err or place_err or ('沒夾到' if not ok_hold else 'D455 沒看到落點')}），"
                              f"原檔 {moved.name}。")
@@ -543,6 +570,7 @@ def run(args):
                     fh.write(json.dumps(line, ensure_ascii=False) + "\n")
                 slot_k += 1
                 term.say(f"{root.name} 成功：{demo_frames} 幀，訓練段 {review.get('training_ranges')}。")
+            home()                                      # the fixed route through the fold area, never straight
             park_and_release(driver, Track([dict(driver.target), park], [0.0]), park, support)
     return 0
 
