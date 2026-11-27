@@ -5,13 +5,14 @@ window, started in order; Ctrl+C stops the services this command started.
   uv run tools/lab.py                                   # MuJoCo, Q4 model, lab_20261120, default blocks
   uv run tools/lab.py --backend isaac --model bf16 --block-colors red,red,blue,blue,yellow
   uv run tools/lab.py --wrist-lens pinhole --no-chat
+  uv run tools/lab.py --web [--stt-model small]        # chat as a web page (tools/chat_web.py) instead of the Tk window
 
 Steps (each waits until the previous one answers; a failure stops here, names the component and exits 1):
   1. model service   Q4_K_M (llama.cpp, docker/llamacpp/serve.sh, port 8001) or BF16 (vLLM, docker/vllm/serve.sh,
                      port 8000)
   2. simulator       persistent server (tools/mujoco_server.sh / docker/isaac/server.sh); the experiment is
                      (re)loaded with the options given here
-  3. chat window     tools/chat_window.py
+  3. chat window     tools/chat_window.py (or, with --web, the chat page tools/chat_web.py opened in the browser)
 Ownership: each control script's `up` creates the service only when none exists (atomic: the container name, or a
 lock for the simulator) and writes the identity of what it created (container ID / process ID) to ARS_CREATED_FILE.
 Only that identity is stopped on exit (`down <id>`), also when it never became ready; a service that already existed
@@ -175,6 +176,19 @@ class Lab:
         say(f"已載入 {self.a.experiment}{'（' + ', '.join(f'{k}={v}' for k, v in opts.items()) + '）' if opts else ''}")
 
     def chat(self, url, name, typing=()):
+        if getattr(self.a, "web", False):
+            cmd = ["uv", "run", "--quiet", "tools/chat_web.py", "--backend", self.a.backend, "--base-url", url,
+                   "--model", name, "--port", str(self.a.web_port)]
+            if self.a.stt_model:
+                cmd += ["--stt-model", self.a.stt_model]
+            p = subprocess.Popen(cmd, cwd=ROOT, env=self.env)
+            say(f"聊天頁面：http://127.0.0.1:{self.a.web_port}")
+            try:
+                import webbrowser
+                webbrowser.open(f"http://127.0.0.1:{self.a.web_port}")
+            except Exception:  # noqa: BLE001
+                pass
+            return p
         cmd = ["uv", "run", "--quiet", "tools/chat_window.py", "--backend", self.a.backend, "--base-url", url,
                "--model", name]
         for line in typing:
@@ -221,6 +235,9 @@ def main(argv=None) -> int:
     ap.add_argument("--task", default=None, help="task scenario run in the loaded scene (e.g. a finals scene "
                     "written by tools/finals.py chat); its event log and result go next to the file")
     ap.add_argument("--chat-transcript", default=None, help="chat window: append every shown line to this JSONL")
+    ap.add_argument("--web", action="store_true", help="chat as a web page (tools/chat_web.py) instead of the Tk window")
+    ap.add_argument("--web-port", type=int, default=8765, help="with --web: port of the chat page")
+    ap.add_argument("--stt-model", default=None, help="with --web: faster-whisper model for voice input (e.g. small)")
     ap.add_argument("--no-chat", action="store_true", help="simulator only (no model service, no chat window)")
     ap.add_argument("--start-timeout", type=float, default=None,
                     help="seconds a service may take to become ready (default: per service)")

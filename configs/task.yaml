@@ -27,6 +27,18 @@ retry:
   pick_attempts: 2          # per block, then the block is marked uncertain and skipped
 order:
   max_per_color: 8          # blocks of one colour in an order; a larger order is refused, the ledger stays as it was
+# Finals rule (docs/real-progress.md, 11/25): the real arm only picks from storage into placement. On: an
+# over-delivery is reported and left in the tray, a held block the order no longer needs is delivered anyway or held
+# until someone takes it off the gripper (never put back). Off (default): the original return / retrieve behaviour.
+no_return: false
+# "左上角那顆紅色": which mount-frame directions the words 上 and 左 mean (agentic_sim.task.pick_ref). Default: seen
+# from behind the arm looking forward (上 = +x away from the base, 左 = +y). PROVISIONAL: confirm the viewpoint the
+# operators use at the venue (behind the arm, across the table, or the overhead camera image) and set these to match.
+pick_ref:
+  up: [1.0, 0.0]
+  left: [0.0, 1.0]
+  tie_m: 0.015              # runner-up within this score (m) of the best: the words do not single one block out
+  prefer_reachable: false   # true: an unnamed pick also takes reachable blocks first (default: the original order)
 shortage:
   recheck_s: 1.0            # "wait" answer: look at the storage tray again this often
 # Placement slots in the beige tray (mount frame, m). Spaced 7 cm so the open gripper fits between placed blocks

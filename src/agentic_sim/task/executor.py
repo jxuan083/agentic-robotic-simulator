@@ -9,9 +9,11 @@ One skill runs at a time; it only proposes EE targets and gripper goals to the s
 - "total" is the new complete order, "add" adds to it. Each change is a new ledger revision; the running skill is
   re-checked against it at once: kept (and re-tagged with the new revision) if it still serves the order, otherwise
   cancelled by phase (agentic_sim.task.skills). Every frame's command carries the revision it was issued for.
-- Holding a block the new order does not need: stop, keep it, ask the user (return / place_at / deliver). No release
+- Holding a block the new order does not need: stop, keep it, ask the user (return / place_at / deliver; with
+  no_return: deliver / hold until removed on site). No release
   and no return home before the answer.
-- Delivered beyond the order (released before the change): reported, then retrieved to the storage tray.
+- Delivered beyond the order (released before the change): reported, then retrieved to the storage tray (with
+  no_return: reported only, left for the user to decide or have removed on site).
 - Shortage: do what can be done first, then ask (substitute colour / reduce / wait). Never substitute on its own.
 - A delivery counts only after the placed block is observed at rest in the tray with the gripper open and clear.
 - Standby (finals): ex.standby() sends the empty arm to the standby (home) point; once it has arrived and settled
@@ -30,12 +32,15 @@ import numpy as np
 
 from agentic_sim.scene_layout import block_in_tray
 from agentic_sim.task.ledger import Ledger
+from agentic_sim.task.pick_ref import DEFAULT_FRAME, REFS, resolve
+from agentic_sim.teleop.ee_target import STATUS_JUMP, STATUS_OK
 from agentic_sim.task.skills import Home, Hold, Motion, Obs, Pick, Place, World
 
 ASSOCIATE_M = 0.025   # bookkeeping / scoring only: an observed block is the simulator block within this distance
 
 HELD_OPTIONS = ("return", "place_at", "deliver")
 SHORTAGE_OPTIONS = ("substitute", "reduce", "wait")
+NO_RETURN_HELD = ("deliver", "hold")          # no_return: the real arm only picks from storage into placement
 
 
 class TaskExecutor:
@@ -74,6 +79,14 @@ class TaskExecutor:
         self.delivery_seq: list = []              # colours of the verified deliveries, in order
         self.snapshot_mode = bool((cfg.get("observation") or {}).get("snapshot", False))
         self.camera = None                        # agentic_sim.task.camera.TaskCamera: observe with the cameras
+        self.pins: list = []                      # {"color", "ref"}: the next pick of that colour takes this block
+        self.pick_frame = {**DEFAULT_FRAME, **{k: v for k, v in (cfg.get("pick_ref") or {}).items()
+                                               if k in DEFAULT_FRAME}}
+        self.prefer_reachable = bool((cfg.get("pick_ref") or {}).get("prefer_reachable", False))
+        # no_return (task.yaml, default false): delivered blocks are never taken back and a held block the order does
+        # not need is delivered anyway or held until someone on site takes it; the chat reports, the user decides
+        self.no_return = bool(cfg.get("no_return", False))
+        self._reach_cache: dict = {}
         self._event_log = None
         if event_log:
             os.makedirs(os.path.dirname(event_log) or ".", exist_ok=True)
@@ -95,13 +108,22 @@ class TaskExecutor:
     def _over_cap(self, target: dict) -> dict:
         return {c: n for c, n in target.items() if n > self.max_per_color}
 
-    def order(self, counts: dict, mode: str = "total"):
+    def order(self, counts: dict, mode: str = "total", pick: dict | None = None):
         """Queue an order. Refused at once (ValueError, nothing queued) when the mode or a count is invalid or the
-        result would ask for more than max_per_color blocks of one colour."""
+        result would ask for more than max_per_color blocks of one colour.
+
+        pick {"color", "ref"} (agentic_sim.task.pick_ref.REFS): one block named by position ("左上角那顆紅色"); the
+        order must add exactly that one block. The block is chosen when it is picked, from the latest observation,
+        and checked against the arm's reach first; out of reach, the one is taken off the order (pick_rejected)."""
+        if pick is not None:
+            if pick.get("ref") not in REFS:
+                raise ValueError(f"pick ref must be one of {list(REFS)}")
+            if mode != "add" or {c: n for c, n in counts.items() if n} != {pick.get("color"): 1}:
+                raise ValueError("a pick order adds exactly one block of the picked colour (mode add)")
         over = self._over_cap(Ledger.compose(self.projected_target(), counts, mode))
         if over:
             raise ValueError(f"at most {self.max_per_color} blocks per colour; this order would give {over}")
-        self._inputs.append(("order", dict(counts), mode))
+        self._inputs.append(("order", dict(counts), mode, dict(pick) if pick else None))
 
     def answer(self, qid: int, choice: str, **kw):
         self._inputs.append(("answer", int(qid), str(choice), kw))
@@ -304,7 +326,7 @@ class TaskExecutor:
                 self.observe_at = self.t + float(self.cfg["shortage"]["recheck_s"])   # look again
                 return
         overs = led.overs()
-        if overs:
+        if overs and not self.no_return:
             c = next(iter(overs))
             b = [x for x, col in self.delivered_blocks.items() if col == c][-1]   # the last one delivered
             self.purpose = "retrieve"
@@ -329,6 +351,14 @@ class TaskExecutor:
         for c in needed:
             av = self.available(c)
             if av:
+                if self.prefer_reachable:     # opt-in (task.yaml pick_ref.prefer_reachable): reachable blocks first
+                    av.sort(key=lambda x: not self.reachable(self.block_xy(x)))
+                pin = next((p for p in self.pins if p["color"] == c), None)
+                if pin is not None:
+                    b = self._take_pin(pin, av)
+                    if b is None:
+                        return                  # out of reach: taken off the order; plan again on the new order
+                    av = [b] + [x for x in av if x != b]
                 self.restock_wait = False
                 self.next_recheck = None
                 if self.inventory is not None:
@@ -352,6 +382,57 @@ class TaskExecutor:
             self.emit("task_done", ledger=led.snapshot(), placement=self._counts_in("placement"))
 
     # ---- questions ---------------------------------------------------------------------------------------
+    # ---- blocks named by position ------------------------------------------------------------------
+    def block_xy(self, b: int) -> list:
+        """Where the executor believes block b lies: the last observation's pose (snapshot mode), else the simulator."""
+        pose = ((self.inventory or {}).get("poses") or {}).get(b) if self.snapshot_mode else None
+        xy = pose["xy"] if pose else self.obs.blocks[b][:2]
+        return [round(float(xy[0]), 4), round(float(xy[1]), 4)]
+
+    def reachable(self, xy) -> bool:
+        """A pick at xy is within the arm's reach: IK (the shared controller's limits and tilt) at the grasp height
+        and at the transport height. No motion; a check of the target only, not of the path."""
+        key = (round(float(xy[0]), 3), round(float(xy[1]), 3))
+        if key not in self._reach_cache:
+            m = self.cfg["motion"]
+            z = self.world.trays["storage"]["floor_top"] + self.world.edge / 2 + float(m["grasp_dz"])
+            # solved = reachable; a joint jump from the current pose is only a step-size limit (the motion gets
+            # there in steps), a workspace clamp means the target itself is outside
+            self._reach_cache[key] = all(self.ctrl.evaluate([key[0], key[1], h], 0.0).status in (STATUS_OK, STATUS_JUMP)
+                                         for h in (z, float(m["safe_z"])))
+        return self._reach_cache[key]
+
+    def _take_pin(self, pin: dict, av: list):
+        """Resolve a pinned pick among the available blocks of its colour. Returns the block, or None when the named
+        block is out of reach (then that one block is taken off the order and pick_rejected says why)."""
+        self.pins.remove(pin)
+        c = pin["color"]
+        blocks = [{"block": b, "xy": self.block_xy(b)} for b in av]
+        best, tie = resolve(blocks, pin["ref"], self.pick_frame, self.ctrl.pan[:2])
+        if not self.reachable(best["xy"]):
+            left = sum(self.reachable(x["xy"]) for x in blocks if x is not best)
+            self._write(self.ledger.set_order({c: max(0, self.ledger.target.get(c, 0) - 1)}, "set", self.t))
+            self.emit("pick_rejected", color=c, ref=pin["ref"], block=best["block"], xy=best["xy"],
+                      reason="unreachable", reachable_left=left)
+            return None
+        self.emit("pick_target", color=c, ref=pin["ref"], block=best["block"], xy=best["xy"], tie=tie)
+        return best["block"]
+
+    def storage_blocks(self) -> list:
+        """Blocks the next choice can take ({block, color, xy, reachable}): for the chat's early answers."""
+        if self.obs is None:
+            return []
+        if self.snapshot_mode:
+            seen = [(b, c) for c, bs in ((self.inventory or {}).get("blocks") or {}).items() for b in bs]
+        else:
+            seen = [(b, c) for b, c in enumerate(self.world.colors)]
+        out = []
+        for b, c in seen:
+            if b in self.available(c):
+                xy = self.block_xy(b)
+                out.append({"block": b, "color": c, "xy": xy, "reachable": self.reachable(xy)})
+        return out
+
     def _ask(self, kind: str, text: str, options, **data):
         self._qseq += 1
         self.question = {"id": self._qseq, "kind": kind, "rev": self.ledger.revision, "text": text,
@@ -362,15 +443,25 @@ class TaskExecutor:
     def _ask_held(self, b: int):
         c = self.color(b)
         self._start(Hold, block=b)
+        if self.no_return:
+            return self._ask("held_item", f"Holding 1 {c}, which the new order does not need. Deliver it anyway "
+                             f"(deliver) or hold it here until it is taken off the gripper (hold)?",
+                             NO_RETURN_HELD, block=b, color=c)
         self._ask("held_item", f"Holding 1 {c}, which the new order does not need. Return it to its place "
                   f"(return), put it somewhere else (place_at x y), or deliver it anyway (deliver)?",
                   HELD_OPTIONS, block=b, color=c)
 
     def _ask_full(self, b: int):
         self._start(Hold, block=b)
+        if self.no_return:
+            return self._ask_removal(b)
         self._ask("held_item", f"No free slot in the placement tray for the {self.color(b)} block in the gripper. "
                   f"Return it (return) or put it somewhere else (place_at x y)?", ("return", "place_at"),
                   block=b, color=self.color(b))
+
+    def _ask_removal(self, b: int):
+        self._ask("removal", f"Holding the {self.color(b)} block until it is taken off the gripper. "
+                  f"Say when it is gone (removed).", ("removed",), block=b, color=self.color(b))
 
     def _ask_shortage(self, needed: dict):
         led = self.ledger
@@ -404,14 +495,14 @@ class TaskExecutor:
         while self._inputs:
             item = self._inputs.pop(0)
             if item[0] == "order":
-                self._apply_order(item[1], item[2])
+                self._apply_order(item[1], item[2], item[3])
             elif item[0] == "standby":
                 self.standby_requested = True
                 self.emit("standby_requested", holding=self.holding)
             else:
                 self._apply_answer(*item[1:])
 
-    def _apply_order(self, counts, mode):
+    def _apply_order(self, counts, mode, pick=None):
         over = self._over_cap(Ledger.compose(self.ledger.target, counts, mode))
         if over:   # checked again here: something else (a shortage answer) may have changed the order meanwhile
             self.emit("order_rejected", mode=mode, counts=dict(counts),
@@ -419,6 +510,10 @@ class TaskExecutor:
             return
         e = self.ledger.set_order(counts, mode, self.t)
         self._write(e)
+        if mode == "total":
+            self.pins = []                        # a whole new order: earlier "that one" picks no longer apply
+        if pick:
+            self.pins.append({"color": pick["color"], "ref": pick["ref"]})
         self.restock_wait = False
         if self.snapshot_mode and self.inventory is not None:
             # the order changed (e.g. a substitute colour was accepted): what was seen before it may be out of date,
@@ -430,7 +525,7 @@ class TaskExecutor:
         if q is not None and q["kind"] == "shortage":
             self.emit("question_dropped", id=q["id"], reason="order_changed")
             self.question = None
-        if q is not None and q["kind"] == "held_item" and self.ledger.need(q["color"]) > 0:
+        if q is not None and q["kind"] in ("held_item", "removal") and self.ledger.need(q["color"]) > 0:
             self.emit("question_dropped", id=q["id"], reason="order_changed")
             self.question = None
             self.purpose = "deliver"
@@ -479,7 +574,19 @@ class TaskExecutor:
             return
         self.emit("answer", id=qid, choice=choice, **kw)
         led = self.ledger
+        if q["kind"] == "removal":     # taken off the gripper on site: open, it is no longer ours to place
+            b = q["block"]
+            self.question, self.holding, self.purpose = None, None, None
+            self.skipped.add(b)
+            self.emit("block_removed", block=b, color=q["color"])
+            if self.skill is not None and self.skill.name == "hold":
+                self.skill.cancel("answered", led.revision)
+            self.standby_requested = True   # Home opens the gripper (in simulation the block drops off the trays)
+            return
         if q["kind"] == "held_item":
+            if choice == "hold":
+                self.question = None
+                return self._ask_removal(q["block"])
             if choice == "place_at":
                 xy = kw.get("xy")
                 if not xy or len(xy) != 2:
@@ -591,7 +698,9 @@ class TaskExecutor:
             if (over > 0 or (extra > 0 and led.delivered.get(c, 0) > led.target.get(c, 0))) and key not in self._reported_over:
                 self._reported_over.add(key)
                 self.emit("over_delivery", color=c, over=over, accepted=extra, delivered=led.delivered.get(c, 0),
-                          target=led.target.get(c, 0), action="retrieve" if over > 0 else "kept (user approved)")
+                          target=led.target.get(c, 0),
+                          action=("left_for_operator" if self.no_return else "retrieve") if over > 0
+                          else "kept (user approved)")
 
     def _track_cancel(self):
         pc = self._pending_cancel
@@ -621,6 +730,15 @@ class TaskExecutor:
                 "question": self.question, "placement": self._counts_in("placement") if self.obs else {},
                 "storage": self._counts_in("storage") if self.obs else {},
                 "colors_in_scene": sorted(set(self.world.colors)), "events": len(self.events)}
+
+    def pick_view(self) -> dict:
+        """For task_state only (not the per-frame panel): the blocks a position can name, the frame and the pan axis.
+        Nothing observed yet: no block list (the chat then leaves the check to the executor)."""
+        out = {"pins": [dict(p) for p in self.pins], "pick_frame": dict(self.pick_frame),
+               "pan_xy": [float(x) for x in self.ctrl.pan[:2]]}
+        if self.obs is not None:
+            out["storage_blocks"] = self.storage_blocks()
+        return out
 
     def panel_lines(self) -> list:
         """(text, kind) lines for the simulator panels; kind: text / dim / ask."""

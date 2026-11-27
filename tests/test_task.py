@@ -75,8 +75,14 @@ class FakeWorld:
         self.attached = {}          # block -> offset from the EE
         self.t = 0.0
         self.q_prev = self.ctrl.state.q_cmd.copy()
-        self.runner = TaskRunner(self.ctrl, SCENE, lay.init_pos, colors, DT, log=lambda m: None, scenario=scenario)
+        self.runner = TaskRunner(self.ctrl, SCENE, lay.init_pos, colors, DT, log=lambda m: None, scenario=scenario,
+                                 world_ops=self)
         self.ex = self.runner.ex
+
+    def remove_block(self, b: int):
+        """As the MuJoCo session: the block leaves the scene (parked far from both trays)."""
+        self.attached.pop(b, None)
+        self.blocks[b] = np.array([-1.2, -0.6 + 0.06 * b, 0.4])
 
     def ee(self):
         return self.chain.ee_pose_mount(self.ctrl.state.q_cmd)[:3, 3].copy()
@@ -252,7 +258,8 @@ def test_shortage_reduce_and_wait():
 
 
 @pytest.mark.parametrize("name", ["change_between_picks", "change_during_descend", "hold_return", "hold_deliver",
-                                  "retrieve_over_delivery", "shortage_substitute"])
+                                  "retrieve_over_delivery", "shortage_substitute", "no_return_over_delivery",
+                                  "no_return_hold"])
 def test_scenarios_pass_in_the_fake_world(name):
     path = f"configs/tasks/{name}.yaml"
     w = FakeWorld(load(path)["blocks"], scenario=path)

@@ -88,6 +88,13 @@ def test_templates():
     e = {"kind": "over_delivery", "color": "red", "over": 1, "delivered": 2, "target": 1}
     assert "取回" in W.event(e)
     assert W.event({"kind": "phase"}) is None
+    assert W.event({"kind": "skill_start", "skill": "pick"}) is None      # progress is a separate line kind
+    assert W.progress({"kind": "skill_start", "skill": "pick", "color": "red", "nth": 2, "purpose": "deliver"}) \
+        == "正在夾取第二顆紅色積木…"
+    assert "取回" in W.progress({"kind": "skill_start", "skill": "pick", "color": "blue", "purpose": "retrieve"})
+    assert "放回原位" in W.progress({"kind": "skill_start", "skill": "place", "color": "red", "purpose": "return"})
+    assert W.progress({"kind": "skill_start", "skill": "home"}) == "回到待命位置…"
+    assert W.progress({"kind": "order"}) is None
     q = {"kind": "shortage", "id": 2, "delivered": {"red": 1, "blue": 1}, "missing": {"blue": 1},
          "available": {"red": 2, "yellow": 1}, "options": ["substitute", "reduce", "wait"]}
     t = W.question(q)
@@ -151,6 +158,9 @@ def test_hold_return_dialogue_replay():
     run_until(w, lambda w: w.ex.state == "done")
     reports += agent.poll_reports()
     assert any(r.startswith("完成") for r in reports)
+    prog = [r for r in reports if r.startswith("[進度]")]
+    assert "[進度] 正在夾取第一顆紅色積木…" in prog and "[進度] 把紅色積木放回原位…" in prog
+    assert "[進度] 正在夾取第一顆藍色積木…" in prog and prog[-1] == "[進度] 回到待命位置…"
     led = w.ex.ledger.snapshot()
     assert led["delivered"] == {"red": 1, "blue": 2} and led["revision"] == 2 and led["done"]
     sent = [a["sent"] for r in agent.transcript if "attempts" in r for a in r["attempts"] if "sent" in a]
@@ -719,3 +729,53 @@ def test_model_service_down_scores_as_service_failure():
     agent = ChatAgent(StubServer(ST), Down(), CFG)
     agent.handle("手臂往左移五公分")
     assert verdict({"expect": "reject"}, agent.transcript[-1]) == "service_failure"
+
+
+# ---- one block named by position ("左上角那顆紅色") --------------------------------------------------------
+def test_plan_pick_answers_from_the_block_list():
+    reds4 = load("configs/chat/utterances.yaml")["presets"]["reds4"]
+    P = lambda ref, c="red": plan(I("order_pick", [(c, 1)], pick_ref=ref), reds4, W, 8)   # noqa: E731
+    a = P("leftmost")
+    assert a.kind == "send" and a.args == {"counts": {"red": 1}, "mode": "add", "pick": {"color": "red", "ref": "leftmost"}}
+    assert a.text == "好的，夾最左邊那顆紅色。"
+    a = P("bottom_right")                                      # block 3: out of reach, others are not
+    assert a.kind == "say" and a.reply == "ask" and "夾不到" in a.text and "另外有 3 顆紅色" in a.text
+    assert P("top_left", "purple").reply == "reject"           # not in the scene
+    assert P("top_left", "yellow").text == "備料盤裡已經沒有黃色積木了。"
+    assert P(None).reply == "ask"                              # position words outside the list
+    tie = dict(reds4, pan_xy=[0.0, 0.0], storage_blocks=[{"block": 0, "color": "red", "xy": [0.2, 0.1], "reachable": True},
+                                      {"block": 1, "color": "red", "xy": [0.2, -0.1], "reachable": True}])
+    assert plan(I("order_pick", [("red", 1)], pick_ref="farthest"), tie, W, 8).reply == "ask"
+    # no task yet: no block list, sent; the executor checks when it picks
+    assert plan(I("order_pick", [("red", 1)], pick_ref="top_left"), EMPTY_ST, W, 8).kind == "send"
+
+
+EMPTY_ST = {"active": False, "colors_in_scene": ["blue", "red", "yellow"],
+            "ledger": {"revision": 0, "target": {}, "delivered": {}, "need": {}, "over": {}}}
+
+
+def test_pick_dialogue_replay():
+    w = FakeWorld(["red", "red", "red", "blue"])
+    srv = FakeServer(w)
+    llm = ReplayLLM([I("order_pick", [("red", 1)], pick_ref="top_left")])
+    agent = ChatAgent(srv, llm, dict(CFG, pick_by_position=True))
+    assert "order_pick" in agent.schema["properties"]["intent"]["enum"] and "order_pick" in agent.system
+    assert agent.handle("我要左上角那顆紅色") == ["好的，夾左上角那顆紅色。"]
+    run_until(w, lambda w: w.ex.state == "done")
+    rep = agent.poll_reports()
+    assert "[進度] 找到左上角那顆紅色積木，準備夾取…" in rep
+    assert list(w.ex.delivered_blocks) == [1]                  # the red farthest from the base (+x)
+    sent = [a["sent"] for r in agent.transcript if "attempts" in r for a in r["attempts"] if "sent" in a]
+    assert sent[0]["args"]["pick"] == {"color": "red", "ref": "top_left"}
+
+
+def test_pick_rejected_report():
+    e = {"kind": "pick_rejected", "color": "red", "ref": "bottom_right", "reachable_left": 2}
+    assert W.event(e) == "右下角那顆紅色積木在手臂範圍外，夾不到，已從需求拿掉這一顆。另外還有 2 顆夾得到。"
+
+
+def test_default_config_keeps_the_measured_schema_and_prompt():
+    """pick_by_position is off by default: the model sees exactly what the utterance table was measured with."""
+    agent = ChatAgent(lambda *a, **k: {}, ReplayLLM([]), CFG)
+    assert "order_pick" not in agent.schema["properties"]["intent"]["enum"]
+    assert "pick_ref" not in agent.schema["properties"] and "order_pick" not in agent.system

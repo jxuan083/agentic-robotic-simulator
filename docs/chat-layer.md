@@ -85,7 +85,7 @@ uv run tools/chat.py --backend mujoco --load --block-colors red,red,red,blue,blu
 
 下單時若說了「X 先放」「先放 X」，程式把該色排在需求第一（帳本依顏色順序取料），不只依賴模型輸出的順序。決賽缺料問題只有改色與等待兩個選項時，以「一藍一紅已放好，還缺一紅。要改成黃的，還是等你補紅？」的句型提問；觀測看不清時回報「看不清」，不提問。
 
-主動回報（`[系統]`）：需求生效、需要選擇（持物、缺料）、問題取消、多交、完成、異常（回答未被接受、結果無法核對、掉落、夾取失敗、動作失敗）。一般的移動過程只在模擬器面板顯示。
+主動回報（`[系統]`）：需求生效、需要選擇（持物、缺料）、問題取消、多交、完成、異常（回答未被接受、結果無法核對、掉落、夾取失敗、動作失敗）。每個動作開始時另有進度行（`[進度]`，`configs/chat.yaml` 的 `progress_reports`）：「正在夾取第二顆紅色積木…」「把紅色積木放回原位…」「正在觀察備料盤…」「回到待命位置…」。進度行由執行器的 `skill_start` 事件套固定模板（`Words.progress`），不經模型；連續相同的進度（缺料等待時反覆觀測）只顯示一次。階段（下降、閉爪等）仍只在模擬器面板顯示。
 
 ## 驗收
 
@@ -239,7 +239,7 @@ CHAT_ARGS="--base-url http://127.0.0.1:8001/v1 --model Qwen3.5-9B-Q4_K_M" tools/
 
 ## 已知問題與限制
 
-- 只有命令列，沒有語音與聊天視窗。
+- 語音只做輸入（按住說話），沒有語音回覆；網頁版語音的實機場地噪音未測。
 - 模型的判斷不是 100% 正確；誤判時程式的檢查能擋下不合法的命令，但擋不下「合法但不是使用者要的」命令。語句表的誤執行為 0，只代表這份表的結果。
 - 回報只用模板，模型不會改寫；英文語句沒有測。
 - 模型與模擬器共用一張 GPU；Isaac 與模型同時跑時要留意記憶體（`LLM_GPU_UTIL`）。
@@ -266,3 +266,59 @@ CHAT_ARGS="--base-url http://127.0.0.1:8001/v1 --model Qwen3.5-9B-Q4_K_M" tools/
 ## 聊天視窗（#11）
 
 命令列之外，另有獨立的 Tk 聊天視窗 `tools/chat_window.py`，規則相同（同一個 `ChatAgent`：追問綁定題號、重開時顯示待答問題）；回答綁定視窗實際顯示的題號（輸入框從空白變有內容時記下，打字、輸入法、貼上都算）。一鍵入口 `tools/lab.py` 會一起開好模型服務、模擬器與聊天視窗，見 [lab-entry.md](lab-entry.md)。
+
+## 聊天網頁
+
+`tools/chat_web.py` 把同一個 `ChatAgent` 放到瀏覽器（只用標準函式庫：`http.server`＋server-sent events；頁面 `tools/chat_web/index.html` 不載入任何 CDN，場地沒網路也能用）。
+
+```bash
+uv run tools/chat_web.py --backend mujoco [--load --block-colors red,red,blue,yellow] [--stt-model small]
+uv run tools/lab.py --web [--stt-model small]     # 一鍵入口改開網頁（自動開瀏覽器，預設 http://127.0.0.1:8765）
+```
+
+| 區塊 | 內容 |
+|---|---|
+| 頂列 | 模擬器、模型與連線狀態；「暫停手臂」「繼續」送模擬器的 `pause`／`resume`（與面板按鈕相同，聊天本身仍不控制手臂） |
+| 備料盤小地圖 | 任務狀態有 `storage_blocks` 時顯示：每顆積木的顏色與位置，方向和「左上」的定義一致（`configs/task.yaml` 的 `pick_ref`），夾不到的畫虛線 |
+| 待回答卡片 | 目前的問題，附快速回覆（依問題選項：放回去、照樣送出、等補料、不用補了、改成<替代色>）；快速回覆與打字一樣經過模型與程式檢查 |
+| 對話 | 使用者、助理、`[系統]` 回報分色顯示；`[進度]` 以時間軸顯示，最新一步亮綠點 |
+| 輸入 | Enter 送出；處理中鎖住，一次一句 |
+| 語音 | 按住麥克風說話。啟動時給 `--stt-model` 用 faster-whisper（預設 CPU，不占模擬器的 GPU；需另裝 `faster-whisper`）；沒給時改用瀏覽器內建辨識（Chrome，需連網）。辨識結果只填進輸入框，由使用者確認後送出 |
+
+回答綁定與 Tk 視窗相同：頁面在輸入框從空白變有內容時記下當時顯示的題號，送出時帶上（`shown`），另帶目前畫面上的題號（`on_screen`）；快速回覆綁定按下當時畫面上的題號。重新整理頁面會重播整段對話。驗證：`tests/test_chat_web.py`（假世界＋重播模型：持物放回整段、未顯示的問題不送出、一次一句、HTTP 端點與事件串流）。
+
+## 指定某一顆（位置）
+
+**預設關閉**（`configs/chat.yaml` 的 `pick_by_position: false`）：關閉時模型拿到的 schema 與提示詞和語句表實測時逐字相同，原有 49 句的結果不受影響；用真模型跑過 `tools/chat_eval.py`（含 `pick` 組）後再打開。
+
+「我要左上角那顆紅色」「拿最左邊的藍色」「離手臂最近的那顆黃的」：意圖 `order_pick`，模型只填顏色與位置代號（`pick_ref`：`top_left`、`top_right`、`bottom_left`、`bottom_right`、`leftmost`、`rightmost`、`farthest`、`nearest`），不輸出座標；說不出清單內的位置（「中間那顆」「第三顆」）就反問。送出 `task_order {counts: {red: 1}, mode: add, pick: {color: red, ref: top_left}}`。
+
+| 誰 | 做什麼 |
+|---|---|
+| 位置換算（`agentic_sim/task/pick_ref.py`） | 同色候選以中心為原點打分；「上／左」對應的基座座標方向在 `configs/task.yaml` 的 `pick_ref`。**預設是站在手臂後方往前看（上 = +x，左 = +y），暫定，要和現場操作者的視角對齊**；前兩名分數差小於 `tie_m` 視為說不清楚 |
+| 可達判斷（`TaskExecutor.reachable`） | 共用控制器的 IK（關節限制、傾斜上限），夾取高度與搬運高度都要解得出；不檢查路徑。一般選料（沒有指定）預設維持原本順序；`pick_ref.prefer_reachable: true` 才改成先挑夾得到的 |
+| 聊天先答（`plan_pick`，`task_state` 有 `storage_blocks` 時；這些欄位只在 `task_state` 指令計算，模擬器面板每幀讀的 `view()` 不變） | 場景沒有這個顏色：拒絕；備料盤沒有了：拒絕；兩顆差不多：反問；那顆夾不到：說明並問要不要改夾其他同色（都夾不到則拒絕） |
+| 執行器確認（取料當下） | 依最新觀測（相機盤點或模擬真值）重新決定是哪一顆並檢查可達；找到時發 `pick_target`（進度行「找到左上角那顆紅色積木，準備夾取…」），夾不到時把這一顆從需求拿掉並發 `pick_rejected`（回報「…夾不到，已從需求拿掉這一顆」）。新的完整需求（total）會清掉尚未執行的指定 |
+
+驗證：`tests/test_pick_ref.py`（位置換算、執行器夾到指定那顆、夾不到時拿掉且不會誤夾、參數檢查）、`tests/test_chat.py`（先答各情況、指定整段重播、回報模板）。語句表新增 `pick` 組 6 句與 `reds4` 狀態，**還沒用真模型跑過**，提示詞沒有依這些句子調整。
+
+限制：實機還沒有 D455 到基座的外參，實機上的 `storage_blocks` 位置尚不存在；目前只在模擬（相機盤點或真值）成立。
+
+## 決賽規則：不搬回，只回報（no_return）
+
+依 `docs/real-progress.md`〈決賽策略更動〉：實機手臂只會從粉盤夾到米盤，所以放出去的方塊不會再夾回來。打開方式是同時把 `configs/task.yaml` 與 `configs/chat.yaml` 的 `no_return` 設成 `true`。兩者預設都是 `false`，此時行為與原本相同。
+
+| 情況 | 預設（原本） | `no_return: true` |
+|---|---|---|
+| 多交（改單前已放出） | 從米盤取回粉盤 | 不取回。聊天窗回報「放置盤的紅色比需求多 1 顆，手臂不會夾回。請把多的取走，或改需求把它算進去。」帳本記為多交（`over`） |
+| 改單時夾著用不到的方塊 | 放回原位／放到指定位置／照樣送出 | 照樣送出（`deliver`）／停住等人取下（`hold`）。選 `hold` 後再問一題（`removal`），使用者說「取下了」（`removed`）後才鬆爪繼續 |
+| 米盤沒空位 | 放回原位／放到指定位置 | 直接停住等人取下 |
+| 停住等取下時新需求用得到這顆 | 不適用 | 取消提問，直接送出 |
+
+- 模擬端在 `removed` 時把方塊移出場景（MuJoCo 的 `remove_block`）。Isaac 沒有這個介面，鬆爪後方塊會掉在原地。
+- 打開 `no_return` 時，模型多了 `hold`／`removed` 兩個選項和一行規則，schema 與提示詞會跟量測時不同，上場前要用 `tools/chat_eval.py` 在真模型上重測。關閉時與 `main` 逐字相同（已比對）。
+- 驗收：`configs/tasks/no_return_over_delivery.yaml`、`configs/tasks/no_return_hold.yaml`。原本的 `retrieve_over_delivery`、`hold_return` 不動。測試在 `tests/test_no_return.py`。
+
+## 相容性（feat/chat-web-ui）
+
+原有入口與行為不變：`tools/chat.py`、`tools/chat_window.py`、`tools/lab.py`（不加 `--web`）照舊；`task_order` 不帶 `pick` 時與原本相同（協定驗證 `server/protocol.py` 允許選填的 `pick`）；`TaskExecutor.view()` 的欄位不變；預設設定下模型的 schema／提示詞與 main 逐字相同。唯一預設開啟的新行為是 `[進度]` 行（`progress_reports: false` 可關）。Python 3.11 全套測試與 main 同樣通過（未裝感知套件的 3 個測試兩邊都失敗）。

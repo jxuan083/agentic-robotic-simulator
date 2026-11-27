@@ -6,6 +6,7 @@
               order.max_per_color blocks of one colour, counting orders still queued.
   task_answer {id, choice, color?, xy?, request_id?}                       reply to the open question
   task_state  {}                                              ledger, holding, skill / phase, question
+  task_order  {..., pick?: {color, ref}}                       one block named by position (agentic_sim.task.pick_ref)
   task_events {since?}                                        important executor events from index `since` on
   task_stop   {}                                              give the arm back to keyboard / mouse
 
@@ -20,8 +21,8 @@ from __future__ import annotations
 from agentic_sim.task.ledger import MODES
 
 
-# events a client (chat layer) needs; phase / skill_start events stay on the simulator panel
-REPORT_EVENTS = ("order", "order_rejected", "question", "question_dropped", "answer", "answer_rejected", "over_delivery", "verified",
+# events a client (chat layer) needs; phase events stay on the simulator panel. skill_start: the chat's progress lines
+REPORT_EVENTS = ("skill_start", "pick_target", "pick_rejected", "order", "order_rejected", "question", "question_dropped", "answer", "answer_rejected", "over_delivery", "block_removed", "verified",
                  "uncertain", "dropped", "block_skipped", "task_done", "skill_done")
 
 
@@ -44,10 +45,10 @@ class TaskCommands:
             raise RuntimeError(f"acceptance run {self.job['scenario']} is in progress")
         return self.session
 
-    def cmd_task_order(self, counts, mode="total", request_id=None):
-        return self._dedup(request_id, lambda: self._task_order(counts, mode))
+    def cmd_task_order(self, counts, mode="total", request_id=None, pick=None):
+        return self._dedup(request_id, lambda: self._task_order(counts, mode, pick))
 
-    def _task_order(self, counts, mode):
+    def _task_order(self, counts, mode, pick=None):
         s = self._task_session()
         if mode not in MODES:
             raise ValueError(f"mode must be one of {list(MODES)}")
@@ -60,12 +61,13 @@ class TaskCommands:
         known = set(s.task.ex.world.colors)
         unknown = [c for c, n in counts.items() if n > 0 and c not in known]
         try:
-            s.task.ex.order(counts, mode)
+            s.task.ex.order(counts, mode, pick=pick)
         except ValueError:
             if started:          # a refused first order does not take the arm away from the operator
                 s.stop_task()
             raise
-        out = {"queued": True, "mode": mode, "counts": counts, "colors_in_scene": sorted(known)}
+        out = {"queued": True, "mode": mode, "counts": counts, "colors_in_scene": sorted(known),
+               **({"pick": pick} if pick else {})}
         if unknown:
             out["note"] = f"no block of colour {unknown} in this scene: the executor will report a shortage"
         return out
@@ -92,7 +94,7 @@ class TaskCommands:
                 stock[c] = stock.get(c, 0) + 1
             return {"active": False, "colors_in_scene": sorted(stock), "storage": stock,
                     "ledger": {"revision": 0, "target": {}, "delivered": {}, "need": {}, "over": {}}}
-        return {"active": True, **s.task.ex.view(), "cancels": s.task.ex.cancels}
+        return {"active": True, **s.task.ex.view(), **s.task.ex.pick_view(), "cancels": s.task.ex.cancels}
 
     def cmd_task_events(self, since=0):
         self._require_session()
