@@ -107,6 +107,10 @@ class RealArm:
         self.in_zone = in_zone
         self.slot_poses = beige_slots(self.cam, self.quads)          # [(xy m, tray yaw)] P1-P4
         self.slots = [tuple(float(v) for v in p) for p, _ in self.slot_poses]
+        from agentic_sim import real_plush
+        self.plush_slot_pose = real_plush.slot(self.cam, self.quads)  # beige P0 (configs/real_plush.json)
+        self.plush_slot = tuple(float(v) for v in self.plush_slot_pose[0])
+        self.plush_policy, self.plush_grasp_z = None, None
         self.driver = Driver(follower, term, run_dir(Path(args.route), "task"), hz=hz, drive_leader=False)
         self.driver.gripper_speed = 150.0
         self.placer = Placer(self.driver, self.model, self.corr, speed=75.0)
@@ -147,14 +151,16 @@ class RealArm:
 
     def scan(self):
         from auto_collect import snapshot
-        from agentic_sim.real_d455 import detect, open_aligned
+        from agentic_sim.real_d455 import open_aligned
+        from agentic_sim.real_plush import scene
         for attempt in range(2):
             try:
                 read, _, stop = open_aligned(self.args.serial)
                 try:
-                    blocks = snapshot(read, self.cam, self.quads)
+                    plushes = []
+                    blocks = snapshot(read, self.cam, self.quads, plushes=plushes) + plushes
                     bgr, depth = read()
-                    info = detect(bgr, depth, self.cam, self.quads)[2]
+                    info = scene(bgr, depth, self.cam, self.quads)[3]
                 finally:
                     stop()
                 break
@@ -167,6 +173,8 @@ class RealArm:
 
     def pick(self, block, phase=None):
         from agentic_sim.real_place import HELD_PCT, OPEN_PCT
+        if block["color"] == "plush":
+            return self._pick_plush(block, phase)
         phase and phase("start")
         self._to_start()
         phase and phase("grasp")
@@ -179,8 +187,50 @@ class RealArm:
             return False, {"reason": err or "missed", "gripper_pct": held}
         return True, {"gripper_pct": round(float(held), 1)}
 
+    def _pick_plush(self, block, phase=None):
+        """The plush toy by its ACT policy (agentic_sim.real_policy), from the start pose to a stable lift; the
+        condition and the marker are made as the converter made them for its demonstrations."""
+        from agentic_sim.real_dataset import condition
+        from agentic_sim.real_hardware import load_profile, open_camera
+        from agentic_sim.real_place import OPEN_PCT
+        from agentic_sim.real_policy import ActPolicy, LatestFrames, run
+        from contextlib import ExitStack
+        if not self.args.plush_policy:
+            return False, {"reason": "no plush ACT checkpoint (--plush-policy)"}
+        if self.plush_policy is None:
+            phase and phase("load")
+            self.plush_policy = ActPolicy(self.args.plush_policy)
+        x, y, yaw = float(block["x"]), float(block["y"]), float(block.get("yaw", 0.0)) % math.pi
+        target = {"x_mm": x * 1000, "y_mm": y * 1000, "yaw_deg": math.degrees(yaw), "yaw_fold": 2}
+        u, v = self.cam.project([[x, y, float(block.get("z_top", 0.1))]])[0]
+        phase and phase("start")
+        self._to_start()
+        phase and phase("grasp")
+        with ExitStack() as stack:
+            readers = {name: stack.enter_context(open_camera(spec))[0]
+                       for name, spec in load_profile(self.args.config)["cameras"].items()}
+            cams = LatestFrames(readers)
+            stack.callback(cams.close)
+            out = run(self.driver, self.plush_policy, cams.frames,
+                      condition=condition({"target": {"d455": target}}, "target"), marks={"target": [u, v]},
+                      ee_z=lambda q: float(self.ee_of(q)[2]), phase=phase)
+        self.where = "lift"
+        self.plush_grasp_z = out["grasp_z"]
+        if not (out["ok"] and out["held"]):
+            phase and phase("retreat")
+            self.placer.set_grip(OPEN_PCT, "張開")
+            self.home(open_gripper=True)
+            return False, {"reason": "missed" if out["ok"] else f"policy {out['why']}", "policy": out}
+        return True, {"gripper_pct": out["gripper_pct"], "policy": out}
+
+    def ee_of(self, q):
+        p = self.model.ee(q)
+        return p - self.corr(p)
+
     def place(self, xy, phase=None):
         from agentic_sim.real_place import CLOSED_PCT, OPEN_PCT, hold_while
+        if math.hypot(xy[0] - self.plush_slot[0], xy[1] - self.plush_slot[1]) < 0.01:
+            return self._place_plush(phase)
         k = int(np.argmin([math.hypot(xy[0] - s[0], xy[1] - s[1]) for s in self.slots]))
         slot_xy, yaw = self.slot_poses[k]
         phase and phase("transport")
@@ -192,6 +242,27 @@ class RealArm:
             self.home(open_gripper=True)
             return f"P{k + 1}: {plan}（方塊已由人取下）"
         self.placer.execute_place(plan, f"米盤 P{k + 1}")
+        self.where = "slot"
+        phase and phase("home")
+        self.home(open_gripper=True)
+        return None
+
+    def _place_plush(self, phase=None):
+        """Holding the plush: carried with its bottom over the rims, released at P0 from the height it was taken."""
+        from agentic_sim.real_place import OPEN_PCT, hold_while
+        from agentic_sim.real_plush import place_heights
+        slot_xy, yaw = self.plush_slot_pose
+        phase and phase("transport")
+        current = dict(self.driver.target)
+        heights = place_heights(max(self.plush_grasp_z or 0.05, 0.0))
+        plan = hold_while(self.driver, lambda: self.placer.plan_place(slot_xy, yaw, yaw, current["gripper"], current,
+                                                                       **heights))
+        if isinstance(plan, str):
+            self.term.choose(f"放置 P0 沒有執行（{plan}）。扶住玩偶後按 o 張爪，玩偶拿走", {"o": "張爪"})
+            self.placer.set_grip(OPEN_PCT, "張開")
+            self.home(open_gripper=True)
+            return f"P0: {plan}（玩偶已由人取下）"
+        self.placer.execute_place(plan, "米盤 P0")
         self.where = "slot"
         phase and phase("home")
         self.home(open_gripper=True)
@@ -266,6 +337,8 @@ def main(argv=None) -> int:
     ap.add_argument("--follower-id", default="my_awesome_follower_arm")
     ap.add_argument("--standby-after", type=int, default=None,
                     help="finals: after this many deliveries wait at park until the operator presses c (e.g. 2)")
+    ap.add_argument("--plush-policy", default=None,
+                    help="ACT checkpoint (…/pretrained_model) for the plush toy; without it a plush order fails")
     ap.add_argument("--events", default=str(ROOT / f"outputs/task/real-{time.strftime('%y%m%d-%H%M%S')}.jsonl"))
     args = ap.parse_args(argv)
     port = int(load(ROOT / "configs/sim_server.yaml")["servers"]["real"]["port"])

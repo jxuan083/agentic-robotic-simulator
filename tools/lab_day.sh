@@ -246,7 +246,8 @@ PYEOF
     else
       need "$ROUTE" "$TRAYS"
       "$PY" tools/real_task_server.py --config "$CONFIG" --route "$ROUTE" --trays "$TRAYS" --serial "$D455" \
-          ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} ${STANDBY_AFTER:+--standby-after "$STANDBY_AFTER"} "$@"
+          ${POSE:+--pose "$POSE"} ${CORR:+--corr "$CORR"} ${STANDBY_AFTER:+--standby-after "$STANDBY_AFTER"} \
+          ${PLUSH_POLICY:+--plush-policy "$PLUSH_POLICY"} "$@"
     fi ;;
   chat-web)
     # Chat page (progress, quick replies, pause / resume, push-to-talk) on --backend real; open http://127.0.0.1:8765
