@@ -60,6 +60,10 @@ MOVE_SPEED = 75.0        # deg/s for the unrecorded IK moves (reset) and the pro
 # lift 1.2-2.2 s; fastest joint peak 52-85 deg/s; 3 cm short of the block the hand is still ~8.5 cm above its centre;
 # lift 6-8.6 cm.
 STYLE_OFFSET_SD_MM, STYLE_OFFSET_MAX_MM = 5.0, 10.0
+# Radial (along base -> block): 11/27 the three scripted misses were all blues grasped 5-10 mm towards the base
+# (S0003 -5, S0009 -7, S0015 -10 mm; r 251-264 mm), every grasp at -4.5 mm or more held; the operator's blue grasps
+# sat -4.8..+6.9 mm (mean +1.9). So radial N(+1.5, 4) within [-3, +10]; tangential as before.
+STYLE_RADIAL_MM = (1.5, 4.0, -3.0, 10.0)      # mean, sd, min, max
 STYLE_YAW_SD_DEG, STYLE_YAW_MAX_DEG = 10.0, 20.0
 STYLE_OPEN_PCT = (26.0, 32.0)
 STYLE_CLOSE_PCT = 13.5        # command, like the operator; an empty grasp reads ~13.5, a held block 16.7-17.7
@@ -110,6 +114,33 @@ def peak_seconds(points, peak=STYLE_PEAK_DEG_S):
     body = [k for k in points[0] if k != "gripper"]
     travel = max(sum(abs(b[k] - a[k]) for a, b in zip(points, points[1:])) for k in body)
     return 1.875 * travel / peak
+
+
+FAILURE_LOG = ROOT / "outputs/d455/auto_failures.jsonl"
+
+
+def leader_connected(config) -> bool:
+    """The SO-101 leader of the profile is plugged in (its serial device exists and is accessible)."""
+    import os
+    from agentic_sim.real_hardware import load_profile
+    try:
+        (_, pair), = load_profile(config)["arms"].items()
+        port = Path(pair["leader"]["port"]).expanduser()
+        return port.is_char_device() and os.access(port, os.R_OK | os.W_OK)
+    except (KeyError, ValueError, OSError):
+        return False
+
+
+def log_failure(session, episode, target, style, held, why, path=None):
+    """Where scripted grasps fail (tools/failure_map.py draws them): mount-frame target, colour, style, reason."""
+    path = Path(path or FAILURE_LOG)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "session": str(session), "episode": episode,
+                             "color": target["color"], "x": round(target["x"], 4), "y": round(target["y"], 4),
+                             "r_mm": round(math.hypot(target["x"], target["y"]) * 1000, 1),
+                             "yaw_deg": round(math.degrees(target["yaw"]), 1), "gripper_after_lift": held,
+                             "why": why, "style": style}, ensure_ascii=False) + "\n")
 
 
 def snapshot(read, cam, quads, frames=6):
@@ -216,7 +247,8 @@ class Episodes:
         r = self.rng
         clip = lambda v, m: float(np.clip(v, -m, m))  # noqa: E731
         u = lambda lo_hi: float(r.uniform(*lo_hi))  # noqa: E731
-        return {"offset_mm": [clip(r.normal(0, STYLE_OFFSET_SD_MM), STYLE_OFFSET_MAX_MM),
+        mean, sd, lo, hi = STYLE_RADIAL_MM
+        return {"offset_mm": [float(np.clip(r.normal(mean, sd), lo, hi)),
                               clip(r.normal(0, STYLE_OFFSET_SD_MM), STYLE_OFFSET_MAX_MM)],   # radial, tangential
                 "yaw_err_deg": clip(r.normal(0, STYLE_YAW_SD_DEG), STYLE_YAW_MAX_DEG),
                 "z_mm": float(r.uniform(-STYLE_GRASP_Z_MM, STYLE_GRASP_Z_MM)),
@@ -348,6 +380,8 @@ def main(argv=None):
     ap.add_argument("--rounds", type=int, default=5, help="rounds of 4 (each followed by a reset)")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--follower-id", default="my_awesome_follower_arm")
+    ap.add_argument("--no-takeover", action="store_true",
+                    help="do not open the leader (no manual demonstration after a scripted miss)")
     args = ap.parse_args(argv)
     return run(args)
 
@@ -384,9 +418,19 @@ def run(args):
                  "Esc 隨時原地暫停。")
         if term.choose("y 開始（開扭力）／n 離開", {"y": "開始", "n": "離開"}) != "y":
             return 0
-        with real_devices(args.config, "right", leader=False) as (_, follower, refs, hz):
+        with_leader = not args.no_takeover and leader_connected(args.config)
+        if not args.no_takeover and not with_leader:
+            term.say("沒有偵測到 leader：自動失敗時不能改手動示範（只能補放後繼續）。")
+        with real_devices(args.config, "right", leader=with_leader) as (hand, follower, refs, hz):
             check_calibration(data, refs, leader=False)
-            driver = Driver(follower, term, run_dir(Path(args.route), "auto"), hz=hz, drive_leader=False)
+            if hand is not None:
+                try:
+                    check_calibration(data, refs, leader=True)
+                except RuntimeError as error:
+                    term.say(f"leader 校正和路線不符（{error}）：自動失敗時不能改手動示範。")
+                    hand = None
+            driver = Driver(follower, term, run_dir(Path(args.route), "auto"), hz=hz, drive_leader=hand is not None)
+            driver.leader_route = route if hand is not None else None
             driver.gripper_speed = 2 * MOVE_SPEED            # routes keep PLAY_SPEED (the fold area), like the demos
             placer = Placer(driver, model, corr_at, speed=MOVE_SPEED)
             eps = Episodes(driver, placer, rng)
@@ -427,6 +471,58 @@ def run(args):
                 c = np.array([xy[0], xy[1], EDGE_M / 2])
                 return all(placer.pose_for(c + [0, 0, h], yaw, channel, ph, OPEN_PCT) is not None
                            for h, ph in ((HOVER_M, "hover"), (GRASP_M, "grasp")))
+
+            def takeover(target, local, k, failed, style):
+                """The scripted grasp missed: the operator demonstrates the same block with the leader (episode
+                H<nnnn>, mode demonstration: start pose -> grasp -> lift, c, the program places into P<k+1>), as in
+                the park rounds. Returns 1 when that slot got its block."""
+                from agentic_sim.real_grasp import pick_place_round
+                park_and_release(driver, Track([dict(driver.target), park], [0.0]), park, support)
+                where["at"] = "released"
+                number = 1 + len(list((session / "episodes").glob("H*")))
+                hroot = session / "episodes" / f"H{number:04}"
+
+                def choose(blocks):
+                    pool = [b for b in blocks if b["tray"] == "pink" and b["color"] == target["color"]]
+                    scene = {"source": "pink", "candidates": len(pool), "elsewhere": len(blocks) - len(pool),
+                             "counts": {target["color"]: len(pool)}, "selection": f"takeover of {failed}"}
+                    best = min(pool, key=lambda b: math.hypot(b["x_mm"] - local[0], b["y_mm"] - local[1]),
+                               default=None)
+                    return best, scene
+                slot = {"index": k + 1, "xy": SLOTS_MM[k]}
+                term.say(f"手動示範 {hroot.name}：夾剛才沒夾到的{target['color']}方塊，抬起停穩按 c，程式放進 P{k + 1}。")
+                with episode_capture(hroot, args.config, "right", refs, hz, data["layout_id"],
+                                     tool="tools/auto_collect.py takeover", start_pose="start") as (writer, check):
+                    result = pick_place_round(driver, hand, data, writer, check, color=target["color"],
+                                              destination="beige", slot=slot, quads=quads, choose=choose,
+                                              placer=placer, slot_mount=slots[k])
+                ok = False
+                if result.get("demo_frames") is None:
+                    if hroot.exists():
+                        set_aside(hroot, session, "takeover cancelled before the demonstration")
+                else:
+                    choice = result.get("target_choice")
+                    report, review = finalize(
+                        hroot, color=result.get("color", target["color"]), destination="beige",
+                        success=result.get("success"), quads=quads,
+                        target_pose=choice and (choice["x_mm"], choice["y_mm"]), slot=slot,
+                        landed=result.get("landed"), start="start", mode="demonstration",
+                        extra={"takeover": {"of": failed, "style": style,
+                                            "scripted_target_tray_mm": [float(local[0]), float(local[1])]}})
+                    hline = {"episode": hroot.name, "color": result.get("color"), "success": result.get("success"),
+                             "ok": report["ok"], "takeover_of": failed, "demo_frames": result.get("demo_frames"),
+                             "training_ranges": review.get("training_ranges"), "reasons": report["review_reasons"]}
+                    ok = bool(result.get("success"))
+                    if ok:
+                        with index.open("a", encoding="utf-8") as fh:
+                            fh.write(json.dumps(hline, ensure_ascii=False) + "\n")
+                        term.say(f"{hroot.name} 成功（手動），訓練段 {review.get('training_ranges')}。")
+                    else:
+                        set_aside(hroot, session, "takeover failed", hline)
+                        term.say("手動示範沒成功：方塊放回粉盤後繼續。")
+                driver.arm_at(park)                      # torque on again for the scripted rounds
+                where["at"] = "park"
+                return int(ok)
 
             def reset(beige_blocks, occupied=()):
                 """Beige blocks back into the pink tray at random free spots (not recorded); occupied: pink blocks
@@ -561,11 +657,18 @@ def run(args):
                     if not success:
                         home()                              # folded away before the operator reaches into the trays
                         moved = set_aside(root, session, "failed", line)
-                        term.say(f"失敗（{err or place_err or ('沒夾到' if not ok_hold else 'D455 沒看到落點')}），"
-                                 f"原檔 {moved.name}。")
-                        if term.choose("把掉落的方塊放回粉盤弧線內、米盤該格清空後 c 繼續／q 結束",
-                                       {"c": "繼續", "q": "結束"}) == "q":
+                        why = err or place_err or ('沒夾到' if not ok_hold else 'D455 沒看到落點')
+                        log_failure(session, root.name, target, style, held, why)
+                        term.say(f"失敗（{why}），原檔 {moved.name}。")
+                        options = {"c": "補放後繼續自動", "q": "結束"}
+                        if hand is not None and not ok_hold and not err:
+                            options = {"m": "用 leader 手動示範這一顆", **options}
+                        key = term.choose("把掉落的方塊放回粉盤弧線內、米盤該格清空後："
+                                          + "／".join(f"{k} {v}" for k, v in options.items()), options)
+                        if key == "q":
                             break
+                        if key == "m":
+                            slot_k += takeover(target, local, slot_k, root.name, style)
                         continue
                     with index.open("a", encoding="utf-8") as fh:
                         fh.write(json.dumps(line, ensure_ascii=False) + "\n")
@@ -575,6 +678,10 @@ def run(args):
                 # Any stop (an error, the D455, the bus): home by the fixed route first, then release.
                 driver.on_send = None
                 term.say(f"自動收集中止（{type(error).__name__}: {error}）：先沿路線回停放位再解扭力。")
+                if hand is not None and getattr(hand, "driven", False):   # a takeover's leader still stiff
+                    driver._leader = hand
+                    term.say("leader 仍有扭力：扶住 leader 後按 Enter 解扭力。")
+                    driver._release_leader_supported()
                 try:
                     home()
                 except BaseException as again:  # noqa: BLE001
