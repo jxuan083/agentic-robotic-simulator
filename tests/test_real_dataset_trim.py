@@ -29,3 +29,20 @@ def test_closing_twice_is_a_regrasp():
     again = once + [20, 26, 26] + [18, 14, 14]
     assert count_closes(once) == 1 and count_closes(again) == 2
     assert count_closes([26, 25.5, 25, 26] * 5) == 0             # jitter is not a close
+
+
+def test_same_colour_targets_get_a_side_in_the_instruction():
+    from agentic_sim.real_dataset import instruction, same_colour_side
+    review = {"target": {"d455": {"color": "blue", "tray": "pink", "x_mm": 31.8, "y_mm": 108.0, "same_colour_in_tray": 2}},
+              "d455_blocks": {"blocks": [{"color": "blue", "tray": "pink", "x_mm": 31.8, "y_mm": 108.0},
+                                         {"color": "blue", "tray": "pink", "x_mm": 101.5, "y_mm": 50.9},
+                                         {"color": "red", "tray": "pink", "x_mm": 60.0, "y_mm": 150.0}]}}
+    side = same_colour_side(review)
+    assert side == "near"                     # 70 mm nearer the arm outweighs 57 mm to the left (tray x ~ mount x)
+    card = {"color": "blue", "destination": "beige"}
+    assert instruction(card, side) == {"en": "Put the nearer blue block in the beige tray.",
+                                       "zh": "把離手臂較近的藍色方塊放進米色盤"}
+    review["d455_blocks"]["blocks"][1].update(x_mm=40.0, y_mm=40.0)
+    assert same_colour_side(review) == "left"
+    review["target"]["d455"]["same_colour_in_tray"] = 1
+    assert same_colour_side(review) is None and instruction(card)["en"] == "Put the blue block in the beige tray."

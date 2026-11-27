@@ -47,11 +47,35 @@ COLORS = {"red": ("red", "紅色"), "blue": ("blue", "藍色"), "yellow": ("yell
 TRAYS = {"pink": ("pink", "粉色"), "beige": ("beige", "米色")}
 
 
-def instruction(card: dict | None) -> dict:
-    """{'en': 'Put the red block in the beige tray.', 'zh': '把紅色方塊放進米色盤'} from a task card."""
+SIDES = {"left": ("left", "左邊的"), "right": ("right", "右邊的"), "far": ("farther", "離手臂較遠的"),
+         "near": ("nearer", "離手臂較近的")}
+
+
+def same_colour_side(review: dict | None) -> str | None:
+    """With another block of the target's colour in its tray (D455 opening frame): the target's side relative to the
+    nearest one, arm's view (tray-local +y left, +x away from the base), as real_grasp.describe tells the operator.
+    None when the colour is unique or the frame does not say."""
+    t = ((review or {}).get("target") or {}).get("d455") or {}
+    blocks = ((review or {}).get("d455_blocks") or {}).get("blocks") or []
+    if not t or (t.get("same_colour_in_tray") or 1) < 2:
+        return None
+    same = [b for b in blocks if b.get("color") == t.get("color") and b.get("tray") == t.get("tray")
+            and (b["x_mm"] - t["x_mm"]) ** 2 + (b["y_mm"] - t["y_mm"]) ** 2 > 25.0]
+    if not same:
+        return None
+    o = min(same, key=lambda b: (b["x_mm"] - t["x_mm"]) ** 2 + (b["y_mm"] - t["y_mm"]) ** 2)
+    dx, dy = t["x_mm"] - o["x_mm"], t["y_mm"] - o["y_mm"]
+    return ("left" if dy > 0 else "right") if abs(dy) >= abs(dx) else ("far" if dx > 0 else "near")
+
+
+def instruction(card: dict | None, side: str | None = None) -> dict:
+    """{'en': 'Put the red block in the beige tray.', 'zh': '把紅色方塊放進米色盤'} from a task card; with a side
+    (same_colour_side) 'Put the left blue block ...' / '把左邊的藍色方塊...' (VLA: which of two same-colour blocks)."""
     if not card or not card.get("color"):
         return {"en": "", "zh": ""}
     c_en, c_zh = COLORS.get(card["color"], (card["color"], card["color"]))
+    if side in SIDES:
+        c_en, c_zh = f"{SIDES[side][0]} {c_en}", f"{SIDES[side][1]}{c_zh}"
     if not card.get("destination"):
         return {"en": f"Pick up the {c_en} block.", "zh": f"夾起{c_zh}方塊"}
     t_en, t_zh = TRAYS.get(card["destination"], (card["destination"], card["destination"]))
@@ -292,7 +316,7 @@ def plan_episode(root, *, arm: str = "right", segment: str = "task", max_offset_
         out["segments"] = []
         return out
     out["regrasp"] = regrasps
-    out.update(included=True, reason="ok", instruction=instruction(m.get("task_card")),
+    out.update(included=True, reason="ok", instruction=instruction(m.get("task_card"), same_colour_side(review)),
                condition=vector, markers=markers(review),
                round=(review or {}).get("round"), scene=(review or {}).get("scene"),
                handoff=start, review_frames={k: v["frame"] for k, v in ((review or {}).get("frames") or {}).items()},
