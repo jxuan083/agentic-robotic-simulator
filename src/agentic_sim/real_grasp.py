@@ -243,6 +243,42 @@ def finalize(root, *, color, destination, success, quads, target_pose=None, slot
     write_json(root / "review.json", review | {"review_reasons": report["review_reasons"], "d455_blocks": located})
     return report, review
 
+def refresh_marks(root):
+    """Recompute only the review marks (frames, training ranges) and readback of a finished episode with the current
+    keyframe rules; every other review field (target, round, script / takeover records, landing) is kept."""
+    import json
+    import time
+    from pathlib import Path
+
+    from agentic_sim.real_episode import Episode, write_json
+    from agentic_sim.real_review import confirmed_frames, review_episode
+
+    root = Path(root)
+    review = json.loads((root / "review.json").read_text(encoding="utf-8"))
+    trays = ((review.get("d455_blocks") or {}).get("trays") or {})
+    quads = {k: v["quad_px"] for k, v in trays.items()} or None
+    report = review_episode(root, source="real", arm="right", rgb_depth={"tray_quads": quads})
+    episode = Episode(root)
+    marks = {key: value["frame"] for key, value in report.get("candidates", {}).items()}
+    for key in ("frames", "training_range", "training_ranges"):
+        review.pop(key, None)
+    if {"start", "close", "lift"} <= marks.keys():
+        frames = confirmed_frames(episode, {k: marks[k] for k in ("start", "close", "lift")})
+        for extra in ("release", "end"):
+            if extra in marks:
+                frames[extra] = {"frame": marks[extra], "timestamp_ns": episode.rows[marks[extra]]["timestamp_ns"]}
+        review |= {"frames": frames, "training_range": [frames["start"]["frame"], frames["lift"]["frame"]],
+                   "training_ranges": {"grasp": [frames["start"]["frame"], frames["lift"]["frame"]]}}
+        if "release" in frames and "end" in frames:
+            review["training_ranges"]["place"] = [frames["lift"]["frame"], frames["end"]["frame"]]
+    else:
+        review["frames"] = None
+    review["review_reasons"] = report["review_reasons"]
+    review["marks_refreshed"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    write_json(root / "review.json", review)
+    return review
+
+
 def latest_global(writer):
     """The newest saved global colour frame of the running episode (BGR), or None."""
     import cv2

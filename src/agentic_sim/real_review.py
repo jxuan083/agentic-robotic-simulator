@@ -21,6 +21,9 @@ STILL_DEG = 0.25       # per-frame body change counted as still
 LIFT_DEG = 3.0         # body motion after the closure that counts as lifting
 STABLE_FRAMES = 10     # still frames that make a stable lift
 RELEASE_RISE = 4.0     # % above the held opening: the block is released (placement demonstrations)
+CLOSED_MAX = 22.0      # a closure ends below this opening (held ~17 %, empty ~14 %). Since 11/27 the rounds start at
+                       # the start pose with the gripper at ~39 % and open it to ~26 % for the approach: that drop
+                       # was taken for the closure, and the lift (and the grasp segment) ended before the grasp
 
 
 def keyframes(joints):
@@ -34,13 +37,22 @@ def keyframes(joints):
     marks = {"start": max(0, moving[0] - 5), "end": min(n - 1, moving[-1] + 5)}
     peak = grip[0]
     close = None
-    for i in range(0, n - 2):
-        peak = max(peak, grip[i])
-        if grip[i] <= peak - CLOSE_DROP and all(g <= peak - CLOSE_DROP for g in grip[i:i + HOLD_FRAMES]):
-            close = i
-            while close > 0 and grip[close - 1] > grip[close] + 0.1:
-                close -= 1
-            break
+    if grip[0] > CLOSED_MAX:
+        # the first stretch at a closed opening; the closure began where the opening started to fall towards it
+        for i in range(0, n - HOLD_FRAMES):
+            if all(g <= CLOSED_MAX for g in grip[i:i + HOLD_FRAMES]):
+                close = i
+                while close > 0 and grip[close - 1] > grip[close] + 0.1:
+                    close -= 1
+                break
+    if close is None:   # never that closed (older hand-over episodes, fakes): a drop below the opening reached
+        for i in range(0, n - 2):
+            peak = max(peak, grip[i])
+            if grip[i] <= peak - CLOSE_DROP and all(g <= peak - CLOSE_DROP for g in grip[i:i + HOLD_FRAMES]):
+                close = i
+                while close > 0 and grip[close - 1] > grip[close] + 0.1:
+                    close -= 1
+                break
     if close is None:
         return marks
     marks["close"] = close
