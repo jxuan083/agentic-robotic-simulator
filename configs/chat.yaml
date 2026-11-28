@@ -32,6 +32,6 @@ colors:
   blue:        {zh: 藍色, words: [藍, 藍色, 藍的]}
   cyan:        {zh: 青色, words: [青, 青色, 藍綠, 藍綠色]}   # 「水藍」 may mean light blue too: asked back
   purple:      {zh: 紫色, words: [紫, 紫色, 紫的]}
-  # The finals plush toy (notes/261128_玩偶規格與決賽用法.md), ordered like a colour ({color: plush, count: 1}); on
+  # The finals plush toy (docs/plush.md), ordered like a colour ({color: plush, count: 1}); on
   # the real arm the executor gives it to the ACT skill. object: named by itself in replies (not "...積木").
   plush:       {zh: 柴犬玩偶, object: true, words: [柴犬, 柴犬玩偶, 狗狗, 小狗, 玩偶, 布偶, 電車, 江之電, 小熊]}

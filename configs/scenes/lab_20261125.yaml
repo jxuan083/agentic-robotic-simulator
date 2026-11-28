@@ -16,7 +16,7 @@ robot:
   asset: Sim-to-Real-SO-101-Workshop@ce807d9 SO-ARM101-USD.usd (with the wrist camera mount)
   base_pos: {value: [0.0, 0.0, -0.0301], source: estimated,
              note: "base bottom on the table top; the D455 plane fit puts the table 1.6 mm below the base bottom"}
-  # The lab arm carries the official SO-101 wrist camera mount (photos IMG_0541, IMG_0554). Isaac: Workshop USD with
+  # The lab arm carries the official SO-101 wrist camera mount (lab photos). Isaac: Workshop USD with
   # the camera mount; MuJoCo: the Menagerie camera_mount body is kept. lab_current_minimal keeps the no-camera arm.
   wrist_camera_mount: true
   # Neutral finger direction: tangential to the pan circle (as lab_current_minimal; wrist roll about 90 deg at home).

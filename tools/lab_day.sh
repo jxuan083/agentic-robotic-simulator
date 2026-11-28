@@ -164,7 +164,7 @@ case "$step" in
     "$PY" tools/real_route.py grasp "${MOTION[@]}" --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" \
       --trays "$TRAYS" --session "outputs/$DATE-park" --pick "${PICK:-random}" "${PLACE_ARG[@]}" ;;
   plush)
-    # The finals plush toy for its own ACT (notes/261128_玩偶規格與決賽用法.md): one demonstration per episode, the
+    # The finals plush toy for its own ACT (docs/plush.md): one demonstration per episode, the
     # operator re-places the plush (position / heading varied) between episodes; the follower waits at the start pose.
     need "$ROUTE" "$DROP_BEIGE" "$DROP_PINK" "$TRAYS"
     "$PY" tools/real_route.py grasp "${MOTION[@]}" --route "$ROUTE" --drop "$DROP_BEIGE" --drop "$DROP_PINK" \

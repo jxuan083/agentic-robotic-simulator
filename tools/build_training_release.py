@@ -4,7 +4,7 @@ dataset for ACT and one for a VLA (docs/real-training.md). The raw episodes are 
 
   ~/miniconda3/envs/lerobot/bin/python tools/build_training_release.py \
       --outputs ../agentic-robotic-simulator-real-teleop/outputs --sessions 261127-park 261127-auto \
-      --release /home/lerobot/AllenHZL/training_dataset/v1
+      --release ../training_dataset/v1
 
 Checks per episode, on top of the converter's own (readback, review marks, D455 target, operator result, control
 gaps, camera pairing):

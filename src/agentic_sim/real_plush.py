@@ -1,4 +1,4 @@
-"""The finals plush toy in D455 depth: a Shiba dog sitting in an Enoden 305 tram (notes/261128_玩偶規格與決賽用法.md).
+"""The finals plush toy in D455 depth: a Shiba dog sitting in an Enoden 305 tram (docs/plush.md).
 
 The block detector (agentic_sim.real_d455.detect) only keeps tops 26-45 mm above the table, so the plush (tram roof
 ~50 mm, the dog's head ~100 mm) is not a block; but its rounded tram edges and paws pass through that band and its

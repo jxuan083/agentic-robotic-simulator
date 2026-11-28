@@ -1,6 +1,6 @@
 """Finals plush toy (a Shiba Inu sitting in an Enoden 305 tram): dimensions, mass and colours in one place.
 
-Source: notes/261128_玩偶規格與決賽用法.md (11/28). Length, width, body height, total height and mass are the user's
+Source: docs/plush.md (11/28). Length, width, body height, total height and mass are the user's
 measurements; the head size, paws and colours are read from the photos (head width still to be measured). The
 simulation models the fabric toy with rigid contacts and a textured visual shell; the real side can import the same numbers
 (detection thresholds, slot sizes).

@@ -69,7 +69,7 @@
 
 ## 下一步
 
-採集端以 `tools/lab_day.sh` 逐步執行（`FAKE=1` 可先用假手臂演練）。11/26 起的流程見 `notes/下次上機_停放位取放採集.md`：
+採集端以 `tools/lab_day.sh` 逐步執行（`FAKE=1` 可先用假手臂演練）。11/26 起的流程：
 
 1. `export RIG_DATE=261125 LAB_DATE=261126`：沿用 11/25 的路線與盤角，資料寫進新 session。
 2. `env`、`check`、`torque`、`wristcam`（固定腕相機白平衡 4600 K、關閉動態幀率）、`overlay`。

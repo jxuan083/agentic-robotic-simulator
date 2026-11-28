@@ -233,7 +233,7 @@ def add_plush(spec, cfg: dict, trays: dict | None = None):
 
     visual("car_cover", (0, 0, H / 2), mesh="car", material="car")
     visual("dog_cover", (0, 0, .072), mesh="head", material="shiba")
-    # The paws straddle the roof and the snout points along the tram, as in IMG_0707.
+    # The paws straddle the roof and the snout points along the tram, as on the toy.
     for side in (-1, 1):
         visual(f"paw_{side}", (.012, side*.019, .052), size=(.010, .007, .008), material="tan")
         visual(f"ear_{side}", (-.004, side*.0164, .0917), mesh="ear", material="tan",
