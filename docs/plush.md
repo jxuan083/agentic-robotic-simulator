@@ -66,6 +66,71 @@ MuJoCo 研究在 `tools/sim_plush_grasp.py`。
 - 外觀：`assets/enoden305` 的網格和貼圖，只供顯示，不參與碰撞。
 - 布面以高摩擦（1.0）近似，不做軟體模擬。
 
+### 模擬示範與 ACT 筆數研究（2026-11-28）
+
+用模擬量「成功率對示範筆數」，作為實機收幾筆的參考。模擬是剛體、光線一致、示範一致，成功率會比實機高，只能看趨勢。
+
+**採集**（`tools/sim_plush_collect.py`，格式與擺位在 `agentic_sim.plush_sim_data`）：
+- 每筆隨機擺位：x ±15 mm、y 0 到 +20 mm、朝向 0–180°，`block_xy` 隨機放 0–3 顆方塊。
+- 起姿是場景 standby，每軸加 ±2°。
+- 程式化夾頭：
+  1. 夾爪開到 0.75–0.95 rad，經過頭上方 40–70 mm 的接近點；
+  2. 下降、夾緊；
+  3. 抬起 6 cm 停穩。
+
+  停頓與速度隨機。抬 6 cm 而不是 5 cm，是為了讓 45 mm 判準有餘裕。
+- 只收通過判準的示範：抬起 ≥ 45 mm，停留 1 秒內滑移 < 5 mm。
+- 30 fps 直接寫成 LeRobot 資料集，features 與實機 ACT 資料集相同。
+  - global 影像是 640×480，焦距取 1280×720 校正值的 0.6 倍（推算）。
+  - 每次嘗試的 seed、擺位、結果都記在 `meta/sim_sources.jsonl`。
+- 平行收的分片用 `tools/sim_plush_merge.py` 合併。
+
+```bash
+export MENAGERIE_DIR=<menagerie> MUJOCO_GL=egl
+.venv-train/bin/python tools/sim_plush_collect.py --out outputs/plush/datasets/s1 --episodes 25 --seed 1000
+.venv-train/bin/python tools/sim_plush_merge.py outputs/plush/datasets/s{1,2,3,4} --out outputs/plush/datasets/sim-plush-v1
+.venv-train/bin/lerobot-train --config_path configs/real_training/act_right.yaml \
+    --dataset.repo_id local/sim-plush --dataset.root outputs/plush/datasets/sim-plush-v1 \
+    --dataset.episodes "[0,1,...,N-1]" --dataset.image_transforms.enable false \
+    --output_dir outputs/plush/train/nN --steps 30000
+.venv-train/bin/python tools/sim_plush_eval.py outputs/plush/train/nN/checkpoints/last/pretrained_model \
+    --trials 50 --seed 900000 --json outputs/plush/eval/nN.json
+```
+
+**評估**（`tools/sim_plush_eval.py`）：
+- 閉環執行 checkpoint，用實機的 `ActPolicy` 和 `real_policy.run` 的停止規則。
+- 判定失敗類別：動作跳變、碰撞、抬不夠高、滑落、夾到車身、超時、沒夾到。
+- 選項 `--cond-noise MM DEG` 在條件和目標圓上加偵測誤差。
+- 選項 `--n-action-steps` 與 `--temporal-ensemble` 只在推論時改 ACT 的執行方式，不重新訓練。
+
+**結果**：
+- 設定：
+  - 100 筆示範，前 N 筆訓練，每組 30000 步，batch 16。
+  - 訓練時關掉影像增強：模擬影像一致，開了訓練慢三倍；實機訓練仍照 `act_right.yaml` 開著。
+  - 每組評估 50 次，seed 900000–900049，和訓練用的 seed 不重疊。
+
+| 訓練筆數 | 10 | 25 | 50 | 100 |
+|---|---|---|---|---|
+| 成功（無偵測誤差） | 45 | 50 | 49 | 49 |
+| 成功（偵測誤差 σ 5 mm／10°） | 42 | 48 | 47 | 48 |
+
+- 25 筆以上已接近滿分，差 1–2 次不顯著。
+  - 同一 seed 重跑結果不一定相同（GPU 推論有微小差異，閉環會放大）。
+  - 50 次的成功率信賴區間約 ±5–10%。
+- 失敗主要有三類：
+  - **動作跳變**：
+    - 新的一段動作（chunk）的第一步，和上一個命令差超過 6°。
+    - 多發生在第 0 步：ACT 第一步的肘、肩轉預測和起姿有系統偏差，平均 3–4°，最大 5.6–6.5°。
+    - 也會發生在第 100、200 步換段處。
+  - **偵測誤差大**：xy 誤差約 11 mm 時，夾到頭偏側，抬起後滑落；每組都是同兩個擺位，和筆數無關。
+  - **完成判定誤觸**：
+    - 第一步的夾爪命令比起始值低 10% 以上，被當成已夾緊。
+    - 手臂接著升到接近點並停住，在沒碰到玩偶時就判為完成。
+- ACT 執行方式比較（只改推論）：
+  - 原設定（每段 100 步全部執行）最好。
+  - temporal ensembling 0.01：10 筆 39/50，100 筆 46/50。抬升被平均掉，多次抬不到 45 mm。
+  - 每段只執行 25 步：10 筆 15/50，多半在起步的靜止段原地超時。
+
 ## 實機
 
 - **偵測**（`agentic_sim.real_plush`）：
