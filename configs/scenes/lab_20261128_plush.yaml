@@ -144,10 +144,21 @@ sensor_cameras:
       pos: {value: [-0.00296, 0.05436, -0.05310], source: provisional, note: Menagerie camera_mount wrist_cam}
       quat_wxyz: {value: [0.958280, -0.285792, -0.001556, 0.004547], source: provisional, note: Menagerie camera_mount wrist_cam}
 
-# Finals plush toy: free rigid body (agentic_sim.plush: 90 x 60 x 100 mm, 28.6 g), bottom face on the table top.
-# The real table zone is not fixed yet (spec section 5); this spot is the free strip between the base and the
-# trays: tram along mount +Y, 12 mm in front of the beige tray, 0.16 m from the pan axis (inside the real safe grasp
-# zone r <~ 0.33 m), clear of both trays and the base. yaw 90: the dog faces the base (-X).
+# Finals plush toy: free rigid body (agentic_sim.plush: 90 x 60 x 100 mm, 28.6 g), bottom face on the floor of the
+# pink tray (11/28 decision: the plush starts in the pink tray with the blocks; notes/261128_玩偶規格與決賽用法.md
+# section 8). Spot: the reachable near-right corner of the pink tray (r 0.25 m, inside the real safe grasp zone
+# r <~ 0.31 m there). 54 mm from the centre to the tram's farthest corner, so every yaw clears the inner walls
+# (x >= 0.145, y >= 0.074 here). Demonstrations vary around it, any yaw: x +- 15 mm, y 0 to +20 mm (inner walls).
+# Keep blocks 50 mm or more from the tram (D455 drops block detections within 12 mm of it; the open jaw is 68 mm).
+# yaw 0: tram along mount +X, the cab and the dog face +X (away from the base).
 plush:
-  pos: {value: [0.095, -0.125], source: provisional, note: "simulation choice; the real plush zone is measured on 11/30"}
-  yaw_deg: {value: 90.0, source: provisional}
+  tray: storage_pink
+  pos: {value: [0.215, 0.130], source: provisional, note: "simulation choice; the real plush spot is checked on 11/30"}
+  yaw_deg: {value: 0.0, source: provisional}
+  # Block positions of this scene (replace block.init_xy / layout_xy, which share the corner with the plush): the
+  # reachable pink cells 83-133 mm from the plush centre (the tram reaches 54 mm at any yaw) and 40-49 mm apart, so
+  # the four finals blocks fit beside the plush with about 1 cm between blocks (tight for the programmed grasp).
+  block_xy:
+    value: [[0.165, 0.215], [0.205, 0.225], [0.250, 0.205], [0.170, 0.255]]
+    source: provisional
+    note: "r 0.27-0.32 m, inside the real safe grasp zone (0.33 m at 40-56 deg)"

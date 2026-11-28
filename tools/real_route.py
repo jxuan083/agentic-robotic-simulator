@@ -327,7 +327,7 @@ def _grasp_session(driver, hand, data, args, refs, hz):
                     continue
             color = None
         elif plush:
-            key = term.choose(f"第 {number} 筆：柴犬玩偶站著擺在桌上（位置、朝向每筆換；離手臂和托盤邊 3 cm 以上），"
+            key = term.choose(f"第 {number} 筆：柴犬玩偶站著擺在粉盤近右角（位置在 3 cm 內、朝向每筆換；手臂伸過去前看一下不要碰到盤邊），"
                               "米盤 P0 清空，手離開後按 a；q 結束", {"a": "錄", "q": "結束"})
             if key == "q":
                 return

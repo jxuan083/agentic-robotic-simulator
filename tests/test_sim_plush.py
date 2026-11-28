@@ -41,7 +41,7 @@ def test_scene_without_plush_is_unchanged():
     assert a.plush_body is None and a.plush_qpos is None and a.plush_geoms == []
 
 
-def test_plush_loads_with_its_mass_and_size_and_rests_on_the_table():
+def test_plush_loads_with_its_mass_and_size_and_rests_in_the_pink_tray():
     sc = mjm.build(load(PLUSH))
     m, d = sc.model, mujoco.MjData(sc.model)
     assert m.body_mass[sc.plush_body] == pytest.approx(0.0286, abs=0.0005)

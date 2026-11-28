@@ -14,13 +14,16 @@
      tram_end     across the tram body at one end (beside the head), fingers lower on the tram
      head         across the dog's head (about 52 mm), fingers in the head's middle height
    Success: the plush rose at least 45 mm and moved less than 5 mm relative to the gripper during the 1 s hold.
-   --yaws repeats each grasp with other plush yaws (at the scene position only about 90 +- 17 deg clears the beige
-   tray; other yaws touch its wall and turn the plush by up to 1 deg before the grasp).
+   --yaws repeats each grasp with other plush yaws (in the pink tray corner every yaw clears the walls; the scene's
+   block sits at plush.block_xy[0], clear of the plush).
 
 Result (2026-11-28, rigid model, yaws 0-150): head 6/6 (lift 50-52 mm, jaw closes at 0.39-0.42 rad, plush hangs
 13 deg tilted); tram_width 0/6 (only the tram top is between the fingers and the open jaw's inclined face squeezes
 it down: slides about 14 mm until the head jams on the moving jaw); tram_end 0/6 (palm / wrist camera mount
 lands on the head, the fingers end on the rounded corners, dropped or slid).
+Pink tray corner (2026-11-28 afternoon, scene plush in storage_pink, textured visual shell, same collision shapes):
+head 6/6 at yaws 0-150 (lift 52 mm, slip < 1 mm, jaw closes at about 30 %); with the four blocks at plush.block_xy
+the grasp succeeds at yaws 0 / 45 / 90 / 135 and no block moves.
 """
 
 from __future__ import annotations
@@ -150,13 +153,13 @@ def grasp_plan(rig: Rig, kind: str) -> dict:
     pos, R = rig.plush_pose()
     ax_len, ax_w = R[:2, 0] / np.linalg.norm(R[:2, 0]), R[:2, 1] / np.linalg.norm(R[:2, 1])
     if kind == "head":
-        width, centre, z = 2 * P.HEAD_RADII[1], pos[:2] + R[:2, :2] @ np.array(P.HEAD_POS[:2]), P.HEAD_POS[2]
+        width, centre, z = 2 * P.HEAD_RADII[1], pos[:2] + R[:2, :2] @ np.array(P.HEAD_POS[:2]), pos[2] + P.HEAD_POS[2]
     elif kind == "tram_width":
         # the palm (fixed_jaw_box1, about 48 mm above the EE) must clear the head: EE no lower than 55 mm
-        width, centre, z = P.WIDTH, pos[:2], 0.055
+        width, centre, z = P.WIDTH, pos[:2], pos[2] + 0.055
     elif kind == "tram_end":   # the far end (near the base the wrist camera mount hits the shoulder)
         ends = [pos[:2] + s * ax_len * (P.LENGTH / 2 - 0.013) for s in (1, -1)]
-        width, z = P.WIDTH, 0.033
+        width, z = P.WIDTH, pos[2] + 0.033
         centre = max(ends, key=lambda c: np.linalg.norm(c - rig.ctrl.pan[:2]))
     else:
         raise ValueError(kind)

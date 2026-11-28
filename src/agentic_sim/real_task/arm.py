@@ -7,7 +7,8 @@ Arm (duck-typed; agentic_sim.real_task.real_arm.RealArm on the follower):
   place(xy, phase)             -> error str or None: holding -> slot -> open -> rise -> start -> park
   home(open_gripper=True)      -> to park (gripper opened when the hand is empty)
   at_park() / ee() / gripper_open() / reachable(xy) / home_xyz / pan_xy / slots / plush_slot
-The plush toy is a block of colour "plush" on the table (scan: tray None): pick takes it with its ACT policy, place
+The plush toy is a block of colour "plush" in the pink tray (11/28; on the table also counts as storage): pick takes it
+with its ACT policy, place
 puts it at plush_slot (beige P0).
   pause() / resume()           operator pause from the chat page (the arm holds)
 phase(name) reports progress inside a routine.
@@ -27,7 +28,7 @@ FAKE_PINK = ((0.15, 0.06), (0.45, 0.27))
 FAKE_BEIGE = ((0.14, -0.27), (0.48, -0.01))
 FAKE_SLOTS = [(0.210, -0.065), (0.210, -0.120), (0.265, -0.065), (0.265, -0.120)]
 FAKE_PLUSH_SLOT = (0.215, -0.197)
-FAKE_PLUSH_AT = (0.09, 0.20)     # on the table beside the pink tray
+FAKE_PLUSH_AT = (0.215, 0.13)    # the near-right corner of the pink tray (configs/scenes/lab_20261128_plush.yaml)
 FAKE_HOME = (0.08, 0.0, 0.20)
 REACH_M = 0.32
 

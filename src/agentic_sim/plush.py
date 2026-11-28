@@ -2,11 +2,10 @@
 
 Source: notes/261128_玩偶規格與決賽用法.md (11/28). Length, width, body height, total height and mass are the user's
 measurements; the head size, paws and colours are read from the photos (head width still to be measured). The
-simulation models the fabric toy as rigid primitives (no soft body); the real side can import the same numbers
+simulation models the fabric toy with rigid contacts and a textured visual shell; the real side can import the same numbers
 (detection thresholds, slot sizes).
 
-Plush frame: origin at the centre of the bottom face, +X along the tram (90 mm), +Y across (60 mm) towards the
-dog's face, +Z up.
+Plush frame: origin at the centre of the bottom face, +X along the tram (90 mm), towards the dog's face, +Y across (60 mm), +Z up.
 """
 
 from __future__ import annotations

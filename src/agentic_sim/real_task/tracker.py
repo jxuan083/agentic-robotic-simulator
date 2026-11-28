@@ -6,8 +6,8 @@ the program moved (place) is moved here first; an unmatched detection takes a sa
 (a block restocked at a new spot) or a new ID. Blocks not seen in a scan keep their last position but belong to no
 tray (taken away, or hidden).
 
-The plush toy (colour "plush", agentic_sim.real_plush) stands on the table outside the trays: there it counts as in
-storage (available to order); in the beige tray it is placed like a block.
+The plush toy (colour "plush", agentic_sim.real_plush) stands in the pink tray with the blocks (11/28) or on the table
+outside the trays: both count as storage (available to order); in the beige tray it is placed like a block.
 """
 
 from __future__ import annotations

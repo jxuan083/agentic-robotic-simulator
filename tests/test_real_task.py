@@ -106,7 +106,7 @@ def test_finals_standby_waits_for_the_operator_before_looking_again():
 
 
 def test_plush_order_goes_to_the_act_pick_and_its_own_slot():
-    """11/28: the plush on the table is in storage, is ordered like a colour, picked with method "act" and placed
+    """11/28: the plush in the pink tray is in storage, is ordered like a colour, picked with method "act" and placed
     at P0; blocks of the same order still go by the program into P1-P4."""
     from agentic_sim.chat.zh import Words
     from agentic_sim.config import load

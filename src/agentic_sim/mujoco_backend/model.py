@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 
 import mujoco
@@ -152,7 +153,7 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
         g = _box(b, f"block_{i}_geom", (lay.edge,) * 3, (0, 0, 0), (*rgb, 1), friction=lay.friction[fr])
         g.mass = lay.mass
 
-    plush = add_plush(wb, scene_cfg["plush"]) if "plush" in scene_cfg else None
+    plush = add_plush(spec, scene_cfg["plush"], trays) if "plush" in scene_cfg else None
 
     m = spec.compile()
     names = al["joints"]
@@ -179,13 +180,15 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
 PLUSH_BODY = P.ID
 
 
-def add_plush(wb, cfg: dict):
-    """Finals plush as one free body of rigid primitives, bottom face on the table top at cfg pos / yaw_deg.
+def add_plush(spec, cfg: dict, trays: dict | None = None):
+    """Finals plush as one free body of rigid primitives at cfg pos / yaw_deg, bottom face on the table top or, with
+    cfg `tray` (a scene tray name), on that tray's floor.
     Collision: tram (two crossed boxes + four corner cylinders = a box with rounded vertical edges) and the head
-    ellipsoid; band, windows, underside, muzzle and paws are visual only. Returns (init pos, init quat)."""
+    ellipsoid. The separate fabric shell and facial details are visual only. Returns (init pos, init quat)."""
     x, y = v(cfg["pos"])
-    pos, quat = (float(x), float(y), 0.0005), yaw_quat(float(v(cfg.get("yaw_deg", 0.0))))
-    b = wb.add_body()
+    floor = float(trays[cfg["tray"]]["floor_top"]) if cfg.get("tray") else 0.0
+    pos, quat = (float(x), float(y), floor + 0.0005), yaw_quat(float(v(cfg.get("yaw_deg", 0.0))))
+    b = spec.worldbody.add_body()
     b.name = PLUSH_BODY
     b.pos, b.quat = list(pos), list(quat)
     b.add_freejoint().name = f"{PLUSH_BODY}_free"
@@ -193,44 +196,54 @@ def add_plush(wb, cfg: dict):
     b.explicitinertial = True
     b.mass, b.ipos, b.inertia = P.MASS, list(com), list(diag)
     L, W, H, r = P.LENGTH, P.WIDTH, P.BODY_HEIGHT, P.CORNER_RADIUS
-    green, dog = (*P.rgb(P.COLOR_BODY), 1), (*P.rgb(P.COLOR_DOG), 1)
+    hidden = [0, 0, 0, 0]
     for name, size in (("body_x", (L, W - 2 * r, H)), ("body_y", (L - 2 * r, W, H))):
-        _box(b, f"{PLUSH_BODY}_{name}", size, (0, 0, H / 2), green, friction=P.FRICTION).mass = 0
+        _box(b, f"{PLUSH_BODY}_{name}", size, (0, 0, H / 2), hidden, friction=P.FRICTION).mass = 0
     for i, (sx, sy) in enumerate(((1, 1), (1, -1), (-1, 1), (-1, -1))):
         g = b.add_geom()
         g.name, g.type = f"{PLUSH_BODY}_corner_{i}", mujoco.mjtGeom.mjGEOM_CYLINDER
         g.size, g.pos = [r, H / 2, 0], [sx * (L / 2 - r), sy * (W / 2 - r), H / 2]
-        g.rgba, g.friction, g.mass = list(green), [P.FRICTION, 0.005, 0.0001], 0
+        g.rgba, g.friction, g.mass = hidden, [P.FRICTION, 0.005, 0.0001], 0
     g = b.add_geom()
     g.name, g.type = f"{PLUSH_BODY}_head", mujoco.mjtGeom.mjGEOM_ELLIPSOID
-    g.size, g.pos, g.rgba = list(P.HEAD_RADII), list(P.HEAD_POS), list(dog)
+    g.size, g.pos, g.rgba = list(P.HEAD_RADII), list(P.HEAD_POS), hidden
     g.friction, g.mass = [P.FRICTION, 0.005, 0.0001], 0
 
-    def deco(name, size, pos, hex_color):
-        _box(b, f"{PLUSH_BODY}_{name}", size, pos, (*P.rgb(hex_color), 1), collide=False).mass = 0
+    assets = Path(__file__).resolve().parents[3] / "assets" / "enoden305"
+    for name in ("car", "shiba", "tan"):
+        texture = spec.add_texture(name=f"plush_{name}_tex", type=mujoco.mjtTexture.mjTEXTURE_2D,
+                                   file=str(assets / f"{name}.png"))
+        mat = spec.add_material(name=f"plush_{name}", specular=0.035, shininess=0.08)
+        mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = texture.name
+    for name in ("car", "head", "ear"):
+        spec.add_mesh(name=f"plush_{name}_shell", file=str(assets / f"{name}.obj"), smoothnormal=True)
 
-    e = 0.0006   # decorations stand this far out of the faces they cover
-    for band, (z0, z1), color in (("under", P.UNDER_BAND, P.COLOR_UNDER), ("waist", P.WAIST_BAND, P.COLOR_BAND)):
-        zc, hz = (z0 + z1) / 2, z1 - z0
-        for s in (1, -1):
-            deco(f"{band}_y{s:+d}", (L - 2 * r, 2 * e, hz), (0, s * W / 2, zc), color)
-            deco(f"{band}_x{s:+d}", (2 * e, W - 2 * r, hz), (s * L / 2, 0, zc), color)
-    zc, hz = (P.WINDOW_BAND[0] + P.WINDOW_BAND[1]) / 2, P.WINDOW_BAND[1] - P.WINDOW_BAND[0]
-    for s in (1, -1):
-        for i, wx in enumerate((-0.025, -0.0085, 0.0085, 0.025)):   # four side windows
-            deco(f"window_y{s:+d}_{i}", (0.013, 4 * e, hz), (wx, s * W / 2, zc), P.COLOR_WINDOW)
-        for i, wy in enumerate((-0.011, 0.011)):                    # two front / rear windows
-            deco(f"window_x{s:+d}_{i}", (4 * e, 0.016, hz), (s * L / 2, wy, zc), P.COLOR_WINDOW)
-    hx, hy, hz = P.HEAD_POS
-    m = b.add_geom()
-    m.name, m.type = f"{PLUSH_BODY}_muzzle", mujoco.mjtGeom.mjGEOM_ELLIPSOID
-    m.size, m.pos = list(P.MUZZLE_RADII), [hx, hy + P.HEAD_RADII[1] - 0.004, hz - 0.006]
-    m.rgba, m.contype, m.conaffinity, m.mass = [*P.rgb(P.COLOR_FACE), 1], 0, 0, 0
-    for i, px in enumerate((-0.013, 0.013)):
-        p = b.add_geom()
-        p.name, p.type = f"{PLUSH_BODY}_paw_{i}", mujoco.mjtGeom.mjGEOM_SPHERE
-        p.size, p.pos = [P.PAW_RADIUS, 0, 0], [px, W / 2 - P.PAW_RADIUS, H + 0.3 * P.PAW_RADIUS]
-        p.rgba, p.contype, p.conaffinity, p.mass = list(dog), 0, 0, 0
+    def visual(name, pos, *, mesh=None, material=None, size=None, color=None, quat=(1, 0, 0, 0)):
+        geom = b.add_geom()
+        geom.name, geom.pos, geom.quat = f"plush_{name}", pos, quat
+        geom.mass, geom.contype, geom.conaffinity = 0, 0, 0
+        if mesh:
+            geom.type, geom.meshname = mujoco.mjtGeom.mjGEOM_MESH, f"plush_{mesh}_shell"
+        else:
+            geom.type, geom.size = mujoco.mjtGeom.mjGEOM_ELLIPSOID, size
+        if material:
+            geom.material = f"plush_{material}"
+        if color:
+            geom.rgba = [*P.rgb(color), 1]
+
+    visual("car_cover", (0, 0, H / 2), mesh="car", material="car")
+    visual("dog_cover", (0, 0, .072), mesh="head", material="shiba")
+    # The paws straddle the roof and the snout points along the tram, as in IMG_0707.
+    for side in (-1, 1):
+        visual(f"paw_{side}", (.012, side*.019, .052), size=(.010, .007, .008), material="tan")
+        visual(f"ear_{side}", (-.004, side*.0164, .0917), mesh="ear", material="tan",
+               quat=(1, 0, 0, 0) if side == 1 else (0, 0, 0, 1))
+        visual(f"eye_{side}", (.0201, side*.0124, .0751), size=(.0027, .00265, .00285), color="#211d1a")
+        visual(f"eye_glint_{side}", (.02245, side*.0124+.0004, .0762), size=(.00042,)*3, color="#eee5cc")
+    visual("nose", (.0276, 0, .0698), size=(.0029, .0042, .0029), color="#24201e")
+    # Two sides of the folded white ribbon on the crown.
+    for side in (-1, 1):
+        visual(f"ribbon_{side}", (-.0055, side*.00145, .0957), size=(.0034, .0007, .0024), color="#efe9d7")
     return pos, quat
 
 

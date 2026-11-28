@@ -80,7 +80,7 @@ tools/lab_day.sh chat-web
 
 決賽 demo 的一幕：同一個聊天下單，執行器依物件種類選技能。規格與上機順序見 `notes/261128_玩偶規格與決賽用法.md`。
 
-- **D455**：`agentic_sim.real_plush` 用高度和底面尺寸找出玩偶；桌上的玩偶算在「備料」裡。
+- **D455**：`agentic_sim.real_plush` 用高度和底面尺寸找出玩偶。玩偶擺在粉盤近右角（11/28 決定），和桌上一樣算在「備料」裡。方塊離車身 5 cm 以上：D455 會丟掉玩偶旁 12 mm 內的方塊偵測，程式夾取的夾爪也要空間。
 - **聊天**：`configs/chat.yaml` 的 `plush`（柴犬、狗狗、玩偶、小熊…），下單方式和顏色一樣，回覆用「柴犬玩偶」。
 - **執行器**：玩偶的 pick 參數是 `method: act`，方塊是 `program`。玩偶放在米盤 P0（`configs/real_plush.json`），不在程式夾取區內也照樣接單。
 - **實機**：`PLUSH_POLICY=<…/pretrained_model> tools/lab_day.sh task-server`。沒有設定時，玩偶的訂單會以「沒有模型」失敗。ACT 迴圈在 `agentic_sim.real_policy`。
