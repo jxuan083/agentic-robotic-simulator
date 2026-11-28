@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 os.chdir(ROOT)
 
 from agentic_sim.chat.agent import ChatAgent  # noqa: E402
+from agentic_sim.chat.zh import report_line  # noqa: E402
 from agentic_sim.chat.llm import LLMError, OpenAICompatLLM  # noqa: E402
 from agentic_sim.config import load  # noqa: E402
 from agentic_sim.server.client import RemoteError  # noqa: E402
@@ -113,6 +114,8 @@ class ChatWindow:
     # ---- background threads -----------------------------------------------------------------------------
     @staticmethod
     def _tag(line: str) -> str:
+        if line.startswith("[進度]"):
+            return "ok"
         return "system" if line.startswith("[系統]") else "error" if line.startswith("錯誤") else "agent"
 
     def _lines(self, lines, qid=_SAME):
@@ -165,7 +168,7 @@ class ChatWindow:
         """New reports and the question bar. Nothing here changes what the user is taken to have seen: the ids are
         handed to the UI with the text that shows them."""
         before = self.reporter.q_shown
-        lines = [f"[系統] {x}" for x in self.reporter.poll_reports()]
+        lines = [report_line(x) for x in self.reporter.poll_reports()]
         after = self.reporter.q_shown
         if lines:
             self._lines(lines, after if after != before else _SAME)

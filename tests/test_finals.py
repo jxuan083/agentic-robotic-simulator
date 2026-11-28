@@ -28,7 +28,7 @@ from agentic_sim.task.runner import TaskRunner  # noqa: E402
 from agentic_sim.teleop.ee_target import load_controller  # noqa: E402
 from test_task import DT, FakeWorld  # noqa: E402
 
-LAB = load("configs/scenes/lab_20261120.yaml")
+LAB = load("configs/scenes/lab_20261125.yaml")
 
 
 class FinalsWorld(FakeWorld):

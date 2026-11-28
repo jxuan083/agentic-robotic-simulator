@@ -43,8 +43,10 @@ class ChatAgent:
         self.words = Words(cfg["colors"])
         self.palette = list(cfg["colors"])
         self.max_count = int(cfg.get("max_count", 8))
-        self.schema = schema(self.palette, self.max_count)
-        self.system = system_prompt(cfg["colors"], self.max_count)
+        pick = bool(cfg.get("pick_by_position", False))     # order_pick: off = the measured schema and prompt
+        no_return = bool(cfg.get("no_return", False))      # hold / removed answers: off = the measured schema
+        self.schema = schema(self.palette, self.max_count, pick, no_return)
+        self.system = system_prompt(cfg["colors"], self.max_count, pick, no_return)
         self.history: list = []
         self.transcript: list = []
         self.events_seen = 0
@@ -52,6 +54,8 @@ class ChatAgent:
         self.turn = 0
         self.q_shown = None        # id of the last question shown to the user (None: none shown yet)
         self.followup = None       # {"qid", "need"}: a follow-up for this question is on screen
+        self._last_progress = None
+        self.progress_reports = bool(cfg.get("progress_reports", True))   # skill_start -> [進度] lines
         self.need_choice = None    # question id whose disposal must be chosen again before parameters are accepted
         self.log = log or (lambda m: None)
         self.clock = clock
@@ -224,6 +228,12 @@ class ChatAgent:
         out = []
         for e in r.get("events", []):
             line = self.words.event(e)
+            if line is None and self.progress_reports:
+                p = self.words.progress(e)
+                line = f"[進度] {p}" if p and p != self._last_progress else None   # repeated looks: said once
+                self._last_progress = p or self._last_progress
+            elif line is not None:
+                self._last_progress = None
             if e["kind"] == "question":
                 self.q_shown = e["id"]
             self.transcript.append({"event": e["kind"], "i": e["i"], "t_sim": e["t"], "rev": e["rev"],

@@ -4,7 +4,7 @@
 
 ## 情境
 
-開場時，粉盤放缺料色 A 兩顆、優先色 B 一顆、替代色 C 一顆，米盤是空的。訂單是 A×2、B×1，B 先放。預設 A、B、C 是紅、藍、黃，使用者說「兩紅一藍，藍色先放」。
+開場時，粉盤放缺料色 A 兩顆、優先色 B 一顆、替代色 C 一顆，米盤是空的。訂單是 A×2、B×1，B 先放。預設 A、B、C 是藍、紅、黃（決賽組合 2 藍 1 紅 1 黃），使用者說「兩藍一紅，紅色先放」。2026-11-22 的結果用的是舊預設紅、藍、黃與 `lab_20261120` 場景。
 
 1. **先交付兩顆**：手臂先送 B，再送第一顆 A。每次放置都要核對過，帳本才加一。
 2. **回待命點後移除**：第二筆交付核對後，手臂回待命點。手臂停穩、夾爪張開且是空的，場景才移除粉盤剩下的 A。米盤裡已交付的 B 與 A 留在原處。移除由執行器回報「待命停穩」這個狀態觸發，不是看經過幾秒。
@@ -31,7 +31,7 @@
 
 三色必須相異。場景依角色產生四顆積木 `[A, A, B, C]` 和訂單「B×1，再 A×2」。執行器從當次觀測建立候選清單，依剩餘需求選色，同色時選離基座最近的一顆。
 
-**布局**沿用 [`configs/random_blocks_finals.yaml`](../configs/random_blocks_finals.yaml) 的設定：
+**布局**用 [`configs/random_blocks_finals_20261125.yaml`](../configs/random_blocks_finals_20261125.yaml)（11/25 場景的粉盤近端；舊場景用 `configs/random_blocks_finals.yaml`）：
 
 - 可達區、盤邊留白、含 yaw 的間距；
 - 抓取 IK 檢查（四種 90° 朝向都試）。
@@ -45,7 +45,7 @@
 - 抓取 IK 可達；
 - 離移除位置至少一個邊長加間距（29.5＋27 mm），yaw 至少差 10°。
 
-米盤放置格位沿用 `configs/task.yaml` 的前三格。
+米盤放置格位取自場景的 `placement_slots`（11/25 場景為實機採集的 4 格參考位置）；場景沒有設定時沿用 `configs/task.yaml`。
 
 ## 感知與控制來源
 
@@ -65,13 +65,14 @@
 
 ```bash
 # 互動（主秀）：模型服務、模擬伺服器、聊天視窗；在聊天下單並回答
-uv run tools/finals.py chat --roles red,blue,yellow --seed 11
-#   聊天：「我要兩紅一藍，藍色先放」 → 等提問 → 「改成黃的」或「等你補紅」
+uv run tools/finals.py chat --roles blue,red,yellow --seed 12
+#   聊天：「我要兩藍一紅，紅色先放」 → 等提問 → 「改成黃的」或「等你補藍」
 # 單次（注入回答）
-uv run tools/finals.py run --roles red,blue,yellow --seed 11 --answer substitute
+uv run tools/finals.py run --roles blue,red,yellow --seed 12 --answer substitute
 uv run tools/finals.py run --roles purple,orange,dark_green --seed 21 --answer wait --video
 # 驗收批次：三組角色 × 兩個 seed × 兩種回答 = 12 次
 uv run tools/finals.py batch [--out outputs/finals/<名稱>] [--sets a,b,c;a,b,c] [--seeds 5,6] [--perception sim_truth]
+# 場景預設 configs/scenes/lab_20261125.yaml，FINALS_SCENE=<場景檔> 可換
 ```
 
 **各模式的行為**
@@ -81,7 +82,7 @@ uv run tools/finals.py batch [--out outputs/finals/<名稱>] [--sets a,b,c;a,b,c
 **重播**：每次執行都把完整場景檔寫在結果旁邊，同一個檔案可以重播：
 
 ```bash
-uv run --with "opencv-python-headless>=4.9" scripts/mujoco_ee_teleop.py --scene configs/scenes/lab_20261120.yaml \
+uv run --with "opencv-python-headless>=4.9" scripts/mujoco_ee_teleop.py --scene configs/scenes/lab_20261125.yaml \
     --task outputs/finals/<批次>/<名稱>.yaml --exit_after_script
 ```
 
@@ -123,7 +124,31 @@ uv run --with "opencv-python-headless>=4.9" scripts/mujoco_ee_teleop.py --scene 
 
 `finals.move_substitute: true`（`tools/finals.py run|chat --move-substitute`）：缺料問題出現後、回答之前，場景把 C 移到粉盤內另一個合法、可達的位置。這個位置用和補回相同的條件抽樣，離原處至少一個邊長加間距。新位置不告訴執行器，要由相機取得。
 
-## 結果（2026-11-22，MuJoCo 4.0.1，GUI，`perception: camera`）
+## 11/25 場景（2026-11-26，MuJoCo 4.0.1，GUI，`perception: camera`）
+
+[`configs/scenes/lab_20261125.yaml`](../configs/scenes/lab_20261125.yaml) 依實機 11/25 的配置更新模擬，其餘設定沿用 `lab_20261120`：
+
+| 項目 | 內容 | 來源 |
+|---|---|---|
+| 托盤 | 粉盤中心 (0.292, 0.184) m、2.4°；米盤 (0.319, −0.107) m、1.0° | 11/25 對齊圖的盤角（`outputs/261125-trays/trays.json`）以 11/20 的 D455 外參投影到盤緣高度；右臂基座投影 (447, 455) px 與影像相符 |
+| 起始姿勢 | 實機停放位 `[1.67, −109.05, 97.32, 66.07, 3.03]` | 路線檔 `right-park-channel-261125.json` |
+| 待命點 | (0.187, 0.016, 0.09) m | 實機起姿的末端 xy；起姿夾爪傾斜、末端高 0.199 m，垂直夾爪在此最高 0.10 m，高度取 teleop home |
+| 夾爪方向 | 徑向（`grasp_heading_deg: 0`），待命時 LeRobot wrist_flex 93°、wrist_roll 0° | 與實機示範相同（實機起姿 93.6°、3.0°） |
+| 放置格位 | 米盤 4 格 (0.228, −0.202)、(0.229, −0.137)、(0.230, −0.072)、(0.232, −0.007) m | `configs/real_slots.json` 米盤格位經 11/25 盤角換算 |
+| 布局 | 決賽組合；粉盤近端 x 0.16–0.27 m（盤內 x ≲ 120 mm）、離盤緣 25 mm、間距 20 mm | 實機伸遠會下垂，採集不收盤緣 |
+
+**決賽組合（藍×2、紅、黃）**，seed 11–16 × 兩種回答：
+
+| 夾爪方向 | 通過 | 失敗 |
+|---|---|---|
+| 徑向（採用） | 10/12 | seed 11：粉盤近端左側 (0.19, 0.245) 的藍塊腕部兩次都看不到 |
+| 切向 | 10/12 | seed 13：粉盤 (0.225, 0.244) 的紅塊與 (0.197, 0.164) 的藍塊腕部看不到 |
+
+兩種方向都沒有掉落，失敗都是腕部確認（`wrist_unconfirmed`）落在粉盤近端左側。盤緣留白 16 mm 時，seed 11 的紅塊貼著近端內壁，腕部影像中內壁陰影與紅塊相連；加到 25 mm 後該擺位通過。
+
+**三組角色的驗收批次**（切向、留白 25 mm）：決賽組合 4/4；紫、橘、深綠 3/4（s22 等補料：待命時全域把深綠看成淺綠；s22 改色一次腕部確認失敗後重抓成功，`skills_ok` 不過）；青、黃、淺綠 2/4（s31：待命時全域漏看淺綠）。後兩組是全域易混色的感知問題，決賽用不到這些顏色。
+
+## 結果（2026-11-22，`lab_20261120`，MuJoCo 4.0.1，GUI，`perception: camera`）
 
 **驗收批次**（`tools/finals.py batch`）：12/12 通過，改色 6/6、等補料 6/6。改色分支在回答後 1.9–2.6 模擬秒取得新觀測，才開始抓取。兩條分支共用同一個起始布局。三組角色涵蓋八種色票，包括全域易混的深綠、淺綠、黃。
 
@@ -156,4 +181,5 @@ uv run --with "opencv-python-headless>=4.9" scripts/mujoco_ee_teleop.py --scene 
 - 交付核對、掉落偵測仍讀模擬真值。放置後改用相機核對，留待之後。
 - 全域易混的顏色規則來自模擬色票的渲染，換成實拍後要重新檢查。
 - 若補回的顏色在全域畫面中持續有歧義，系統會持續等待。上述批次驗過的缺料色為紅、紫、青。
-- 待命點是控制器的 home 位置；全域觀測時手臂不會擋到粉盤，這只在本場景確認過。
+- 待命點是控制器的 home 位置；全域觀測時手臂不會擋到粉盤，這只在本場景確認過。11/25 場景的待命點取實機起姿的 xy，實機的待命是收折的停放位，模擬技能只能以垂直夾爪在 EE 空間移動，到不了收折姿勢。
+- 11/25 場景的盤位依賴 11/20 的 D455 外參與暫定關節映射（`real_joints`）；逐軸核對與基座外參重量後要再更新。

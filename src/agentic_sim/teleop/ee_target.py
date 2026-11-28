@@ -349,8 +349,9 @@ class EETargetController:
 def load_controller(chain: So101Chain, teleop_cfg: dict, base_pos=(0.0, 0.0, 0.0), scene: dict | None = None
                     ) -> EETargetController:
     """base_pos: the robot base link origin in the mount frame (scene robot.base_pos).
-    scene: lab scenes set robot.grasp_heading_deg (neutral finger direction) and robot.start_pose_lerobot (arm
-    joints at reset, LeRobot readings); without them the defaults (tangential fingers, start at home) apply."""
+    scene: lab scenes set robot.grasp_heading_deg (neutral finger direction), robot.start_pose_lerobot (arm
+    joints at reset, LeRobot readings) and robot.home_ee (home / standby EE position of
+    the lab); without them the defaults (tangential fingers, start at home, teleop home_ee) apply."""
     chain.ee_offset = np.array(v(teleop_cfg["ee_offset_in_gripper_link"]), float)
     chain.base_pos = np.array(base_pos, float)
     p = TeleopParams.from_cfg(teleop_cfg)
@@ -361,4 +362,6 @@ def load_controller(chain: So101Chain, teleop_cfg: dict, base_pos=(0.0, 0.0, 0.0
         from agentic_sim.real_joints import lerobot_to_shared
         arm, _ = lerobot_to_shared(v(rob["start_pose_lerobot"]))
         p.start_q = np.clip(arm, chain.lower, chain.upper)
+    if "home_ee" in rob:   # the lab's standby point replaces the teleop home
+        p.home_ee = np.array(v(rob["home_ee"]), float)
     return EETargetController(chain, p)

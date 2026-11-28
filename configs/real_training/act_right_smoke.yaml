@@ -1,0 +1,22 @@
+# Pipeline check only (tiny fake dataset): a few steps, short action chunks. Not a training recipe.
+#   .venv-train/bin/lerobot-train --config_path configs/real_training/act_right_smoke.yaml
+dataset:
+  repo_id: local/so101-right
+  root: outputs/datasets/fake-act
+
+policy:
+  type: act
+  device: cuda
+  push_to_hub: false
+  chunk_size: 5
+  n_action_steps: 5
+
+output_dir: outputs/train/act_right_smoke
+batch_size: 4
+steps: 20
+save_freq: 20
+log_freq: 5
+num_workers: 0
+
+wandb:
+  enable: false

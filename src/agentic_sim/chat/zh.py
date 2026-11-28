@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+from agentic_sim.task.pick_ref import REF_ZH
+
 NUM = {0: "零", 1: "一", 2: "兩", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九", 10: "十"}
+ORD = {**NUM, 2: "二"}   # ordinals: 第二顆, not 第兩顆
 CHOICE_ZH = {"return": "放回原位", "place_at": "放到指定位置", "deliver": "照樣送出", "substitute": "換成其他顏色",
-             "reduce": "減少數量", "wait": "等補料"}
+             "reduce": "減少數量", "wait": "等補料", "hold": "停住等你取下", "removed": "已取下"}
+
+
+def report_line(line: str) -> str:
+    """A report as shown: progress lines keep their own [進度] prefix, everything else is a [系統] report."""
+    return line if line.startswith("[進度]") else f"[系統] {line}"
 
 
 class Words:
@@ -13,6 +21,10 @@ class Words:
 
     def color(self, c: str) -> str:
         return self.cfg.get(c, {}).get("zh", c)
+
+    def item(self, c: str) -> str:
+        """'紅色積木'; an object entry (configs/chat.yaml `object: true`, the plush toy) is named by itself."""
+        return self.color(c) if self.cfg.get(c, {}).get("object") else f"{self.color(c)}積木"
 
     def counts(self, d: dict, empty: str = "無") -> str:
         """{'red': 1, 'blue': 2} -> '紅色 1、藍色 2'."""
@@ -32,11 +44,17 @@ class Words:
     # ---- questions -------------------------------------------------------------------------------
     def question(self, q: dict) -> str:
         k = q.get("qkind") or q.get("kind")     # an event carries the question kind as qkind
+        if k == "held_item" and "hold" in q.get("options", []):
+            return (f"手上的{self.item(q['color'])}，新的需求用不到。手臂不會放回粉盤：要照樣送出，"
+                    f"還是停在這裡等你取下？（問題 {q['id']}）")
+        if k == "removal":
+            return (f"手臂夾著{self.item(q['color'])}停住了，請從夾爪取下，取下後跟我說「取下了」。"
+                    f"（問題 {q['id']}）")
         if k == "held_item":
             if "deliver" in q.get("options", []):
-                return (f"手上的{self.color(q['color'])}積木，新的需求用不到。要放回原位、放到其他位置，還是照樣送出？"
+                return (f"手上的{self.item(q['color'])}，新的需求用不到。要放回原位、放到其他位置，還是照樣送出？"
                         f"（問題 {q['id']}）")
-            return f"放置盤沒有空位放手上的{self.color(q['color'])}積木。要放回原位，還是放到其他位置？（問題 {q['id']}）"
+            return f"放置盤沒有空位放手上的{self.item(q['color'])}。要放回原位，還是放到其他位置？（問題 {q['id']}）"
         cands = q.get("substitute_candidates") or []
         if k == "shortage" and set(q.get("options", [])) == {"substitute", "wait"} and len(cands) == 1:
             done = "".join(NUM.get(1, "一") + self.short(c) for c in q.get("delivery_sequence") or [])
@@ -59,9 +77,14 @@ class Words:
             return self.question(e)
         if k == "observation_unclear":
             return f"看不清來源盤（{e.get('reason') or '視野受遮擋或身分不明'}），先繼續觀測，不提問。"
+        if k == "block_removed":
+            return f"好，{self.item(e['color'])}已取下，手臂放開夾爪繼續。"
         if k == "question_dropped":
             return f"問題 {e['id']} 已取消：新的需求已經用得到手上的積木，會直接送出。"
         if k == "over_delivery":
+            if e.get("over", 0) > 0 and e.get("action") == "left_for_operator":
+                return (f"放置盤的{self.color(e['color'])}比需求多 {e['over']} 顆，手臂不會夾回。"
+                        f"請把多的取走，或改需求把它算進去。")
             if e.get("over", 0) > 0:
                 return f"{self.color(e['color'])}多交了 {e['over']} 顆，會從放置盤取回來源盤。"
             return f"{self.color(e['color'])}比需求多 {e['delivered'] - e['target']} 顆（你同意送出的），不取回。"
@@ -73,13 +96,43 @@ class Words:
         if k == "answer_rejected":
             return f"異常：回答沒有被接受（{e.get('reason', '')}）。"
         if k == "uncertain":
-            return f"異常：{self.color(e['color'])}積木的結果無法確認（{e.get('reason', '')}）。"
+            return f"異常：{self.item(e['color'])}的結果無法確認（{e.get('reason', '')}）。"
         if k == "dropped":
             return "異常：搬運中積木掉落。"
+        if k == "pick_rejected":
+            more = f"另外還有 {e['reachable_left']} 顆夾得到。" if e.get("reachable_left") else ""
+            return (f"{REF_ZH.get(e.get('ref'), '')}那顆{self.item(e['color'])}在手臂範圍外，夾不到，"
+                    f"已從需求拿掉這一顆。{more}")
         if k == "block_skipped":
-            return f"異常：{self.color(e['color'])}積木夾取失敗 {e.get('attempts')} 次，先跳過。"
+            return f"異常：{self.item(e['color'])}夾取失敗 {e.get('attempts')} 次，先跳過。"
         if k == "skill_done":
             return f"異常：{e['skill']} 動作{'失敗' if e['status'] == 'failed' else '結果不確定'}（{e.get('failure_reason', '')}）。"
+        return None
+
+    # ---- skill progress (what the arm starts doing now; shown with the [進度] prefix) ------------------------
+    def progress(self, e: dict) -> str | None:
+        """skill_start -> one line about the motion that starts now (fixed templates; None = not shown)."""
+        if e.get("kind") == "pick_target":
+            return f"找到{REF_ZH.get(e.get('ref'), '')}那顆{self.item(e['color'])}，準備夾取…"
+        if e.get("kind") != "skill_start":
+            return None
+        sk, why, c = e.get("skill"), e.get("purpose"), e.get("color")
+        zc = self.item(c) if c else "積木"
+        if sk == "pick":
+            if why == "retrieve":
+                return f"正在把多交的{zc}從放置盤取回…"
+            nth = e.get("nth")
+            how = {"act": "用 ACT 模型", "program": "用程式"}.get(e.get("method"), "")   # real arm: which skill
+            return f"正在{how}夾取{f'第{ORD.get(nth, nth)}顆' if nth else ''}{zc}…"
+        if sk == "place":
+            return {"return": f"把{zc}放回原位…", "place_at": f"把{zc}放到指定位置…",
+                    "deliver_extra": f"照你的意思，把{zc}送進放置盤…"}.get(why, f"把{zc}放進放置盤…")
+        if sk == "observe":
+            return "正在觀察備料盤，確認還有哪些積木…"
+        if sk == "hold":
+            return f"先拿著{zc}，等你決定…"
+        if sk == "home":
+            return "回到待命位置…"
         return None
 
     def status(self, st: dict) -> str:

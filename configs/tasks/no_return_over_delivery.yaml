@@ -1,0 +1,18 @@
+# Finals rule (docs/real-progress.md): retrieve_over_delivery with no_return. Red is over-delivered by one after the
+# order change: reported in the chat and left in the placement tray, never taken back.
+name: no_return_over_delivery
+task: {no_return: true}
+blocks: [red, red, red, blue, blue, yellow]
+order: {red: 3}
+timeout_s: 180
+events:
+  - when: {event: verified, color: red, delivered: 2}
+    order: {total: {red: 1, blue: 2}}
+checks:
+  - {over_delivery: {color: red, over: 1, action: left_for_operator}}
+  - no_over_delivery_retrieval
+  - {final_placement: {red: 2, blue: 2}}
+  - {ledger: {target: {red: 1, blue: 2}, delivered: {red: 2, blue: 2}, over: {red: 1}, done: false}}
+  - no_drop
+  - no_stale_commands
+  - skills_ok

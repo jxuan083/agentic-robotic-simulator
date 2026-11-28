@@ -172,7 +172,7 @@ class TaskScenario:
                 add(key, placed == arg, expected=arg, observed=placed, observation="sim_truth")
             elif key == "ledger":
                 ok = all(led[k] == v for k, v in arg.items())
-                add(key, ok and led["done"], expected=arg, ledger=led)
+                add(key, ok and ("done" in arg or led["done"]), expected=arg, ledger=led)   # done: false = over left
             elif key == "max_displacement":
                 obs_mm = {b: round(self.max_disp[b], 2) for b in arg["blocks"]}
                 add(key, all(v < float(arg["mm"]) for v in obs_mm.values()), limit_mm=arg["mm"], observed_mm=obs_mm)

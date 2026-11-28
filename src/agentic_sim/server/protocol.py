@@ -29,9 +29,13 @@ COMMANDS = {
     "get_state": {},
     "run_acceptance": {"scenario": (str, True)},
     "shutdown": {},
+    # real arm (tools/real_task_server.py): D455 look with no task, the operator done at standby, the simulated table
+    "scan": {},
+    "task_continue": {},
+    "fake_scene": {"op": (str, True), "color": (str, True), "xy": (list, False)},
     # task executor (issue #5): orders, answers, state; the executor takes the arm on the first order
     # request_id (optional): a retried request with the same id takes effect once (transport retries)
-    "task_order": {"counts": (dict, True), "mode": (str, False), "request_id": (str, False)},
+    "task_order": {"counts": (dict, True), "mode": (str, False), "request_id": (str, False), "pick": (dict, False)},
     "task_answer": {"id": (int, True), "choice": (str, True), "color": (str, False), "xy": (list, False),
                     "request_id": (str, False)},
     "task_state": {},

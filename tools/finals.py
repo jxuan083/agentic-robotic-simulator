@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Finals whole-order scene in MuJoCo (docs/finals-shortage.md): one run, or the replayable acceptance batch.
 
-  uv run tools/finals.py run --roles red,blue,yellow --seed 11 --answer substitute   # one run, answer injected
-  uv run tools/finals.py run --roles red,blue,yellow --seed 11 --answer wait
+  uv run tools/finals.py run --roles blue,red,yellow --seed 11 --answer substitute   # one run, answer injected
+  uv run tools/finals.py run --roles blue,red,yellow --seed 11 --answer wait
   uv run tools/finals.py batch                         # 3 role sets x 2 seeds x {substitute, wait} = 12 runs
   uv run tools/finals.py batch --sets red,blue,yellow --seeds 5,6 --out outputs/finals/my_batch
-  uv run tools/finals.py chat --roles red,blue,yellow --seed 11     # interactive: order and answer in the chat
+  uv run tools/finals.py chat --roles blue,red,yellow --seed 11     # interactive: order and answer in the chat
   uv run tools/finals.py report outputs/finals/<run>/*.jsonl         # step timeline of runs
 
 Roles are shortage A (x2), priority B (x1), substitute C (x1); the order is B x1 then A x2. Every run writes its
@@ -29,9 +29,9 @@ os.chdir(ROOT)
 from agentic_sim.config import load  # noqa: E402
 
 BASE = "configs/tasks/finals_shortage.yaml"
-SCENE = "configs/scenes/lab_20261120.yaml"     # lab scene: storage / placement trays and both sensor cameras
-# Acceptance sets: three (A, B, C) role sets over eight palette colours, two preselected seeds each.
-SETS = [("red", "blue", "yellow"), ("purple", "orange", "dark_green"), ("cyan", "yellow", "light_green")]
+SCENE = os.environ.get("FINALS_SCENE", "configs/scenes/lab_20261125.yaml")   # 11/25 trays, park / start poses, beige slots
+# Acceptance sets: the finals set first (A blue x2, B red, C yellow), then two more over eight palette colours, two preselected seeds each.
+SETS = [("blue", "red", "yellow"), ("purple", "orange", "dark_green"), ("cyan", "yellow", "light_green")]
 SEEDS = {SETS[0]: (11, 12), SETS[1]: (21, 22), SETS[2]: (31, 32)}
 ANSWERS = ("substitute", "wait")
 
@@ -150,7 +150,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     one = sub.add_parser("run", help="one run")
-    one.add_argument("--roles", default="red,blue,yellow", help="A,B,C: shortage, priority, substitute colours")
+    one.add_argument("--roles", default="blue,red,yellow", help="A,B,C: shortage, priority, substitute colours")
     one.add_argument("--seed", type=int, default=11)
     one.add_argument("--answer", choices=ANSWERS, required=True)
     one.add_argument("--out", default="outputs/finals/runs")
@@ -163,7 +163,7 @@ def main():
     rep = sub.add_parser("report", help="step timeline (Markdown) of runs from their event logs (*.jsonl)")
     rep.add_argument("logs", nargs="+")
     chat = sub.add_parser("chat", help="interactive: MuJoCo server, model service and chat window (tools/lab.py)")
-    chat.add_argument("--roles", default="red,blue,yellow")
+    chat.add_argument("--roles", default="blue,red,yellow")
     chat.add_argument("--seed", type=int, default=11)
     chat.add_argument("--out", default="outputs/finals/chat")
     chat.add_argument("--move-substitute", action="store_true", help="acceptance: move C after the question")

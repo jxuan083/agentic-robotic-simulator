@@ -89,6 +89,7 @@ def block_support_top(scene: dict) -> float:
 
 def block_layout(scene: dict, n_blocks: int | None = None, colors: list | None = None) -> BlockLayout:
     """Block 0 at block.init_xy with the scene colour; blocks 1..n-1 at block.layout_xy[i] with palette colours.
+    A scene with the plush toy may list plush.block_xy: the block positions there replace both (clear of the plush).
 
     colors: palette colour names, one per block (task scenes, e.g. [red, red, blue]); sets the block count and
     replaces the default colours. Positions are the same layout slots."""
@@ -102,6 +103,8 @@ def block_layout(scene: dict, n_blocks: int | None = None, colors: list | None =
     e = v(bl["edge"])
     floor_top = block_support_top(scene)
     layout = [tuple(v(bl["init_xy"]))] + [tuple(xy) for xy in (v(bl["layout_xy"])[1:] if "layout_xy" in bl else [])]
+    if "block_xy" in (scene.get("plush") or {}):
+        layout = [tuple(xy) for xy in v(scene["plush"]["block_xy"])]
     if len(layout) < n:
         raise ValueError(f"scene block.layout_xy has {len(layout)} positions, {n} blocks requested")
     linear, display = [tuple(bl["color"])], [tuple(bl["color"])]

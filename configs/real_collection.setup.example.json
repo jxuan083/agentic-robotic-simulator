@@ -1,0 +1,43 @@
+{
+  "motion": {
+    "arm": "right",
+    "version": "",
+    "layout": "",
+    "workspace": "",
+    "calibrations": {"leader": {}, "follower": {}},
+    "park_support": "",
+    "park": null,
+    "via": [],
+    "start": null,
+    "limits": {
+      "shoulder_pan": null,
+      "shoulder_lift": null,
+      "elbow_flex": null,
+      "wrist_flex": null,
+      "wrist_roll": null,
+      "gripper": null
+    },
+    "speed": {
+      "shoulder_pan": 12,
+      "shoulder_lift": 12,
+      "elbow_flex": 12,
+      "wrist_flex": 12,
+      "wrist_roll": 12,
+      "gripper": 15
+    },
+    "rgb_depth": {
+      "right_base_extrinsics": null,
+      "reference_points": null
+    }
+  },
+  "cards": {
+    "seed": 20261124,
+    "reserve_distance_mm": 22,
+    "zones": {
+      "pink_near": [],
+      "pink_far": [],
+      "beige_near": [],
+      "beige_far": []
+    }
+  }
+}

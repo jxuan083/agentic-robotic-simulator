@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from pathlib import Path
+from dataclasses import dataclass, field
 
 import mujoco
 import numpy as np
 
+from agentic_sim import plush as P
 from agentic_sim.config import load, v
 from agentic_sim.kinematics import ARM_JOINTS, GRIPPER_JOINT
 from agentic_sim.scene_layout import TRAYS, block_layout, global_camera_quat, sensor_cameras, table_box, tray_parts, wrist_camera_mount, yaw_quat
@@ -54,6 +56,12 @@ class MjScene:
     shell_materials: list    # material ids recoloured by colour DR
     edge: float
     trays: dict
+    plush_body: int | None = None    # finals plush (scene `plush:` section); None without it
+    plush_geoms: list = field(default_factory=list)   # its collision geoms
+    plush_qpos: int | None = None    # free-joint qpos address (7: pos + quat wxyz)
+    plush_qvel: int | None = None
+    plush_init_pos: tuple | None = None
+    plush_init_quat: tuple | None = None
 
 
 def _box(parent, name, size, pos, rgba, friction=None, quat=(1, 0, 0, 0), collide=True):
@@ -145,6 +153,8 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
         g = _box(b, f"block_{i}_geom", (lay.edge,) * 3, (0, 0, 0), (*rgb, 1), friction=lay.friction[fr])
         g.mass = lay.mass
 
+    plush = add_plush(spec, scene_cfg["plush"], trays) if "plush" in scene_cfg else None
+
     m = spec.compile()
     names = al["joints"]
     offsets = {k: v(e) for k, e in (al.get("joint_offset") or {}).items()}
@@ -163,7 +173,86 @@ def build(scene_cfg: dict, n_blocks: int | None = None, robot_cfg: dict | None =
         block_qvel=[int(m.jnt_dofadr[m.joint(f"block_{i}_free").id]) for i in range(len(lay.init_pos))],
         block_init_pos=list(lay.init_pos), block_init_rot=lay.init_rot, block_init_rots=list(lay.init_rots),
         block_colors=list(lay.display_rgb),
-        shell_materials=shell, edge=lay.edge, trays=trays)
+        shell_materials=shell, edge=lay.edge, trays=trays,
+        **(_plush_ids(m, *plush) if plush else {}))
+
+
+PLUSH_BODY = P.ID
+
+
+def add_plush(spec, cfg: dict, trays: dict | None = None):
+    """Finals plush as one free body of rigid primitives at cfg pos / yaw_deg, bottom face on the table top or, with
+    cfg `tray` (a scene tray name), on that tray's floor.
+    Collision: tram (two crossed boxes + four corner cylinders = a box with rounded vertical edges) and the head
+    ellipsoid. The separate fabric shell and facial details are visual only. Returns (init pos, init quat)."""
+    x, y = v(cfg["pos"])
+    floor = float(trays[cfg["tray"]]["floor_top"]) if cfg.get("tray") else 0.0
+    pos, quat = (float(x), float(y), floor + 0.0005), yaw_quat(float(v(cfg.get("yaw_deg", 0.0))))
+    b = spec.worldbody.add_body()
+    b.name = PLUSH_BODY
+    b.pos, b.quat = list(pos), list(quat)
+    b.add_freejoint().name = f"{PLUSH_BODY}_free"
+    com, diag = P.inertia()
+    b.explicitinertial = True
+    b.mass, b.ipos, b.inertia = P.MASS, list(com), list(diag)
+    L, W, H, r = P.LENGTH, P.WIDTH, P.BODY_HEIGHT, P.CORNER_RADIUS
+    hidden = [0, 0, 0, 0]
+    for name, size in (("body_x", (L, W - 2 * r, H)), ("body_y", (L - 2 * r, W, H))):
+        _box(b, f"{PLUSH_BODY}_{name}", size, (0, 0, H / 2), hidden, friction=P.FRICTION).mass = 0
+    for i, (sx, sy) in enumerate(((1, 1), (1, -1), (-1, 1), (-1, -1))):
+        g = b.add_geom()
+        g.name, g.type = f"{PLUSH_BODY}_corner_{i}", mujoco.mjtGeom.mjGEOM_CYLINDER
+        g.size, g.pos = [r, H / 2, 0], [sx * (L / 2 - r), sy * (W / 2 - r), H / 2]
+        g.rgba, g.friction, g.mass = hidden, [P.FRICTION, 0.005, 0.0001], 0
+    g = b.add_geom()
+    g.name, g.type = f"{PLUSH_BODY}_head", mujoco.mjtGeom.mjGEOM_ELLIPSOID
+    g.size, g.pos, g.rgba = list(P.HEAD_RADII), list(P.HEAD_POS), hidden
+    g.friction, g.mass = [P.FRICTION, 0.005, 0.0001], 0
+
+    assets = Path(__file__).resolve().parents[3] / "assets" / "enoden305"
+    for name in ("car", "shiba", "tan"):
+        texture = spec.add_texture(name=f"plush_{name}_tex", type=mujoco.mjtTexture.mjTEXTURE_2D,
+                                   file=str(assets / f"{name}.png"))
+        mat = spec.add_material(name=f"plush_{name}", specular=0.035, shininess=0.08)
+        mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = texture.name
+    for name in ("car", "head", "ear"):
+        spec.add_mesh(name=f"plush_{name}_shell", file=str(assets / f"{name}.obj"), smoothnormal=True)
+
+    def visual(name, pos, *, mesh=None, material=None, size=None, color=None, quat=(1, 0, 0, 0)):
+        geom = b.add_geom()
+        geom.name, geom.pos, geom.quat = f"plush_{name}", pos, quat
+        geom.mass, geom.contype, geom.conaffinity = 0, 0, 0
+        if mesh:
+            geom.type, geom.meshname = mujoco.mjtGeom.mjGEOM_MESH, f"plush_{mesh}_shell"
+        else:
+            geom.type, geom.size = mujoco.mjtGeom.mjGEOM_ELLIPSOID, size
+        if material:
+            geom.material = f"plush_{material}"
+        if color:
+            geom.rgba = [*P.rgb(color), 1]
+
+    visual("car_cover", (0, 0, H / 2), mesh="car", material="car")
+    visual("dog_cover", (0, 0, .072), mesh="head", material="shiba")
+    # The paws straddle the roof and the snout points along the tram, as on the toy.
+    for side in (-1, 1):
+        visual(f"paw_{side}", (.012, side*.019, .052), size=(.010, .007, .008), material="tan")
+        visual(f"ear_{side}", (-.004, side*.0164, .0917), mesh="ear", material="tan",
+               quat=(1, 0, 0, 0) if side == 1 else (0, 0, 0, 1))
+        visual(f"eye_{side}", (.0201, side*.0124, .0751), size=(.0027, .00265, .00285), color="#211d1a")
+        visual(f"eye_glint_{side}", (.02245, side*.0124+.0004, .0762), size=(.00042,)*3, color="#eee5cc")
+    visual("nose", (.0276, 0, .0698), size=(.0029, .0042, .0029), color="#24201e")
+    # Two sides of the folded white ribbon on the crown.
+    for side in (-1, 1):
+        visual(f"ribbon_{side}", (-.0055, side*.00145, .0957), size=(.0034, .0007, .0024), color="#efe9d7")
+    return pos, quat
+
+
+def _plush_ids(m: mujoco.MjModel, pos, quat) -> dict:
+    body, jnt = m.body(PLUSH_BODY).id, m.joint(f"{PLUSH_BODY}_free").id
+    return {"plush_body": body,
+            "plush_geoms": [i for i in range(m.ngeom) if m.geom_bodyid[i] == body and m.geom_contype[i]],
+            "plush_qpos": int(m.jnt_qposadr[jnt]), "plush_qvel": int(m.jnt_dofadr[jnt]),
+            "plush_init_pos": pos, "plush_init_quat": quat}
 
 
 WRIST_CAMERA = "wrist_cam"     # Menagerie camera inside the camera_mount body

@@ -4,6 +4,8 @@
 
 從 repo 根目錄執行 `uv run tools/sim.py` 開啟模擬選單。鍵鼠操作可用 Isaac Sim 或 MuJoCo；「錄示範」會啟動 Isaac，「檢查上一筆示範」從磁碟讀回資料。環境設定見 [模擬入口](docs/sim-server.md)，抓前定位另有[兩引擎的重播指令](docs/wrist-alignment.md)。
 
+實機（SO-101 右臂）的路線教示、從停放位開始的取放示範採集與 D455 方塊定位見 [docs/real-progress.md](docs/real-progress.md)（接手先讀）與 [docs/real-teleop.md](docs/real-teleop.md)。
+
 ## 競賽流程規劃
 
 ```mermaid
@@ -25,7 +27,7 @@ flowchart LR
 - **共用任務核心，分開後端**：Isaac Sim 與 MuJoCo 共用場景設定；實機錄製在獨立整合分支，完整 `real` 與 `mock` 後端仍在規劃中。
 - **ACT 為主線**：政策經 adapter 接入，預留 Diffusion Policy、π0.5 等替代政策。
 - **操作輸入共用一個介面**：模擬端先用 keyboard／mouse 操作末端（EE），再接實體 SO-101 leader，controller 最後。
-- **場地與任務分開**：已提供 `lab_current_minimal` 與 `lab_20261120`；`competition_draft` 待場地量測。
+- **場地與任務分開**：已提供 `lab_current_minimal`、`lab_20261120` 與 `lab_20261125`（決賽配置：11/25 盤位、停放位起始、徑向夾爪）；`competition_draft` 待場地量測。
 - **DAgger 規劃**：人工接管 → 修正資料保存 → 檢查 → 明確納入再訓練 → 同條件比較新舊政策。
 - **依賴環境分開**：同一 repo，模擬端、訓練端、實機執行端可使用各自的 Python 環境。
 
@@ -36,7 +38,7 @@ flowchart LR
 | 模擬操作與錄製 | 兩個引擎均可鍵鼠控制 EE、進入全螢幕工作區與錄製視窗 MP4。Isaac 另可錄製含雙相機與關節資料的示範 episode，供離線讀回。 |
 | 聊天與整單執行 | `tools/lab.py` 啟動實驗室模擬與聊天。LLM 解析訂單和回答，執行器管理需求帳本。MuJoCo 決賽缺料整單（改色／等補料）的選料與缺料複查改用相機，12 次驗收與聊天主秀都通過；抓取為腳本技能，交付核對仍讀模擬真值。[決賽整單](docs/finals-shortage.md) |
 | 抓前定位 B | 獨立基準。MuJoCo 主測首次 233/234、含一次重抓 234/234，相鄰紅塊 21/24。Isaac 三場開啟單次 Z 補償後均通過懸停門檻並提起近顆。[方法與重播](docs/wrist-alignment.md) |
-| 實機資料與 ACT | 單臂錄製與讀回在實機整合分支。規劃以 leader 收集紅、藍、黃雙向共 120 筆；收齊後用實拍做離線定位。單臂積木 ACT 與 DAgger 再訓練待驗。 |
+| 實機資料與 ACT | 右臂：停放位 ⇄ 起姿固定路線、leader 自動交接、`tools/lab_day.sh grasp` 從停放位錄取放示範（只收粉 → 米，米盤三格輪替），D455 以固定盤角給目標與格位的托盤座標（不轉腕）。11/25 試錄 5 筆（4 筆成功、30 Hz）。ACT 以座標為條件，夾取 [start, lift]、放置 [lift, end]；訓練端轉換待改。[實機進度](docs/real-progress.md) |
 
 各階段的現況與待辦見 [docs/status.md](docs/status.md)。
 
@@ -58,6 +60,8 @@ flowchart LR
 | [docs/interfaces.md](docs/interfaces.md) | 設定規格、命令契約、leader 輸入 adapter、技能結果 |
 | [docs/scenes-and-tasks.md](docs/scenes-and-tasks.md) | 資產、場地配置、任務定義與量測需求 |
 | [docs/teleop-data-training.md](docs/teleop-data-training.md) | 遙操作、episode 資料、檢查與分割、ACT 訓練 |
+| [docs/real-teleop.md](docs/real-teleop.md) | 單臂／雙臂實機 CLI、可攜 episode、離線讀回與假硬體接管 |
+| [docs/real-progress.md](docs/real-progress.md) | 實機最新進度、停放位／通道位、資料錄法與下一步（接手先讀） |
 | [docs/inference-dagger-evaluation.md](docs/inference-dagger-evaluation.md) | 自主推論、DAgger 閉環、再訓練比較與評估 |
 | [docs/agent.md](docs/agent.md) | Agent、任務執行器、需求帳本與缺料流程 |
 | [docs/finals-shortage.md](docs/finals-shortage.md) | MuJoCo 決賽整單：中途缺料、改色或等補料，相機選料與複查、場景事件、驗收批次與聊天主秀 |

@@ -13,6 +13,13 @@ llm:
   structured_output: json_schema  # response_format with the intent schema; null = parse plain JSON from the reply
 history_turns: 6                  # earlier user / assistant turns given to the model (for follow-ups to a question)
 send_retries: 2                   # transport retries of one request (same request_id: applied once)
+# 「我要左上角那顆紅色」(order_pick). Off by default: on, the model gets one more intent and rule, so the schema and
+# prompt differ from the ones the utterance table was measured with. Turn on after tools/chat_eval.py on the real model.
+pick_by_position: false
+# Finals rule (docs/real-progress.md): the real arm only picks storage -> placement, nothing is taken back. On, the
+# model also gets the hold / removed answers; turn on together with configs/task.yaml no_return.
+no_return: false
+progress_reports: true            # report each motion as it starts ([進度] 正在夾取第一顆紅色積木…)
 poll_s: 0.25                      # how often the chat CLI reads new executor events
 max_count: 8                      # largest count per colour in one order (scene holds at most 8 blocks)
 # Palette colour id -> Traditional Chinese name and the words users may use for it (configs/palettes/block_colors.yaml)
@@ -25,3 +32,6 @@ colors:
   blue:        {zh: 藍色, words: [藍, 藍色, 藍的]}
   cyan:        {zh: 青色, words: [青, 青色, 藍綠, 藍綠色]}   # 「水藍」 may mean light blue too: asked back
   purple:      {zh: 紫色, words: [紫, 紫色, 紫的]}
+  # The finals plush toy (docs/plush.md), ordered like a colour ({color: plush, count: 1}); on
+  # the real arm the executor gives it to the ACT skill. object: named by itself in replies (not "...積木").
+  plush:       {zh: 柴犬玩偶, object: true, words: [柴犬, 柴犬玩偶, 狗狗, 小狗, 玩偶, 布偶, 電車, 江之電, 小熊]}

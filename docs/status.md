@@ -21,6 +21,7 @@
   - 驗收 12/12（三組角色 × 兩個 seed × 兩種回答），兩條聊天主秀也都通過。
   - 抓取為腳本技能，交付核對仍讀模擬真值；Isaac 本輪暫停。
   - 見 [finals-shortage.md](finals-shortage.md)。
+- 實機（2026-11-25，分支 `feat/real-teleop-record-replay`）：右臂停放位 ⇄ 起姿固定路線（不轉腕）、leader 自動交接、D455 方塊定位（固定盤角，托盤座標）、從停放位開始的取放示範採集 `tools/lab_day.sh grasp`（只收粉 → 米，米盤三格輪替）。11/25 試錄 5 筆、4 筆成功、30 Hz。資料格式與決賽策略見 [real-progress.md](real-progress.md)。
 - 既有實機工作區（尚未移入 main）：雙臂 SO-101 實機遙操作、相機串流、馬達校正、影像／狀態記錄、DAgger 接管與資料保存程式可運作。
 
 ## 可沿用與待補介面

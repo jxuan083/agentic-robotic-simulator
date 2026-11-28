@@ -1,0 +1,16 @@
+# Finals layouts in the 11/25 lab scene (configs/scenes/lab_20261125.yaml): the finals set (2 blue, 1 red, 1 yellow)
+# in the near part of the pink tray only. The real arm sags when stretched, so the collected demonstrations stop at
+# tray-local x ~100-120 mm (mount x <= 0.27); the far part and the rims are not used (notes 11/26). Same rules as
+# configs/random_blocks_finals.yaml otherwise (yaw-aware spacing, grasp IK check in four 90 deg headings).
+count_range: [4, 4]
+fixed_colors: [blue, blue, red, yellow]
+yaw_aware_footprints: true
+yaw_range_deg: [-45.0, 45.0]
+boundary_margin_m: 0.025   # keep off the rim as in the real rounds; at 16 mm the rim shading merged with a red block in the wrist image (seed 11)
+gap_m: 0.020          # same-colour close layouts of the real rounds: centres about 50 mm apart
+base_clearance_m: 0.11
+max_radius_m: 0.397
+workspace_xy: [[0.16, 0.27], [0.08, 0.29]]   # tray-local x up to ~120 mm (11/25: elbow -74 deg there, still grasped)
+max_attempts_per_layout: 300
+layout_retries: 16
+check_ik: true
