@@ -130,6 +130,9 @@ export MENAGERIE_DIR=<menagerie> MUJOCO_GL=egl
   - 原設定（每段 100 步全部執行）最好。
   - temporal ensembling 0.01：10 筆 39/50，100 筆 46/50。抬升被平均掉，多次抬不到 45 mm。
   - 每段只執行 25 步：10 筆 15/50，多半在起步的靜止段原地超時。
+- 依這些結果，`agentic_sim.real_policy.Watch` 已修改，模擬評估和實機共用。改動後還沒重跑模擬評估。
+  - 跳變 6°–15° 改為每步 6° 帶過去，超過 15° 才停。
+  - 玩偶的夾爪命令要先張到 42%（`PLUSH_OPEN_PCT`）以上，之後的閉合才算夾緊。
 
 ## 實機
 
@@ -147,7 +150,8 @@ export MENAGERIE_DIR=<menagerie> MUJOCO_GL=egl
   - 指令是 "Put the Shiba plush in the beige tray."（「把柴犬玩偶放進米色盤」）。
 - **ACT 執行**（`agentic_sim.real_policy`）：
   - 夾起、抬穩後停止；
-  - 動作一步跳超過 6°、按 Esc 或超過 20 秒時，手臂原地停住。
+  - 動作一步跳 6°–15° 時，以每步 6° 帶過去；超過 15°、按 Esc 或超過 20 秒時，手臂原地停住；
+  - 夾爪要先張到 42% 以上，之後的閉合才算夾緊。
 - **任務伺服器**：用法見 `docs/real-task.md`。
   - `PLUSH_POLICY=<…/pretrained_model> tools/lab_day.sh task-server`；
   - 假桌面：`FAKE_TABLE=red,red,blue,yellow,plush`。

@@ -74,11 +74,28 @@ def test_an_empty_close_is_not_held():
     assert out["ok"] and not out["held"]
 
 
-def test_a_jumping_action_stops_and_holds():
+def test_a_jump_is_ramped_and_an_out_of_bounds_one_stops_and_holds():
     d = FakeDriver()
-    out = run(d, scripted([(100.0, 40.0), (99.0, 40.0), (80.0, 40.0)]), frames, ee_z=lambda q: q["shoulder_lift"] / 1000)
+    out = run(d, scripted([(110.0, 40.0), (110.0, 40.0), (90.0, 40.0)]), frames,
+              ee_z=lambda q: q["shoulder_lift"] / 1000)
+    assert [s["shoulder_lift"] for s in d.sent] == [106.0, 110.0]           # 10 deg in two steps (6 deg / step)
     assert not out["ok"] and out["why"].startswith("step") and d.held_reason.startswith("policy step")
-    assert all(s["shoulder_lift"] >= 99.0 for s in d.sent)                  # the jump was never sent
+    assert out["ramped"] == 1                                               # the 20 deg jump was never sent
+
+
+def test_with_open_pct_a_low_first_gripper_action_is_no_close():
+    """11/28 sim: the first action asked 10 % less than the start, then the arm rose to the approach and settled:
+    without open_pct that was done with nothing in the gripper."""
+    rise = [(100.0 + 2.5 * k, 28.0) for k in range(21)] + [(150.0, 28.0)] * 15
+    out = run(FakeDriver(holding=False), scripted(rise), frames, ee_z=lambda q: q["shoulder_lift"] / 1000,
+              timeout_s=1.5, open_pct=45.0)
+    assert out["why"] == "timeout"
+    opened = [(150.0, 50.0)] + [(150.0 - 5 * k, 50.0) for k in range(1, 21)]
+    opened += [(50.0, 50.0 - 4 * k) for k in range(1, 11)]
+    up = [(50.0 + 2.5 * k, 10.0) for k in range(1, 21)]
+    out = run(FakeDriver(), scripted(rise + opened + up), frames, ee_z=lambda q: q["shoulder_lift"] / 1000,
+              open_pct=45.0)
+    assert out["ok"] and out["held"] and abs(out["grasp_z"] - 0.050) < 1e-9
 
 
 def test_a_policy_that_never_lifts_times_out():

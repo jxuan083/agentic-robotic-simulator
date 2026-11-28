@@ -7,7 +7,8 @@ arm runs the routines that work on the hardware (agentic_sim.real_task).
   tools/lab_day.sh chat-web             # model service + chat page (http://127.0.0.1:8765) on --backend real
 
 Per block (S1, the program grasp of tools/finals_reach.py): D455 look at park -> fixed route to the start pose ->
-grasp (hover, lower, close, wait for the gripper, lift; a miss opens and goes home, the executor retries once) ->
+grasp (hover, lower, close, wait for the gripper, lift; a miss opens and goes home, the executor looks again and
+retries once, RETRY_OUT_MM further from the base when the block is still where it was missed) ->
 carry into the next free beige slot P1-P4 at 11 cm, open, rise -> start pose -> park -> D455 look verifies the
 landing. The arm parks after every delivery, so the trays are always seen without the arm in the way and an operator
 can take a block away there (the finals shortage step).
@@ -38,6 +39,8 @@ from agentic_sim.real_task.session import RealHandler, RealSession  # noqa: E402
 from agentic_sim.server.core import SimServer  # noqa: E402
 
 HZ = 30
+RETRY_OUT_MM = 10.0     # a retry grasps this much further from the base per earlier miss here (11/27: the misses
+RETRY_NEAR_M = 0.03     # closed 15-25 mm short, in front of the block); "here": within this of a missed target
 
 
 class ServerTerminal:
@@ -115,6 +118,7 @@ class RealArm:
         self.driver.gripper_speed = 150.0
         self.placer = Placer(self.driver, self.model, self.corr, speed=75.0)
         self.eps = Episodes(self.driver, self.placer, np.random.default_rng(0))
+        self.misses = []        # block targets (mount x, y m) the program grasp missed this session
         self.Track = Track
         self.home_xyz = self.model.ee(self.park)
         self.pan_xy = tuple(self.model.pan_origin[:2])
@@ -175,17 +179,21 @@ class RealArm:
         from agentic_sim.real_place import HELD_PCT, OPEN_PCT
         if block["color"] == "plush":
             return self._pick_plush(block, phase)
+        xy = (float(block["x"]), float(block["y"]))
+        out = RETRY_OUT_MM * sum(math.dist(xy, m) < RETRY_NEAR_M for m in self.misses)
         phase and phase("start")
         self._to_start()
         phase and phase("grasp")
-        held, err = self.eps.grasp(block)
+        held, err = self.eps.grasp(block, outward_mm=out)
         self.where = "lift"
         if err or held is None or held < HELD_PCT:
+            self.misses.append(xy)
             phase and phase("retreat")
             self.placer.set_grip(OPEN_PCT, "張開")
             self.home(open_gripper=True)
-            return False, {"reason": err or "missed", "gripper_pct": held}
-        return True, {"gripper_pct": round(float(held), 1)}
+            return False, {"reason": err or "missed", "gripper_pct": held, "outward_mm": out}
+        self.misses = [m for m in self.misses if math.dist(xy, m) >= RETRY_NEAR_M]
+        return True, {"gripper_pct": round(float(held), 1), "outward_mm": out}
 
     def _pick_plush(self, block, phase=None):
         """The plush toy by its ACT policy (agentic_sim.real_policy), from the start pose to a stable lift; the
@@ -193,7 +201,7 @@ class RealArm:
         from agentic_sim.real_dataset import condition
         from agentic_sim.real_hardware import load_profile, open_camera
         from agentic_sim.real_place import OPEN_PCT
-        from agentic_sim.real_policy import ActPolicy, LatestFrames, run
+        from agentic_sim.real_policy import PLUSH_OPEN_PCT, ActPolicy, LatestFrames, run
         from contextlib import ExitStack
         if not self.args.plush_policy:
             return False, {"reason": "no plush ACT checkpoint (--plush-policy)"}
@@ -213,7 +221,7 @@ class RealArm:
             stack.callback(cams.close)
             out = run(self.driver, self.plush_policy, cams.frames,
                       condition=condition({"target": {"d455": target}}, "target"), marks={"target": [u, v]},
-                      ee_z=lambda q: float(self.ee_of(q)[2]), phase=phase)
+                      ee_z=lambda q: float(self.ee_of(q)[2]), phase=phase, open_pct=PLUSH_OPEN_PCT)
         self.where = "lift"
         self.plush_grasp_z = out["grasp_z"]
         if not (out["ok"] and out["held"]):

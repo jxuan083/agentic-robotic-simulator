@@ -7,11 +7,12 @@
 Trial i draws its layout with seed + i (agentic_sim.plush_sim_data.sample_layout; pick a seed range the training
 set did not use) and starts like a demonstration. Every 1/30 s: observe (joint readings, global image with the
 target circle, wrist image, plush condition), run the policy (agentic_sim.real_policy.ActPolicy, the real runtime
-wrapper) and send its action. Stops as agentic_sim.real_policy.run does: done (gripper closed, grasp centre 40 mm
-above its lowest point, commands still 0.3 s), a body-joint step above 6, or 20 s. Then the arm holds 1 s.
+wrapper) and send its action through agentic_sim.real_policy.Watch, as real_policy.run does with the plush's
+open_pct: jumps over 6 deg ramped, over 15 deg stop; done when the gripper opened, closed, the grasp centre is 40 mm
+above its lowest point and the commands are still 0.3 s; or 20 s. Then the arm holds 1 s.
 
 Success, as tools/sim_plush_grasp.py: the plush rose >= 45 mm, moved < 5 mm in the gripper during the hold, the
-moving jaw touches it. Failures, first match: step_limit (policy stopped on a jump), collision (gripper side touched
+moving jaw touches it. Failures, first match: step_limit (an action out of bounds), collision (gripper side touched
 a block or a tray wall, or a block moved > 5 mm), short_lift (held without slipping but raised 20-45 mm),
 slipped (the plush rose >= 20 mm at some point but is not held),
 body_grasp (the jaws touched the tram but never the head), timeout (20 s without the done test), missed (no grasp).
@@ -42,7 +43,8 @@ import numpy as np  # noqa: E402
 
 from agentic_sim import plush_sim_data as D  # noqa: E402
 from agentic_sim.config import load  # noqa: E402
-from agentic_sim.real_policy import BODY, LIFT_M, STEP_LIMIT_DEG, STILL_S, TIMEOUT_S  # noqa: E402
+from agentic_sim.real_control import JOINTS  # noqa: E402
+from agentic_sim.real_policy import BODY, PLUSH_OPEN_PCT, TIMEOUT_S, Watch  # noqa: E402
 from sim_plush_collect import SimRig  # noqa: E402
 import sim_plush_grasp as G  # noqa: E402
 
@@ -102,9 +104,7 @@ def trial(policy, scene, seed, video=None, noise=(0.0, 0.0)) -> dict:
     blocks0 = [d.xpos[b].copy() for b in sc.block_bodies[:len(layout["blocks"])]]
     policy.reset()
     s = rig.ctrl.state
-    last = D.command_lerobot(s.q_cmd, s.gripper)
-    open_cmd = last[5]
-    low_z, closed_at, still_since = math.inf, None, None
+    w = Watch(dict(zip(JOINTS, D.command_lerobot(s.q_cmd, s.gripper))), PLUSH_OPEN_PCT)
     steps, why, t = 0, "timeout", 0.0
     seen = {"head": False, "body": False, "blocks": False, "tray": False}
     max_rise = 0.0
@@ -114,11 +114,12 @@ def trial(policy, scene, seed, video=None, noise=(0.0, 0.0)) -> dict:
         if video is not None:
             video.write(np.hstack([images["global"], images["wrist"]])[..., ::-1])
         action = policy(state, images, rig.cond)
-        jump = max(abs(action[i] - last[i]) for i in range(len(BODY)))
-        if jump > STEP_LIMIT_DEG:
-            j = max(range(len(BODY)), key=lambda i: abs(action[i] - last[i]))
-            why = f"step {jump:.1f} {BODY[j]} at {steps / D.FPS:.2f} s"
+        cmd = w.command(dict(zip(JOINTS, action)))
+        if cmd is None:
+            j = max(BODY, key=lambda n: abs(action[JOINTS.index(n)] - w.last[n]))
+            why = f"step {w.jump:.1f} {j} at {steps / D.FPS:.2f} s"
             break
+        action = [cmd[n] for n in JOINTS]
         arm, jaw = D.command_shared(action)
         for act, q, off in zip(sc.arm_act, arm, sc.arm_offset):
             d.ctrl[act] = q + off
@@ -132,19 +133,11 @@ def trial(policy, scene, seed, video=None, noise=(0.0, 0.0)) -> dict:
         seen["blocks"] |= c["blocks"]
         seen["tray"] |= c["tray"]
         max_rise = max(max_rise, float(rig.plush_pose()[0][2] - p0[2]))
-        z = float(rig.ctrl.ee_pos(arm)[2])
-        if closed_at is None:
-            low_z = min(low_z, z)
-            if action[5] < open_cmd - 10.0:
-                closed_at = t
-        moving = jump > 0.3
-        still_since = None if moving else (still_since if still_since is not None else t)
-        if closed_at is not None and z >= low_z + LIFT_M and still_since is not None and t - still_since >= STILL_S:
+        if w.done(t, float(rig.ctrl.ee_pos(arm)[2])):
             why = "done"
             break
         if t > TIMEOUT_S:
             break
-        last = action
     rel0 = rig.plush_in_gripper()
     for _ in range(round(G.HOLD_S / rig.dt)):        # hold the last command
         mujoco.mj_step(m, d, nstep=rig.substeps)
@@ -174,7 +167,7 @@ def trial(policy, scene, seed, video=None, noise=(0.0, 0.0)) -> dict:
     else:
         kind = "missed"
     cams.close()
-    return {"seed": seed, "success": ok, "class": kind, "why": why, "steps": steps, "seconds": round(t, 2),
+    return {"seed": seed, "success": ok, "class": kind, "why": why, "steps": steps, "seconds": round(t, 2), "ramped": w.ramped,
             "lift_mm": round(lift * 1000, 1), "max_rise_mm": round(max_rise * 1000, 1), "slip_mm": round(slip * 1000, 2),
             "touched": seen, "block_moved_mm": round(moved * 1000, 1), "layout": layout, "condition": rig.cond,
             "detector_error": error}

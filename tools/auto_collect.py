@@ -228,11 +228,12 @@ class Episodes:
     def _pose(self, xyz, yaw, phase, grip):
         return self.placer.pose_for(np.asarray(xyz, float), yaw, self.driver.target, phase, grip)
 
-    def grasp(self, block, perturb=None):
+    def grasp(self, block, perturb=None, outward_mm=0.0):
         """Start pose (or anywhere above the trays) -> over the block [-> via an offset point] -> grasp -> close ->
-        lift and hold. Returns (gripper reading after the lift, info) or (None, reason) when an IK fails before
-        anything moved."""
+        lift and hold; outward_mm moves the grasp point away from the base (a retry after closing short).
+        Returns (gripper reading after the lift, info) or (None, reason) when an IK fails before anything moved."""
         c = np.array([block["x"], block["y"], block["z_top"] - EDGE_M / 2])
+        c[:2] += c[:2] / np.linalg.norm(c[:2]) * outward_mm / 1000
         yaw = block["yaw"]
         hover = self._pose(c + [0, 0, HOVER_M], yaw, "hover", OPEN_PCT)
         low = self._pose(c + [0, 0, GRASP_M], yaw, "grasp", OPEN_PCT)

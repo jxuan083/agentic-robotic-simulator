@@ -8,9 +8,15 @@ observation layout the converter wrote (tools/real_to_lerobot.py, agentic_sim.re
   action                           follower command
 
 The loop (run): every control period, readback -> newest camera frames -> one action -> Driver.send (the driver
-clips to the joint limits). It stops when done() says the grasp is finished, on Esc, on a time-out, or when an action
-jumps more than STEP_LIMIT_DEG on a body joint from the last command (docs/real-dagger.md: ACT 越界); then the
-follower holds where it is.
+clips to the joint limits). Watch holds the per-step rules, shared with the MuJoCo evaluation
+(tools/sim_plush_eval.py):
+- an action more than STEP_LIMIT_DEG from the last command on a body joint is approached at that rate (ACT's first
+  action and the first of each new chunk sit 3-7 deg off: the 11/28 sim study); one more than STOP_JUMP_DEG away is
+  out of bounds (docs/real-dagger.md: ACT 越界) and stops the loop;
+- the grasp is done when the gripper command has closed 10 % below its widest so far (with open_pct: only after
+  it reached open_pct, so a low first gripper action is no close), the grasp centre is LIFT_M above its lowest point
+  and the commands have settled for STILL_S.
+It also stops on Esc and on a time-out; then the follower holds where it is.
 """
 
 from __future__ import annotations
@@ -24,7 +30,10 @@ import numpy as np
 from agentic_sim.real_control import JOINTS
 
 BODY = JOINTS[:-1]
-STEP_LIMIT_DEG = 6.0
+STEP_LIMIT_DEG = 6.0   # per control step: a larger jump is approached at this rate
+STOP_JUMP_DEG = 15.0   # out of bounds: stop
+CLOSE_PCT = 10.0       # closed: the gripper command this far below its widest so far
+PLUSH_OPEN_PCT = 42.0  # the plush grasp opens to >= 46 % (docs/plush.md), the start pose holds ~36 %
 TIMEOUT_S = 20.0
 LIFT_M = 0.04          # done: the gripper has closed and the grasp centre is this far above its lowest point ...
 STILL_S = 0.3          # ... and the commands have settled for this long
@@ -110,17 +119,58 @@ def to_inputs(frames_bgr: dict, marks: dict | None) -> dict:
     return out
 
 
-def run(driver, policy, frames, *, condition=None, marks=None, ee_z=None, timeout_s=TIMEOUT_S, phase=None) -> dict:
+class Watch:
+    """run()'s per-step rules (the module doc), from the command the follower holds at the start (joint -> value)."""
+
+    def __init__(self, start: dict, open_pct=None):
+        self.last = dict(start)
+        self.peak = float(start["gripper"])
+        self.open_pct = open_pct
+        self.opened = open_pct is None or self.peak >= open_pct
+        self.low_z, self.closed_at, self.still_since = math.inf, None, None
+        self.jump, self.ramped = 0.0, 0
+
+    def command(self, action: dict) -> dict | None:
+        """The command to send for this action (ramped), or None when it is out of bounds (self.jump says how far)."""
+        self.jump = max(abs(action[j] - self.last[j]) for j in BODY)
+        if self.jump > STOP_JUMP_DEG:
+            return None
+        if self.jump > STEP_LIMIT_DEG:
+            self.ramped += 1
+            action = action | {j: self.last[j] + float(np.clip(action[j] - self.last[j], -STEP_LIMIT_DEG,
+                                                                STEP_LIMIT_DEG)) for j in BODY}
+        self.step = max(abs(action[j] - self.last[j]) for j in BODY)
+        self.last = dict(action)
+        return action
+
+    def done(self, t: float, z) -> bool:
+        """After sending: t seconds since the start, z the grasp-centre height of the command (None: no lift test)."""
+        g = float(self.last["gripper"])
+        if self.closed_at is None:
+            if z is not None:
+                self.low_z = min(self.low_z, z)
+            self.opened |= self.open_pct is not None and g >= self.open_pct
+            if self.opened and g < self.peak - CLOSE_PCT:
+                self.closed_at = t
+            self.peak = max(self.peak, g)
+        moving = self.step > 0.3
+        self.still_since = None if moving else (self.still_since if self.still_since is not None else t)
+        lifted = z is None or z >= self.low_z + LIFT_M
+        return (self.closed_at is not None and lifted and self.still_since is not None
+                and t - self.still_since >= STILL_S)
+
+
+def run(driver, policy, frames, *, condition=None, marks=None, ee_z=None, timeout_s=TIMEOUT_S, phase=None,
+        open_pct=None) -> dict:
     """Run the policy on the follower until the grasp is done (see the module doc). frames() -> {camera: BGR};
-    ee_z(pose) -> grasp-centre height (m) for the lift test. Returns {ok, why, steps, seconds, grasp_z,
-    gripper_pct, held}; the follower holds its last command at the end."""
+    ee_z(pose) -> grasp-centre height (m) for the lift test; open_pct: see Watch. Returns {ok, why, steps, seconds,
+    grasp_z, gripper_pct, held, ramped}; the follower holds its last command at the end."""
     from agentic_sim.real_route import Paused
 
     policy.reset()
     began = driver.clock()
-    low_z, closed_at, still_since, last = math.inf, None, None, dict(driver.target)
+    w = Watch(driver.target, open_pct)
     steps, why = 0, "timeout"
-    open_cmd = float(driver.target["gripper"])
     while True:
         t0 = driver.clock()
         if driver.stop_requested():
@@ -128,35 +178,25 @@ def run(driver, policy, frames, *, condition=None, marks=None, ee_z=None, timeou
             raise Paused("操作者暫停")
         state = driver.read()
         action = policy([float(state[j]) for j in JOINTS], to_inputs(frames(), marks), condition)
-        target = dict(zip(JOINTS, action))
-        jump = max(abs(target[j] - last[j]) for j in BODY)
-        if jump > STEP_LIMIT_DEG:
-            driver.hold(f"policy step {jump:.1f} deg")
-            why = f"step {jump:.1f} deg"
+        target = w.command(dict(zip(JOINTS, action)))
+        if target is None:
+            driver.hold(f"policy step {w.jump:.1f} deg")
+            why = f"step {w.jump:.1f} deg"
             break
         driver.send(target)
         steps += 1
         elapsed = (driver.clock() - began) / 1e9
         if phase and steps == 1:
             phase("policy")
-        z = ee_z(driver.target) if ee_z else None
-        if z is not None and closed_at is None:
-            low_z = min(low_z, z)
-        if closed_at is None and target["gripper"] < open_cmd - 10.0:
-            closed_at = elapsed
-        moving = jump > 0.3
-        still_since = None if moving else (still_since if still_since is not None else elapsed)
-        lifted = z is None or z >= low_z + LIFT_M
-        if closed_at is not None and lifted and still_since is not None and elapsed - still_since >= STILL_S:
+        if w.done(elapsed, ee_z(driver.target) if ee_z else None):
             why = "done"
             break
         if elapsed > timeout_s:
             driver.hold("policy timeout")
             break
-        last = target
         driver.tick(t0)
     reading = driver.read()
     grip = float(reading["gripper"])
     return {"ok": why == "done", "why": why, "steps": steps, "seconds": round((driver.clock() - began) / 1e9, 2),
-            "grasp_z": None if math.isinf(low_z) else round(low_z, 4), "gripper_pct": round(grip, 1),
-            "held": grip >= float(driver.target["gripper"]) + HELD_GAP_PCT}
+            "grasp_z": None if math.isinf(w.low_z) else round(w.low_z, 4), "gripper_pct": round(grip, 1),
+            "held": grip >= float(driver.target["gripper"]) + HELD_GAP_PCT, "ramped": w.ramped}
